@@ -20,7 +20,9 @@ pub use datapath::{
     BusCycle, BusDataOwner, BusDatapathEvent, DatapathEvent, DatapathState,
     DecoderDatapathEvent, RegisterDatapathEvent,
 };
-pub use isa::{Cpu, Flags, PcSource, Reg, StepOutcome};
+pub use isa::{
+    Cpu, Flags, MicroCycleKind, MicroPhase, PcSource, Reg, StepOutcome,
+};
 pub use logic::{
     logic_trace, ripple_add, ripple_decrement16, ripple_increment16, ripple_sub, AluOp, AluTrace,
     Decrement16Trace, PcIncrementTrace,
@@ -31,8 +33,8 @@ pub use pc_datapath::{derive_pc_datapath, PcDatapathEvent, PcDatapathKind};
 pub use stack_datapath::{derive_stack_datapath, StackDatapathEvent, StackDatapathKind};
 pub use topology::{Group, Link, Node, Rect, SignalKind, Topology};
 pub use trace::{
-    AluEvent, FrameState, KillEvent, MatchTrace, MicroSample, PcEvent, PcEventKind, PhaseKind,
-    ProjectileSnapshot, RegisterWriteEvent,
+    AluEvent, FrameState, KillEvent, MatchTrace, MicroCycleEvent, MicroSample, PcEvent, PcEventKind,
+    PhaseKind, ProjectileSnapshot, RegisterWriteEvent,
 };
 
 #[must_use]
