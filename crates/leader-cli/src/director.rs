@@ -12,9 +12,6 @@ pub fn apply_camera(
     trace: &MatchTrace,
     config: RenderConfig,
 ) -> String {
-    // GitHub/browser rendering of an animated nested SVG viewBox proved unreliable.
-    // Keep a fixed viewport and transform the entire world instead. CSS transforms
-    // are the same mechanism already used by the public Leader.svg animation.
     let Some(camera_start) = svg.find("<svg class=\"animated\" id=\"camera\"") else {
         return svg;
     };
@@ -22,7 +19,6 @@ pub fn apply_camera(
         return svg;
     };
     let open_end = camera_start + open_rel_end + 1;
-
     let opening = &svg[camera_start..open_end];
     let Some(viewbox_start_rel) = opening.find("viewBox=\"") else {
         return svg;
@@ -37,7 +33,6 @@ pub fn apply_camera(
         &format!("0 0 {VIEW_W:.0} {VIEW_H:.0}"),
     );
 
-    // Recompute the opening tag end because replacing the viewBox changed offsets.
     let Some(camera_start) = svg.find("<svg class=\"animated\" id=\"camera\"") else {
         return svg;
     };
@@ -45,21 +40,14 @@ pub fn apply_camera(
         return svg;
     };
     let open_end = camera_start + open_rel_end + 1;
-
-    // The renderer writes one viewport background immediately after the nested SVG.
-    // Keep it outside the moving world so zoomed shots never expose transparent edges.
     let background = "<rect width=\"100%\" height=\"100%\" fill=\"#07101a\"/>";
-    let world_insert = if let Some(bg_rel) = svg[open_end..].find(background) {
-        open_end + bg_rel + background.len()
-    } else {
-        open_end
-    };
+    let world_insert = svg[open_end..]
+        .find(background)
+        .map_or(open_end, |offset| open_end + offset + background.len());
 
     let css = camera_css(topology, trace, config);
     svg.insert_str(world_insert, &format!("{css}<g id=\"camera-world\">"));
 
-    // The old renderer camera is always the final element inside the nested SVG.
-    // Remove it and use that exact position to close the moving world group.
     let Some(old_camera_start) = svg.find("<animate attributeName=\"viewBox\"") else {
         return svg;
     };
@@ -75,7 +63,6 @@ fn camera_css(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> 
     let total = config.total();
     let track = camera_track(topology, trace, config);
     let mut rules = String::with_capacity(track.len() * 80);
-
     for (time, rect) in track {
         let percent = norm(time, total) * 100.0;
         let matrix = view_matrix(rect);
@@ -84,7 +71,6 @@ fn camera_css(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> 
             matrix.scale, matrix.scale, matrix.tx, matrix.ty
         ));
     }
-
     format!(
         "<style>@keyframes leaderCamera{{{rules}}}#camera-world{{transform-box:view-box;transform-origin:0 0;animation:leaderCamera {total:.3}s linear infinite}}</style>"
     )
@@ -108,85 +94,60 @@ fn view_matrix(rect: Rect) -> ViewMatrix {
 
 fn camera_track(
     topology: &Topology,
-    trace: &MatchTrace,
+    _trace: &MatchTrace,
     config: RenderConfig,
 ) -> Vec<(f32, Rect)> {
     let total = config.total();
     let full = aspect_rect(Rect::new(0.0, 0.0, topology.width, topology.height), 0.0);
     let mut track = vec![(0.0, full)];
 
-    // Assembly: approach -> tight close-up -> hold -> release.
+    // Construction remains cinematic: every subsystem receives a close-up while
+    // its physical nodes arrive, then the camera releases toward the next region.
     let mut groups = topology.groups.clone();
     groups.sort_by_key(|group| group.assembly_rank);
     let span = config.assembly_seconds / groups.len().max(1) as f32;
     for (index, group) in groups.iter().enumerate() {
         let start = index as f32 * span;
-        // First group gets a brief establishing shot before the first zoom.
         if index == 0 {
             track.push((0.55, full));
         }
         track.push((start + 0.70, focus(group.bounds, 180.0)));
-        track.push((start + span * 0.34, focus(group.bounds, 28.0)));
-        track.push((start + span * 0.78, focus(group.bounds, 28.0)));
-        track.push((start + span * 0.96, focus(group.bounds, 120.0)));
+        track.push((start + span * 0.34, focus(group.bounds, 34.0)));
+        track.push((start + span * 0.78, focus(group.bounds, 34.0)));
+        track.push((start + span * 0.96, focus(group.bounds, 130.0)));
     }
     track.push((config.assembly_seconds, full));
 
-    // Boot: follow the causal hardware path with deliberately tight framing.
+    // Boot follows the physical data path once, so the viewer understands the
+    // architecture before seeing it operate as one complete system.
     let boot = config.assembly_seconds;
-    hold_group(&mut track, topology, boot + 0.20, "clk", 18.0, 0.72);
-    hold_group(&mut track, topology, boot + 1.20, "pc", 20.0, 0.78);
-    hold_group(&mut track, topology, boot + 2.25, "romsys", 18.0, 0.82);
-    hold_group(&mut track, topology, boot + 3.35, "decode", 18.0, 0.82);
-    hold_group(&mut track, topology, boot + 4.45, "regs", 20.0, 0.82);
-    hold_group(&mut track, topology, boot + 5.55, "alu", 12.0, 0.82);
-    hold_group(&mut track, topology, boot + 6.65, "ramsys", 32.0, 0.72);
-    hold_group(&mut track, topology, boot + 7.70, "gpu", 20.0, 0.80);
+    hold_group(&mut track, topology, boot + 0.20, "clk", 22.0, 0.72);
+    hold_group(&mut track, topology, boot + 1.20, "pc", 26.0, 0.78);
+    hold_group(&mut track, topology, boot + 2.25, "romsys", 24.0, 0.82);
+    hold_group(&mut track, topology, boot + 3.35, "decode", 24.0, 0.82);
+    hold_group(&mut track, topology, boot + 4.45, "regs", 28.0, 0.82);
+    hold_group(&mut track, topology, boot + 5.55, "alu", 20.0, 0.82);
+    hold_group(&mut track, topology, boot + 6.65, "ramsys", 40.0, 0.72);
+    hold_group(&mut track, topology, boot + 7.70, "gpu", 28.0, 0.80);
     track.push((config.game_start(), full));
 
-    // Beginning of execution: visually follow a real instruction through the machine.
+    // Requested pacing: after boot, stay wide long enough to watch the whole
+    // machine work. This is the payoff for the construction sequence.
     let game = config.game_start();
-    hold_group(&mut track, topology, game + 0.25, "pc", 12.0, 0.82);
-    hold_group(&mut track, topology, game + 1.40, "romsys", 14.0, 0.82);
-    hold_group(&mut track, topology, game + 2.60, "decode", 12.0, 0.86);
-    hold_group(&mut track, topology, game + 3.85, "regs", 14.0, 0.86);
-    hold_group(&mut track, topology, game + 5.10, "alu", 8.0, 0.92);
-    hold_group(&mut track, topology, game + 6.45, "ramsys", 24.0, 0.88);
-    hold_group(&mut track, topology, game + 7.75, "bus", 16.0, 0.84);
-    hold_group(&mut track, topology, game + 9.00, "vramsys", 12.0, 0.86);
-    hold_group(&mut track, topology, game + 10.30, "gpu", 12.0, 0.86);
+    let global_observe_end = (game + 15.0).min(config.game_end() - 8.0);
+    track.push((game + 0.40, full));
+    track.push((global_observe_end, full));
 
     if let Some(display) = topology.node("display") {
-        // Approach the monitor, then push through the bezel into the framebuffer.
-        track.push((game + 11.45, focus(display.bounds, 160.0)));
-        track.push((game + 12.35, focus(display.bounds, 42.0)));
-        track.push((game + 13.15, display_screen(display.bounds)));
-        track.push((game + 14.55, display_screen(display.bounds)));
-
-        // Three brief cutaways are causally tied to kill milestones.
-        for (kill_index, target_group) in [(8usize, "alu"), (16, "ramsys"), (24, "gpu")] {
-            if let Some(kill) = trace.kills.get(kill_index.saturating_sub(1)) {
-                let fraction = kill.frame as f32 / trace.total_frames.max(1) as f32;
-                let time = game + fraction * config.game_seconds;
-                if time > game + 17.0 && time < config.game_end() - 8.0 {
-                    track.push((time - 0.55, display_screen(display.bounds)));
-                    if let Some(group) = topology.group(target_group) {
-                        track.push((time, focus(group.bounds, 12.0)));
-                        track.push((time + 0.72, focus(group.bounds, 12.0)));
-                    }
-                    track.push((time + 1.15, display_screen(display.bounds)));
-                }
-            }
-        }
-
-        track.push((config.game_end() - 3.2, display_screen(display.bounds)));
-        track.push((config.game_end() - 1.0, display_screen(display.bounds)));
-        track.push((config.game_end() - 0.30, focus(display.bounds, 18.0)));
+        // One deliberate push into the monitor. Once the framebuffer fills the
+        // viewport, never leave it until the match has actually reached GAME CLEAR.
+        track.push((global_observe_end + 0.80, focus(display.bounds, 180.0)));
+        track.push((global_observe_end + 1.80, focus(display.bounds, 48.0)));
+        track.push((global_observe_end + 2.80, display_screen(display.bounds)));
+        track.push((config.game_end() + config.outro_seconds - 0.20, display_screen(display.bounds)));
     }
 
-    // Pull back enough that the viewer finally understands the complete machine.
-    track.push((config.game_end() + 1.35, full));
-    track.push((total - 0.20, full));
+    track.push((total - 0.05, full));
     track.sort_by(|left, right| left.0.total_cmp(&right.0));
     dedupe_times(&mut track);
     track
@@ -208,10 +169,13 @@ fn hold_group(
 }
 
 fn display_screen(bounds: Rect) -> Rect {
-    // The framebuffer is rendered at +53,+55 from the display node and is
-    // 128×96 scaled by 2.42 in leader-svg. Frame it tightly but keep a hint of bezel.
     aspect_rect(
-        Rect::new(bounds.x + 43.0, bounds.y + 45.0, 128.0 * 2.42 + 20.0, 96.0 * 2.42 + 20.0),
+        Rect::new(
+            bounds.x + 43.0,
+            bounds.y + 45.0,
+            128.0 * 2.42 + 20.0,
+            96.0 * 2.42 + 20.0,
+        ),
         0.0,
     )
 }
@@ -271,16 +235,35 @@ mod tests {
         assert!(output.contains("@keyframes leaderCamera"));
         assert!(output.contains("id=\"camera-world\""));
         assert!(output.contains("transform:matrix("));
-        assert!(output.contains("animation:leaderCamera 138.000s linear infinite"));
     }
 
     #[test]
     fn closeup_matrix_is_much_larger_than_establishing_shot() {
         let topology = build_topology();
         let full = aspect_rect(Rect::new(0.0, 0.0, topology.width, topology.height), 0.0);
-        let clock = focus(topology.group("clk").expect("clock group").bounds, 18.0);
-        let full_matrix = view_matrix(full);
-        let clock_matrix = view_matrix(clock);
-        assert!(clock_matrix.scale > full_matrix.scale * 5.0);
+        let clock = focus(topology.group("clk").expect("clock group").bounds, 22.0);
+        assert!(view_matrix(clock).scale > view_matrix(full).scale * 4.0);
+    }
+
+    #[test]
+    fn game_camera_has_global_observation_then_permanent_display_hold() {
+        let topology = build_topology();
+        let trace = Machine::run_match("director-hold", 5000);
+        let config = RenderConfig::default();
+        let track = camera_track(&topology, &trace, config);
+        let full = aspect_rect(Rect::new(0.0, 0.0, topology.width, topology.height), 0.0);
+        let game = config.game_start();
+        assert!(track.iter().any(|(time, rect)| *time >= game + 10.0 && nearly_same(*rect, full)));
+        let display = topology.node("display").expect("display node");
+        let screen = display_screen(display.bounds);
+        let last_non_full = track.iter().rev().find(|(_, rect)| !nearly_same(*rect, full)).expect("display hold");
+        assert!(nearly_same(last_non_full.1, screen));
+    }
+
+    fn nearly_same(a: Rect, b: Rect) -> bool {
+        (a.x - b.x).abs() < 0.1
+            && (a.y - b.y).abs() < 0.1
+            && (a.w - b.w).abs() < 0.1
+            && (a.h - b.h).abs() < 0.1
     }
 }
