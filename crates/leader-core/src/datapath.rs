@@ -37,6 +37,56 @@ pub struct RegisterDatapathEvent {
     pub after: u8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecoderDatapathEvent {
+    pub frame: u32,
+    pub ordinal: u16,
+    pub pc: u16,
+    pub opcode: u8,
+    pub high_line: u8,
+    pub low_line: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BusAddressOwner {
+    ProgramCounter,
+    Cpu,
+    Dma,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BusDataOwner {
+    Rom,
+    Ram,
+    Vram,
+    Cpu,
+    Device,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BusCycle {
+    Fetch,
+    Read,
+    Write,
+    Input,
+    Dma,
+    Scanout,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BusDatapathEvent {
+    pub frame: u32,
+    pub ordinal: u16,
+    pub pc: u16,
+    pub address: Option<u16>,
+    pub data: Option<u8>,
+    pub address_owner: BusAddressOwner,
+    pub data_owner: BusDataOwner,
+    pub cycle: BusCycle,
+}
+
 #[must_use]
 pub fn derive_datapath(trace: &MatchTrace) -> Vec<DatapathEvent> {
     let mut state = DatapathState::default();
@@ -73,11 +123,97 @@ pub fn derive_datapath(trace: &MatchTrace) -> Vec<DatapathEvent> {
     events
 }
 
+#[must_use]
+pub fn derive_decoder_datapath(trace: &MatchTrace) -> Vec<DecoderDatapathEvent> {
+    trace
+        .micro_samples
+        .iter()
+        .filter(|sample| is_opcode_decode(sample))
+        .filter_map(|sample| {
+            let opcode = sample.data?;
+            Some(DecoderDatapathEvent {
+                frame: sample.frame,
+                ordinal: sample.ordinal,
+                pc: sample.pc,
+                opcode,
+                high_line: opcode >> 4,
+                low_line: opcode & 0x0f,
+            })
+        })
+        .collect()
+}
+
+/// Returns the physical owner of the shared address/data path for every real bus
+/// transaction represented by the execution trace.
+#[must_use]
+pub fn derive_bus_datapath(trace: &MatchTrace) -> Vec<BusDatapathEvent> {
+    trace
+        .micro_samples
+        .iter()
+        .filter_map(|sample| {
+            let (address_owner, data_owner, cycle) = match sample.phase {
+                PhaseKind::Fetch => (
+                    BusAddressOwner::ProgramCounter,
+                    BusDataOwner::Rom,
+                    BusCycle::Fetch,
+                ),
+                PhaseKind::MemoryRead => (
+                    BusAddressOwner::Cpu,
+                    owner_for_address(sample.address),
+                    BusCycle::Read,
+                ),
+                PhaseKind::MemoryWrite => (
+                    BusAddressOwner::Cpu,
+                    BusDataOwner::Cpu,
+                    BusCycle::Write,
+                ),
+                PhaseKind::Input => (
+                    BusAddressOwner::None,
+                    BusDataOwner::Device,
+                    BusCycle::Input,
+                ),
+                PhaseKind::Dma => (
+                    BusAddressOwner::Dma,
+                    BusDataOwner::Vram,
+                    BusCycle::Dma,
+                ),
+                PhaseKind::Scanout => (
+                    BusAddressOwner::Dma,
+                    BusDataOwner::Vram,
+                    BusCycle::Scanout,
+                ),
+                _ => return None,
+            };
+
+            Some(BusDatapathEvent {
+                frame: sample.frame,
+                ordinal: sample.ordinal,
+                pc: sample.pc,
+                address: sample.address,
+                data: sample.data,
+                address_owner,
+                data_owner,
+                cycle,
+            })
+        })
+        .collect()
+}
+
+fn owner_for_address(address: Option<u16>) -> BusDataOwner {
+    match address {
+        Some(0x0000..=0x1fff) => BusDataOwner::Rom,
+        Some(0x2000..=0x7fff) => BusDataOwner::Ram,
+        Some(0x8000..=0x87ff) => BusDataOwner::Vram,
+        Some(0xa000..=0xa1ff) => BusDataOwner::Device,
+        Some(_) | None => BusDataOwner::None,
+    }
+}
+
 /// Returns exact full-adder state for the ALU operations executed by the CPU.
 ///
-/// F3 arithmetic is now semantically computed by the same ripple implementation in
+/// F3 arithmetic is semantically computed by the same ripple implementation in
 /// `isa.rs`. The renderer repeats that pure operation over the actual fetched
-/// operands so the generated SVG can remain a compact declarative replay.
+/// operands so the generated SVG remains a compact declarative replay.
 #[must_use]
 pub fn derive_alu_datapath(trace: &MatchTrace) -> Vec<AluDatapathEvent> {
     let mut events = Vec::new();
@@ -134,10 +270,6 @@ pub fn derive_alu_datapath(trace: &MatchTrace) -> Vec<AluDatapathEvent> {
 }
 
 /// Replays register-file write enables from the real instruction stream.
-///
-/// The state starts at CPU reset (all eight registers are zero). Each event is
-/// sourced from either the instruction's CPU ALU result or its CPU memory read,
-/// never from presentation heuristics.
 #[must_use]
 pub fn derive_register_datapath(trace: &MatchTrace) -> Vec<RegisterDatapathEvent> {
     let mut registers = [0_u8; 8];
@@ -337,5 +469,36 @@ mod tests {
             .expect("A write");
         assert_eq!(first_a.before, 0);
         assert!(writes.iter().any(|event| event.reg == Reg::A && event.after == 1));
+    }
+
+    #[test]
+    fn decoder_is_one_hot_for_real_cmpi_opcode() {
+        let trace = Machine::run_match("f3-decode", 5000);
+        let events = derive_decoder_datapath(&trace);
+        let cmpi = events
+            .iter()
+            .find(|event| event.opcode == op::CMPI)
+            .expect("CMPI decode");
+        assert_eq!(cmpi.high_line, 2);
+        assert_eq!(cmpi.low_line, 9);
+    }
+
+    #[test]
+    fn bus_ownership_matches_fetch_ram_and_dma_cycles() {
+        let trace = Machine::run_match("f3-bus", 5000);
+        let events = derive_bus_datapath(&trace);
+        assert!(events.iter().any(|event| {
+            event.cycle == BusCycle::Fetch
+                && event.address_owner == BusAddressOwner::ProgramCounter
+                && event.data_owner == BusDataOwner::Rom
+        }));
+        assert!(events.iter().any(|event| {
+            event.cycle == BusCycle::Read && event.data_owner == BusDataOwner::Ram
+        }));
+        assert!(events.iter().any(|event| {
+            event.cycle == BusCycle::Dma
+                && event.address_owner == BusAddressOwner::Dma
+                && event.data_owner == BusDataOwner::Vram
+        }));
     }
 }
