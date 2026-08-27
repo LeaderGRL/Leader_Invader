@@ -112,6 +112,102 @@ pub mod uaddr {
     pub const EXEC_BASE: u8 = 0x80;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MicroAddressSource {
+    FetchStart,
+    Sequential,
+    Dispatch,
+    RoutineCall,
+    RoutineReturn,
+}
+
+impl MicroAddressSource {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FetchStart => "fetch_start",
+            Self::Sequential => "sequential",
+            Self::Dispatch => "dispatch",
+            Self::RoutineCall => "routine_call",
+            Self::RoutineReturn => "routine_return",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MicroAddressTransition {
+    pub before: u8,
+    pub after: u8,
+    pub source: MicroAddressSource,
+}
+
+/// Semantic 8-bit microprogram counter for the control unit.
+///
+/// Common three-row routines are traversed by the physical wrapping +1 path.
+/// Operand/read/write helpers are micro-calls: one return latch is sufficient
+/// because the current microarchitecture never nests a common helper inside
+/// another common helper.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MicroSequencer {
+    address: u8,
+    return_address: u8,
+}
+
+impl Default for MicroSequencer {
+    fn default() -> Self {
+        Self {
+            address: uaddr::FETCH_T0,
+            return_address: uaddr::FETCH_T0,
+        }
+    }
+}
+
+impl MicroSequencer {
+    #[must_use]
+    pub const fn address(self) -> u8 {
+        self.address
+    }
+
+    #[must_use]
+    pub const fn return_address(self) -> u8 {
+        self.return_address
+    }
+
+    pub fn fetch_start(&mut self) -> MicroAddressTransition {
+        self.load(uaddr::FETCH_T0, MicroAddressSource::FetchStart)
+    }
+
+    pub fn advance(&mut self) -> MicroAddressTransition {
+        self.load(
+            self.address.wrapping_add(1),
+            MicroAddressSource::Sequential,
+        )
+    }
+
+    pub fn dispatch(&mut self, address: u8) -> MicroAddressTransition {
+        self.load(address, MicroAddressSource::Dispatch)
+    }
+
+    pub fn call(&mut self, address: u8) -> MicroAddressTransition {
+        self.return_address = self.address;
+        self.load(address, MicroAddressSource::RoutineCall)
+    }
+
+    pub fn return_from_routine(&mut self) -> MicroAddressTransition {
+        self.load(self.return_address, MicroAddressSource::RoutineReturn)
+    }
+
+    fn load(&mut self, address: u8, source: MicroAddressSource) -> MicroAddressTransition {
+        let before = self.address;
+        self.address = address;
+        MicroAddressTransition {
+            before,
+            after: address,
+            source,
+        }
+    }
+}
+
 const NONE: ControlWord = ControlWord::new(false, false, false, false, false, false, false, false);
 const REG_ALU: ControlWord = ControlWord::new(true, true, false, false, false, false, false, false);
 const ALU_ONLY: ControlWord = ControlWord::new(false, true, false, false, false, false, false, false);
@@ -153,7 +249,12 @@ pub const fn decode(opcode: u8) -> Option<MicroInstruction> {
         op::HALT => ("HALT", MicroOp::Halt, HALT),
         _ => return None,
     };
-    Some(MicroInstruction { opcode, mnemonic, operation, control })
+    Some(MicroInstruction {
+        opcode,
+        mnemonic,
+        operation,
+        control,
+    })
 }
 
 #[must_use]
@@ -207,7 +308,11 @@ pub fn control_word_at(address: u8, opcode: u8) -> ControlWord {
         uaddr::FETCH_T1 | uaddr::OPERAND_T1 | uaddr::READ_T1 => {
             ControlWord::new(false, false, true, false, false, false, false, false)
         }
-        uaddr::FETCH_T2 | uaddr::OPERAND_T2 | uaddr::READ_T0 | uaddr::READ_T2 | uaddr::WRITE_T0 => NONE,
+        uaddr::FETCH_T2
+        | uaddr::OPERAND_T2
+        | uaddr::READ_T0
+        | uaddr::READ_T2
+        | uaddr::WRITE_T0 => NONE,
         uaddr::WRITE_T1 | uaddr::WRITE_T2 => {
             ControlWord::new(false, false, false, true, false, false, false, false)
         }
@@ -230,11 +335,67 @@ mod tests {
     }
 
     #[test]
+    fn microsequencer_has_real_increment_dispatch_and_return_paths() {
+        let mut seq = MicroSequencer::default();
+        assert_eq!(seq.address(), uaddr::FETCH_T0);
+
+        let t1 = seq.advance();
+        assert_eq!(t1.before, uaddr::FETCH_T0);
+        assert_eq!(t1.after, uaddr::FETCH_T1);
+        assert_eq!(t1.source, MicroAddressSource::Sequential);
+
+        let exec = execute_address(op::ADDI).expect("ADDI execute address");
+        let dispatch = seq.dispatch(exec);
+        assert_eq!(dispatch.after, exec);
+        assert_eq!(dispatch.source, MicroAddressSource::Dispatch);
+
+        let call = seq.call(uaddr::OPERAND_T0);
+        assert_eq!(call.after, uaddr::OPERAND_T0);
+        assert_eq!(seq.return_address(), exec);
+
+        assert_eq!(seq.advance().after, uaddr::OPERAND_T1);
+        assert_eq!(seq.advance().after, uaddr::OPERAND_T2);
+        let ret = seq.return_from_routine();
+        assert_eq!(ret.after, exec);
+        assert_eq!(ret.source, MicroAddressSource::RoutineReturn);
+    }
+
+    #[test]
+    fn eight_bit_microcounter_wraps_like_physical_hardware() {
+        let mut seq = MicroSequencer {
+            address: 0xff,
+            return_address: 0,
+        };
+        assert_eq!(seq.advance().after, 0x00);
+    }
+
+    #[test]
     fn every_opcode_has_unique_execute_microaddress() {
         let opcodes = [
-            op::NOP, op::LDI, op::LD, op::ST, op::MOV, op::ADD, op::ADDI, op::SUBI,
-            op::ANDI, op::ORI, op::XORI, op::INC, op::DEC, op::CMP, op::CMPI, op::JMP,
-            op::JZ, op::JNZ, op::JLT, op::JGE, op::JC, op::CALL, op::RET, op::WAIT_VBLANK,
+            op::NOP,
+            op::LDI,
+            op::LD,
+            op::ST,
+            op::MOV,
+            op::ADD,
+            op::ADDI,
+            op::SUBI,
+            op::ANDI,
+            op::ORI,
+            op::XORI,
+            op::INC,
+            op::DEC,
+            op::CMP,
+            op::CMPI,
+            op::JMP,
+            op::JZ,
+            op::JNZ,
+            op::JLT,
+            op::JGE,
+            op::JC,
+            op::CALL,
+            op::RET,
+            op::WAIT_VBLANK,
             op::HALT,
         ];
         let mut seen = [false; 256];
