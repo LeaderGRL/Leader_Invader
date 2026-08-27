@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 pub mod assembler;
+pub mod datapath;
 pub mod game;
 pub mod isa;
 pub mod layout;
@@ -9,6 +10,7 @@ pub mod rng;
 pub mod topology;
 pub mod trace;
 
+pub use datapath::{bit16, bit8, derive_datapath, DatapathEvent, DatapathState};
 pub use isa::{Cpu, Flags, Reg, StepOutcome};
 pub use machine::Machine;
 pub use topology::{Group, Link, Node, Rect, SignalKind, Topology};
