@@ -3,6 +3,7 @@ use std::fmt::Write;
 use crate::game::{GameState, Projectile, ALIEN_ROWS};
 use crate::isa::{MicroCycleKind, MicroPhase, PcSource, Reg};
 use crate::logic::{AluTrace, PcIncrementTrace};
+use crate::microcode::MicroAddressSource;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhaseKind {
@@ -62,7 +63,9 @@ pub struct MicroCycleEvent {
 pub struct MicroAddressEvent {
     pub frame: u32,
     pub ordinal: u16,
+    pub before: u8,
     pub address: u8,
+    pub source: MicroAddressSource,
     pub opcode: u8,
     pub control_bits: u8,
     pub label: &'static str,
@@ -203,7 +206,7 @@ impl MatchTrace {
 
     #[must_use]
     pub fn to_json(&self) -> String {
-        let mut out = String::with_capacity(self.frames.len() * 260);
+        let mut out = String::with_capacity(self.frames.len() * 280);
         let _ = write!(
             out,
             "{{\n  \"seed\": \"{}\",\n  \"seed_hash\": \"{:016x}\",\n  \"finished\": {},\n  \"total_frames\": {},\n  \"final_score\": {},\n  \"final_lives\": {},\n  \"kills\": [",
@@ -244,7 +247,7 @@ impl MatchTrace {
         out.push_str("\n  ],\n  \"micro_addresses\": [");
         for (index, event) in self.micro_addresses.iter().enumerate() {
             if index > 0 { out.push(','); }
-            let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"address\":{},\"opcode\":{},\"control_bits\":{},\"label\":\"{}\"}}", event.frame, event.ordinal, event.address, event.opcode, event.control_bits, event.label);
+            let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"before\":{},\"address\":{},\"source\":\"{}\",\"opcode\":{},\"control_bits\":{},\"label\":\"{}\"}}", event.frame, event.ordinal, event.before, event.address, event.source.as_str(), event.opcode, event.control_bits, event.label);
         }
 
         out.push_str("\n  ],\n  \"alu_events\": [");
