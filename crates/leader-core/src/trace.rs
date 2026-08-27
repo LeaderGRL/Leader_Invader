@@ -59,6 +59,16 @@ pub struct MicroCycleEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MicroAddressEvent {
+    pub frame: u32,
+    pub ordinal: u16,
+    pub address: u8,
+    pub opcode: u8,
+    pub control_bits: u8,
+    pub label: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AluEvent {
     pub frame: u32,
     pub ordinal: u16,
@@ -159,6 +169,7 @@ pub struct MatchTrace {
     pub frames: Vec<FrameState>,
     pub micro_samples: Vec<MicroSample>,
     pub micro_cycles: Vec<MicroCycleEvent>,
+    pub micro_addresses: Vec<MicroAddressEvent>,
     pub alu_events: Vec<AluEvent>,
     pub register_writes: Vec<RegisterWriteEvent>,
     pub pc_events: Vec<PcEvent>,
@@ -178,6 +189,7 @@ impl MatchTrace {
             frames: Vec::new(),
             micro_samples: Vec::new(),
             micro_cycles: Vec::new(),
+            micro_addresses: Vec::new(),
             alu_events: Vec::new(),
             register_writes: Vec::new(),
             pc_events: Vec::new(),
@@ -191,7 +203,7 @@ impl MatchTrace {
 
     #[must_use]
     pub fn to_json(&self) -> String {
-        let mut out = String::with_capacity(self.frames.len() * 240);
+        let mut out = String::with_capacity(self.frames.len() * 260);
         let _ = write!(
             out,
             "{{\n  \"seed\": \"{}\",\n  \"seed_hash\": \"{:016x}\",\n  \"finished\": {},\n  \"total_frames\": {},\n  \"final_score\": {},\n  \"final_lives\": {},\n  \"kills\": [",
@@ -227,6 +239,12 @@ impl MatchTrace {
         for (index, event) in self.micro_cycles.iter().enumerate() {
             if index > 0 { out.push(','); }
             let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"phase\":\"{}\",\"kind\":\"{}\",\"pc\":{},\"mar\":{},\"mdr\":{},\"ir\":{},\"control\":\"{}\"}}", event.frame, event.ordinal, event.phase.as_str(), event.kind.as_str(), event.pc, event.mar, event.mdr, event.ir, event.control);
+        }
+
+        out.push_str("\n  ],\n  \"micro_addresses\": [");
+        for (index, event) in self.micro_addresses.iter().enumerate() {
+            if index > 0 { out.push(','); }
+            let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"address\":{},\"opcode\":{},\"control_bits\":{},\"label\":\"{}\"}}", event.frame, event.ordinal, event.address, event.opcode, event.control_bits, event.label);
         }
 
         out.push_str("\n  ],\n  \"alu_events\": [");
