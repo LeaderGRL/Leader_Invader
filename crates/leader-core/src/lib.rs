@@ -36,8 +36,9 @@ pub use pc_datapath::{derive_pc_datapath, PcDatapathEvent, PcDatapathKind};
 pub use stack_datapath::{derive_stack_datapath, StackDatapathEvent, StackDatapathKind};
 pub use topology::{Group, Link, Node, Rect, SignalKind, Topology};
 pub use trace::{
-    AluEvent, FrameState, KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample,
-    PcEvent, PcEventKind, PhaseKind, ProjectileSnapshot, RegisterWriteEvent,
+    AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind, FrameState,
+    KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent, PcEventKind,
+    PhaseKind, ProjectileSnapshot, RegisterWriteEvent,
 };
 
 #[must_use]
