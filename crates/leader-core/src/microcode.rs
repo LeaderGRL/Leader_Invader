@@ -49,7 +49,7 @@ impl ControlWord {
     pub const fn internal_bits(self) -> u16 { self.internal }
 
     #[must_use]
-    pub const fn bits24(self) -> u32 { u32::from(self.bits()) | ((self.internal as u32) << 8) }
+    pub const fn bits24(self) -> u32 { (self.bits() as u32) | ((self.internal as u32) << 8) }
 
     #[must_use]
     pub const fn has_internal(self, signal: u16) -> bool { self.internal & signal != 0 }
