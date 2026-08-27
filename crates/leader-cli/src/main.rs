@@ -4,6 +4,7 @@ mod director;
 mod microcode_overlay;
 mod pc_overlay;
 mod stack_overlay;
+mod timing_overlay;
 
 use std::{
     env, fs,
@@ -70,6 +71,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let svg = pc_overlay::apply(svg, &topology, &trace, config);
     let svg = microcode_overlay::apply(svg, &topology, &trace, config);
     let svg = stack_overlay::apply(svg, &topology, &trace, config);
+    let svg = timing_overlay::apply(svg, &topology, &trace, config);
     write(&options.output, svg.as_bytes())?;
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
