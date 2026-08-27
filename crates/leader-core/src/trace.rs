@@ -67,7 +67,7 @@ pub struct MicroAddressEvent {
     pub address: u8,
     pub source: MicroAddressSource,
     pub opcode: u8,
-    pub control_bits: u8,
+    pub control_bits: u32,
     pub label: &'static str,
 }
 
