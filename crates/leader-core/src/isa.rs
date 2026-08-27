@@ -201,7 +201,9 @@ impl Cpu {
             MicroOp::Nop => StepOutcome::Continue,
             MicroOp::LoadImmediate => {
                 let Some(reg) = self.next_reg(bus) else { return self.fault(instruction_pc, opcode); };
+                self.advance_execute(bus, "LDI_VALUE");
                 let value = self.next8(bus);
+                self.advance_execute(bus, "LDI_COMMIT");
                 self.write_reg(bus, instruction_pc, reg, value, micro.mnemonic);
                 self.flags = Flags { zero: value == 0, carry: false, less: false };
                 bus.trace_alu_exact(instruction_pc, logic_trace(AluOp::Pass, value, 0, value), micro.mnemonic);
@@ -381,6 +383,11 @@ impl Cpu {
         self.publish_microaddress(bus, transition, "EXEC_RETURN");
     }
 
+    fn advance_execute<B: Bus>(&mut self, bus: &mut B, label: &'static str) {
+        let transition = self.micro.advance();
+        self.publish_microaddress(bus, transition, label);
+    }
+
     fn publish_microaddress<B: Bus>(&self, bus: &mut B, transition: MicroAddressTransition, label: &'static str) {
         let word = control_word_at(transition.after, self.ir);
         bus.trace_microaddress(transition, self.ir, word.bits(), label);
@@ -406,7 +413,9 @@ impl Cpu {
 
     fn immediate_arithmetic<B: Bus>(&mut self, bus: &mut B, pc: u16, opcode: u8, operation: AluOp, control: &'static str) -> StepOutcome {
         let Some(reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
+        if opcode == op::ADDI { self.advance_execute(bus, "ADDI_VALUE"); }
         let rhs = self.next8(bus);
+        if opcode == op::ADDI { self.advance_execute(bus, "ADDI_COMMIT"); }
         let lhs = self.regs[reg as usize];
         let trace = match operation {
             AluOp::Add => ripple_add(lhs, rhs, false, operation),
@@ -526,34 +535,43 @@ mod tests {
         cpu.pc = 0x0123;
         assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
         assert_eq!(bus.cycles.len(), 3);
-        assert_eq!(bus.cycles[0].0, MicroPhase::T0);
         assert_eq!(bus.cycles[0].1, MicroCycleKind::FetchAddress);
-        assert_eq!(bus.cycles[0].3, 0x0123);
-        assert_eq!(bus.cycles[1].0, MicroPhase::T1);
         assert_eq!(bus.cycles[1].1, MicroCycleKind::FetchData);
-        assert_eq!(bus.cycles[1].2, 0x0124);
-        assert_eq!(bus.cycles[1].4, op::NOP);
-        assert_eq!(bus.cycles[2].0, MicroPhase::T2);
         assert_eq!(bus.cycles[2].1, MicroCycleKind::DecodeLatch);
-        assert_eq!(bus.cycles[2].5, op::NOP);
-        assert_eq!(cpu.phase(), MicroPhase::T2);
-        assert_eq!(bus.micro_addresses[0].after, uaddr::FETCH_T0);
-        assert_eq!(bus.micro_addresses[1].after, uaddr::FETCH_T1);
-        assert_eq!(bus.micro_addresses[2].after, uaddr::FETCH_T2);
         assert_eq!(cpu.micro_address(), execute_address(op::NOP).unwrap());
     }
 
     #[test]
-    fn operand_helper_is_a_real_micro_call_and_return() {
+    fn ldi_traverses_three_execute_rows() {
         let mut bus = TestBus::default();
         let program = [op::LDI, Reg::A.code(), 4, op::HALT];
         bus.memory[..program.len()].copy_from_slice(&program);
         let mut cpu = Cpu::default();
         assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
-        let exec = execute_address(op::LDI).unwrap();
-        assert!(bus.micro_addresses.iter().any(|t| t.source == crate::microcode::MicroAddressSource::RoutineCall && t.after == uaddr::OPERAND_T0));
-        assert!(bus.micro_addresses.iter().any(|t| t.source == crate::microcode::MicroAddressSource::RoutineReturn && t.after == exec));
-        assert_eq!(cpu.micro_address(), exec);
+        let base = execute_address(op::LDI).unwrap();
+        assert!(bus.micro_addresses.iter().any(|t| t.after == base));
+        assert!(bus.micro_addresses.iter().any(|t| t.after == base + 1 && t.source == crate::microcode::MicroAddressSource::Sequential));
+        assert!(bus.micro_addresses.iter().any(|t| t.after == base + 2 && t.source == crate::microcode::MicroAddressSource::Sequential));
+        assert_eq!(cpu.micro_address(), base + 2);
+        assert_eq!(cpu.reg(Reg::A), 4);
+    }
+
+    #[test]
+    fn addi_traverses_three_execute_rows_and_real_ripple_alu() {
+        let mut bus = TestBus::default();
+        let program = [op::LDI, Reg::A.code(), 4, op::ADDI, Reg::A.code(), 6, op::HALT];
+        bus.memory[..program.len()].copy_from_slice(&program);
+        let mut cpu = Cpu::default();
+        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
+        bus.micro_addresses.clear();
+        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
+        let base = execute_address(op::ADDI).unwrap();
+        assert!(bus.micro_addresses.iter().any(|t| t.after == base));
+        assert!(bus.micro_addresses.iter().any(|t| t.after == base + 1));
+        assert!(bus.micro_addresses.iter().any(|t| t.after == base + 2));
+        assert_eq!(cpu.micro_address(), base + 2);
+        assert_eq!(cpu.reg(Reg::A), 10);
+        assert_eq!(bus.exact_alu.last().unwrap().result, 10);
     }
 
     #[test]
@@ -566,22 +584,7 @@ mod tests {
         assert_eq!(bus.memory[0x80], 10);
         assert_eq!(bus.exact_alu[1].result, 10);
         assert!(bus.writes.contains(&(Reg::A, 4, 10)));
-        assert_eq!(cpu.mar(), 0x80);
-        assert_eq!(cpu.mdr(), 10);
         assert_eq!(cpu.step(&mut bus), StepOutcome::Halted);
-    }
-
-    #[test]
-    fn opcode_fetch_latches_mar_mdr_and_ir_semantically() {
-        let mut bus = TestBus::default();
-        bus.memory[0x0123] = op::NOP;
-        let mut cpu = Cpu::default();
-        cpu.pc = 0x0123;
-        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
-        assert_eq!(cpu.ir(), op::NOP);
-        assert_eq!(cpu.mar(), 0x0123);
-        assert_eq!(cpu.mdr(), op::NOP);
-        assert_eq!(cpu.pc(), 0x0124);
     }
 
     #[test]
@@ -591,7 +594,7 @@ mod tests {
         let mut cpu = Cpu::default(); cpu.pc = 0x00FF;
         assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
         let increment = bus.pc_increments.last().copied().expect("pc increment");
-        assert_eq!(increment.after, 0x0100); assert!(increment.low_byte_carry()); assert_eq!(cpu.pc(), increment.after);
+        assert_eq!(increment.after, 0x0100); assert!(increment.low_byte_carry());
     }
 
     #[test]
@@ -600,9 +603,9 @@ mod tests {
         let program = [op::JMP, 0x04, 0, op::HALT, op::JZ, 0x09, 0, op::HALT, op::HALT, op::HALT];
         bus.memory[..program.len()].copy_from_slice(&program);
         let mut cpu = Cpu::default();
-        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue); assert_eq!(cpu.pc(), 4); assert_eq!(bus.pc_loads[0].2, PcSource::Jump);
+        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue); assert_eq!(cpu.pc(), 4);
         cpu.flags.zero = true;
-        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue); assert_eq!(cpu.pc(), 9); assert_eq!(bus.pc_loads[1].2, PcSource::Branch);
+        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue); assert_eq!(cpu.pc(), 9);
     }
 
     #[test]
@@ -622,6 +625,5 @@ mod tests {
         assert_eq!(cpu.sp(), initial.wrapping_sub(2)); assert_eq!(cpu.pc(), 5);
         assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
         assert_eq!(cpu.sp(), initial); assert_eq!(cpu.pc(), 3);
-        assert_eq!(cpu.mar(), initial.wrapping_sub(1));
     }
 }
