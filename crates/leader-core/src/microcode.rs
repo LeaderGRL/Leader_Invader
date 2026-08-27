@@ -35,16 +35,7 @@ impl ControlWord {
         wait: bool,
         halt: bool,
     ) -> Self {
-        Self {
-            reg_write,
-            alu_enable,
-            mem_read,
-            mem_write,
-            pc_load,
-            stack_enable,
-            wait,
-            halt,
-        }
+        Self { reg_write, alu_enable, mem_read, mem_write, pc_load, stack_enable, wait, halt }
     }
 }
 
@@ -96,19 +87,15 @@ pub mod uaddr {
     pub const FETCH_T0: u8 = 0x00;
     pub const FETCH_T1: u8 = 0x01;
     pub const FETCH_T2: u8 = 0x02;
-
     pub const OPERAND_T0: u8 = 0x10;
     pub const OPERAND_T1: u8 = 0x11;
     pub const OPERAND_T2: u8 = 0x12;
-
     pub const READ_T0: u8 = 0x20;
     pub const READ_T1: u8 = 0x21;
     pub const READ_T2: u8 = 0x22;
-
     pub const WRITE_T0: u8 = 0x30;
     pub const WRITE_T1: u8 = 0x31;
     pub const WRITE_T2: u8 = 0x32;
-
     pub const EXEC_BASE: u8 = 0x80;
     pub const EXEC_STRIDE: u8 = 5;
     pub const EXEC_ROWS: u8 = 5;
@@ -152,41 +139,23 @@ pub struct MicroSequencer {
 
 impl Default for MicroSequencer {
     fn default() -> Self {
-        Self {
-            address: uaddr::FETCH_T0,
-            return_address: uaddr::FETCH_T0,
-        }
+        Self { address: uaddr::FETCH_T0, return_address: uaddr::FETCH_T0 }
     }
 }
 
 impl MicroSequencer {
     #[must_use]
     pub const fn address(self) -> u8 { self.address }
-
     #[must_use]
     pub const fn return_address(self) -> u8 { self.return_address }
-
-    pub fn fetch_start(&mut self) -> MicroAddressTransition {
-        self.load(uaddr::FETCH_T0, MicroAddressSource::FetchStart)
-    }
-
-    pub fn advance(&mut self) -> MicroAddressTransition {
-        self.load(self.address.wrapping_add(1), MicroAddressSource::Sequential)
-    }
-
-    pub fn dispatch(&mut self, address: u8) -> MicroAddressTransition {
-        self.load(address, MicroAddressSource::Dispatch)
-    }
-
+    pub fn fetch_start(&mut self) -> MicroAddressTransition { self.load(uaddr::FETCH_T0, MicroAddressSource::FetchStart) }
+    pub fn advance(&mut self) -> MicroAddressTransition { self.load(self.address.wrapping_add(1), MicroAddressSource::Sequential) }
+    pub fn dispatch(&mut self, address: u8) -> MicroAddressTransition { self.load(address, MicroAddressSource::Dispatch) }
     pub fn call(&mut self, address: u8) -> MicroAddressTransition {
         self.return_address = self.address;
         self.load(address, MicroAddressSource::RoutineCall)
     }
-
-    pub fn return_from_routine(&mut self) -> MicroAddressTransition {
-        self.load(self.return_address, MicroAddressSource::RoutineReturn)
-    }
-
+    pub fn return_from_routine(&mut self) -> MicroAddressTransition { self.load(self.return_address, MicroAddressSource::RoutineReturn) }
     fn load(&mut self, address: u8, source: MicroAddressSource) -> MicroAddressTransition {
         let before = self.address;
         self.address = address;
@@ -194,16 +163,15 @@ impl MicroSequencer {
     }
 }
 
-/// Semantic role of a physical execute row.
-///
-/// This deliberately does not describe how the µPC arrived at the row. Dispatch,
-/// sequential advance and routine call/return are transition sources represented
-/// separately by `MicroAddressSource`.
+/// Semantic role of a physical execute row. Arrival mechanics remain represented
+/// independently by `MicroAddressSource`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecuteRowKind {
     Operand,
+    Address,
     AluSelect,
     Propagate,
+    Memory,
     Commit,
     Idle,
 }
@@ -213,8 +181,10 @@ impl ExecuteRowKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Operand => "operand",
+            Self::Address => "address",
             Self::AluSelect => "alu_select",
             Self::Propagate => "propagate",
+            Self::Memory => "memory",
             Self::Commit => "commit",
             Self::Idle => "idle",
         }
@@ -268,94 +238,78 @@ pub const fn decode(opcode: u8) -> Option<MicroInstruction> {
 
 #[must_use]
 pub const fn control_word(opcode: u8) -> ControlWord {
-    match decode(opcode) {
-        Some(instruction) => instruction.control,
-        None => NONE,
-    }
+    match decode(opcode) { Some(instruction) => instruction.control, None => NONE }
 }
 
 #[must_use]
 pub const fn opcode_slot(opcode: u8) -> Option<u8> {
     Some(match opcode {
-        op::NOP => 0,
-        op::LDI => 1,
-        op::LD => 2,
-        op::ST => 3,
-        op::MOV => 4,
-        op::ADD => 5,
-        op::ADDI => 6,
-        op::SUBI => 7,
-        op::ANDI => 8,
-        op::ORI => 9,
-        op::XORI => 10,
-        op::INC => 11,
-        op::DEC => 12,
-        op::CMP => 13,
-        op::CMPI => 14,
-        op::JMP => 15,
-        op::JZ => 16,
-        op::JNZ => 17,
-        op::JLT => 18,
-        op::JGE => 19,
-        op::JC => 20,
-        op::CALL => 21,
-        op::RET => 22,
-        op::WAIT_VBLANK => 23,
-        op::HALT => 24,
+        op::NOP => 0, op::LDI => 1, op::LD => 2, op::ST => 3, op::MOV => 4,
+        op::ADD => 5, op::ADDI => 6, op::SUBI => 7, op::ANDI => 8, op::ORI => 9,
+        op::XORI => 10, op::INC => 11, op::DEC => 12, op::CMP => 13, op::CMPI => 14,
+        op::JMP => 15, op::JZ => 16, op::JNZ => 17, op::JLT => 18, op::JGE => 19,
+        op::JC => 20, op::CALL => 21, op::RET => 22, op::WAIT_VBLANK => 23, op::HALT => 24,
         _ => return None,
     })
 }
 
 #[must_use]
 pub const fn execute_address(opcode: u8) -> Option<u8> {
-    match opcode_slot(opcode) {
-        Some(slot) => Some(uaddr::EXEC_BASE + slot * uaddr::EXEC_STRIDE),
-        None => None,
-    }
+    match opcode_slot(opcode) { Some(slot) => Some(uaddr::EXEC_BASE + slot * uaddr::EXEC_STRIDE), None => None }
 }
 
 #[must_use]
 pub const fn execute_step_address(opcode: u8, step: u8) -> Option<u8> {
     if step >= uaddr::EXEC_ROWS { return None; }
-    match execute_address(opcode) {
-        Some(base) => Some(base + step),
-        None => None,
-    }
+    match execute_address(opcode) { Some(base) => Some(base + step), None => None }
 }
 
 #[must_use]
 pub const fn is_five_row_alu(opcode: u8) -> bool {
-    matches!(
-        opcode,
-        op::MOV | op::ADD | op::SUBI | op::ANDI | op::ORI | op::XORI | op::INC | op::DEC
-            | op::CMP | op::CMPI
-    )
+    matches!(opcode, op::MOV | op::ADD | op::SUBI | op::ANDI | op::ORI | op::XORI | op::INC | op::DEC | op::CMP | op::CMPI)
 }
 
-/// Row containing the final architectural commit for the currently migrated instruction.
+#[must_use]
+pub const fn is_five_row_memory(opcode: u8) -> bool { matches!(opcode, op::LD | op::ST) }
+
 #[must_use]
 pub const fn execute_control_step(opcode: u8) -> u8 {
-    if is_five_row_alu(opcode) {
+    if is_five_row_alu(opcode) || is_five_row_memory(opcode) {
         4
     } else {
-        match opcode {
-            op::LDI | op::ADDI => 2,
-            _ => 0,
-        }
+        match opcode { op::LDI | op::ADDI => 2, _ => 0 }
     }
 }
 
 #[must_use]
 pub const fn execute_row_kind(opcode: u8, step: u8) -> Option<ExecuteRowKind> {
-    if step >= uaddr::EXEC_ROWS || opcode_slot(opcode).is_none() {
-        return None;
-    }
+    if step >= uaddr::EXEC_ROWS || opcode_slot(opcode).is_none() { return None; }
 
     if is_five_row_alu(opcode) {
         return Some(match step {
             0 | 1 => ExecuteRowKind::Operand,
             2 => ExecuteRowKind::AluSelect,
             3 => ExecuteRowKind::Propagate,
+            4 => ExecuteRowKind::Commit,
+            _ => ExecuteRowKind::Idle,
+        });
+    }
+
+    if opcode == op::LD {
+        return Some(match step {
+            0 => ExecuteRowKind::Operand,
+            1 | 2 => ExecuteRowKind::Address,
+            3 => ExecuteRowKind::Memory,
+            4 => ExecuteRowKind::Commit,
+            _ => ExecuteRowKind::Idle,
+        });
+    }
+
+    if opcode == op::ST {
+        return Some(match step {
+            0 | 1 => ExecuteRowKind::Address,
+            2 => ExecuteRowKind::Operand,
+            3 => ExecuteRowKind::Memory,
             4 => ExecuteRowKind::Commit,
             _ => ExecuteRowKind::Idle,
         });
@@ -376,37 +330,31 @@ pub const fn execute_row_control(opcode: u8, step: u8) -> ControlWord {
     if is_five_row_alu(opcode) {
         return match step {
             2 | 3 => ALU_ONLY,
-            4 => match opcode {
-                op::CMP | op::CMPI => NONE,
-                _ => REG_WRITE,
-            },
+            4 => match opcode { op::CMP | op::CMPI => NONE, _ => REG_WRITE },
             _ => NONE,
         };
     }
 
-    if step == execute_control_step(opcode) {
-        control_word(opcode)
-    } else {
-        NONE
+    if is_five_row_memory(opcode) {
+        return match (opcode, step) {
+            (op::LD, 4) => REG_WRITE,
+            _ => NONE,
+        };
     }
+
+    if step == execute_control_step(opcode) { control_word(opcode) } else { NONE }
 }
 
 #[must_use]
 pub fn control_word_at(address: u8, opcode: u8) -> ControlWord {
     match address {
         uaddr::FETCH_T0 | uaddr::OPERAND_T0 => NONE,
-        uaddr::FETCH_T1 | uaddr::OPERAND_T1 | uaddr::READ_T1 => {
-            ControlWord::new(false, false, true, false, false, false, false, false)
-        }
+        uaddr::FETCH_T1 | uaddr::OPERAND_T1 | uaddr::READ_T1 => ControlWord::new(false, false, true, false, false, false, false, false),
         uaddr::FETCH_T2 | uaddr::OPERAND_T2 | uaddr::READ_T0 | uaddr::READ_T2 | uaddr::WRITE_T0 => NONE,
-        uaddr::WRITE_T1 | uaddr::WRITE_T2 => {
-            ControlWord::new(false, false, false, true, false, false, false, false)
-        }
+        uaddr::WRITE_T1 | uaddr::WRITE_T2 => ControlWord::new(false, false, false, true, false, false, false, false),
         value => {
             let Some(base) = execute_address(opcode) else { return NONE; };
-            if value < base || value >= base.saturating_add(uaddr::EXEC_ROWS) {
-                return NONE;
-            }
+            if value < base || value >= base.saturating_add(uaddr::EXEC_ROWS) { return NONE; }
             execute_row_control(opcode, value - base)
         }
     }
@@ -419,14 +367,9 @@ mod tests {
     const OPCODES: [u8; 25] = [
         op::NOP, op::LDI, op::LD, op::ST, op::MOV, op::ADD, op::ADDI, op::SUBI,
         op::ANDI, op::ORI, op::XORI, op::INC, op::DEC, op::CMP, op::CMPI, op::JMP,
-        op::JZ, op::JNZ, op::JLT, op::JGE, op::JC, op::CALL, op::RET, op::WAIT_VBLANK,
-        op::HALT,
+        op::JZ, op::JNZ, op::JLT, op::JGE, op::JC, op::CALL, op::RET, op::WAIT_VBLANK, op::HALT,
     ];
-
-    const FIVE_ROW_ALU: [u8; 10] = [
-        op::MOV, op::ADD, op::SUBI, op::ANDI, op::ORI, op::XORI, op::INC, op::DEC,
-        op::CMP, op::CMPI,
-    ];
+    const FIVE_ROW_ALU: [u8; 10] = [op::MOV, op::ADD, op::SUBI, op::ANDI, op::ORI, op::XORI, op::INC, op::DEC, op::CMP, op::CMPI];
 
     #[test]
     fn arithmetic_control_word_enables_alu_and_register_write() {
@@ -484,6 +427,24 @@ mod tests {
     }
 
     #[test]
+    fn ld_and_st_rows_expose_address_memory_and_commit_roles() {
+        assert_eq!(execute_row_kind(op::LD, 0), Some(ExecuteRowKind::Operand));
+        assert_eq!(execute_row_kind(op::LD, 1), Some(ExecuteRowKind::Address));
+        assert_eq!(execute_row_kind(op::LD, 2), Some(ExecuteRowKind::Address));
+        assert_eq!(execute_row_kind(op::LD, 3), Some(ExecuteRowKind::Memory));
+        assert_eq!(execute_row_kind(op::LD, 4), Some(ExecuteRowKind::Commit));
+        assert_eq!(execute_row_kind(op::ST, 0), Some(ExecuteRowKind::Address));
+        assert_eq!(execute_row_kind(op::ST, 1), Some(ExecuteRowKind::Address));
+        assert_eq!(execute_row_kind(op::ST, 2), Some(ExecuteRowKind::Operand));
+        assert_eq!(execute_row_kind(op::ST, 3), Some(ExecuteRowKind::Memory));
+        assert_eq!(execute_row_kind(op::ST, 4), Some(ExecuteRowKind::Commit));
+        let ld_base = execute_address(op::LD).unwrap();
+        assert!(control_word_at(ld_base + 4, op::LD).reg_write);
+        let st_base = execute_address(op::ST).unwrap();
+        assert_eq!(control_word_at(st_base + 4, op::ST).bits(), 0);
+    }
+
+    #[test]
     fn execute_row_roles_do_not_duplicate_micro_pc_transition_sources() {
         assert_eq!(execute_row_kind(op::LDI, 0), Some(ExecuteRowKind::Operand));
         assert_eq!(execute_row_kind(op::NOP, 0), Some(ExecuteRowKind::Commit));
@@ -506,9 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn physical_rom_contains_fetch_words() {
-        assert!(control_word_at(uaddr::FETCH_T1, op::ADDI).mem_read);
-    }
+    fn physical_rom_contains_fetch_words() { assert!(control_word_at(uaddr::FETCH_T1, op::ADDI).mem_read); }
 
     #[test]
     fn call_and_return_drive_stack_and_pc_mux() {
