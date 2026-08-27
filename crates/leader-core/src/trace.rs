@@ -1,6 +1,8 @@
 use std::fmt::Write;
 
 use crate::game::{GameState, Projectile, ALIEN_ROWS};
+use crate::logic::AluTrace;
+use crate::isa::Reg;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhaseKind {
@@ -41,6 +43,29 @@ pub struct MicroSample {
     pub address: Option<u16>,
     pub data: Option<u8>,
     pub control: String,
+}
+
+/// Exact ALU state emitted by the semantic CPU at the point where the operation
+/// actually changes flags/register state. The SVG consumes this directly in F3.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AluEvent {
+    pub frame: u32,
+    pub ordinal: u16,
+    pub pc: u16,
+    pub trace: AluTrace,
+    pub control: &'static str,
+}
+
+/// Exact register-file write-enable event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegisterWriteEvent {
+    pub frame: u32,
+    pub ordinal: u16,
+    pub pc: u16,
+    pub reg: Reg,
+    pub before: u8,
+    pub after: u8,
+    pub control: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +130,8 @@ pub struct MatchTrace {
     pub seed_hash: u64,
     pub frames: Vec<FrameState>,
     pub micro_samples: Vec<MicroSample>,
+    pub alu_events: Vec<AluEvent>,
+    pub register_writes: Vec<RegisterWriteEvent>,
     pub kills: Vec<KillEvent>,
     pub finished: bool,
     pub total_frames: u32,
@@ -120,6 +147,8 @@ impl MatchTrace {
             seed_hash,
             frames: Vec::new(),
             micro_samples: Vec::new(),
+            alu_events: Vec::new(),
+            register_writes: Vec::new(),
             kills: Vec::new(),
             finished: false,
             total_frames: 0,
@@ -130,7 +159,7 @@ impl MatchTrace {
 
     #[must_use]
     pub fn to_json(&self) -> String {
-        let mut out = String::with_capacity(self.frames.len() * 180);
+        let mut out = String::with_capacity(self.frames.len() * 190);
         let _ = write!(
             out,
             "{{\n  \"seed\": \"{}\",\n  \"seed_hash\": \"{:016x}\",\n  \"finished\": {},\n  \"total_frames\": {},\n  \"final_score\": {},\n  \"final_lives\": {},\n  \"kills\": [",
@@ -142,22 +171,101 @@ impl MatchTrace {
             self.final_lives
         );
         for (index, kill) in self.kills.iter().enumerate() {
-            if index > 0 { out.push(','); }
-            let _ = write!(out, "\n    {{\"frame\":{},\"row\":{},\"col\":{},\"score_after\":{}}}", kill.frame, kill.row, kill.col, kill.score_after);
+            if index > 0 {
+                out.push(',');
+            }
+            let _ = write!(
+                out,
+                "\n    {{\"frame\":{},\"row\":{},\"col\":{},\"score_after\":{}}}",
+                kill.frame, kill.row, kill.col, kill.score_after
+            );
         }
+
         out.push_str("\n  ],\n  \"frames\": [");
         for (index, frame) in self.frames.iter().enumerate() {
-            if index > 0 { out.push(','); }
+            if index > 0 {
+                out.push(',');
+            }
             let player_shot = projectile_json(frame.player_shot);
             let enemy_shot = projectile_json(frame.enemy_shot);
-            let _ = write!(out, "\n    {{\"frame\":{},\"player_x\":{},\"fleet_x\":{},\"fleet_y\":{},\"fleet_dir\":{},\"player_shot\":{},\"enemy_shot\":{},\"alive_rows\":[{},{},{},{}],\"score\":{},\"lives\":{},\"pc\":{},\"vram_checksum\":{}}}", frame.frame, frame.player_x, frame.fleet_x, frame.fleet_y, frame.fleet_dir, player_shot, enemy_shot, frame.alive_rows[0], frame.alive_rows[1], frame.alive_rows[2], frame.alive_rows[3], frame.score, frame.lives, frame.pc, frame.vram_checksum);
+            let _ = write!(
+                out,
+                "\n    {{\"frame\":{},\"player_x\":{},\"fleet_x\":{},\"fleet_y\":{},\"fleet_dir\":{},\"player_shot\":{},\"enemy_shot\":{},\"alive_rows\":[{},{},{},{}],\"score\":{},\"lives\":{},\"pc\":{},\"vram_checksum\":{}}}",
+                frame.frame,
+                frame.player_x,
+                frame.fleet_x,
+                frame.fleet_y,
+                frame.fleet_dir,
+                player_shot,
+                enemy_shot,
+                frame.alive_rows[0],
+                frame.alive_rows[1],
+                frame.alive_rows[2],
+                frame.alive_rows[3],
+                frame.score,
+                frame.lives,
+                frame.pc,
+                frame.vram_checksum
+            );
         }
+
         out.push_str("\n  ],\n  \"micro_samples\": [");
         for (index, sample) in self.micro_samples.iter().enumerate() {
-            if index > 0 { out.push(','); }
+            if index > 0 {
+                out.push(',');
+            }
             let address = sample.address.map_or_else(|| "null".to_owned(), |value| value.to_string());
             let data = sample.data.map_or_else(|| "null".to_owned(), |value| value.to_string());
-            let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"phase\":\"{}\",\"pc\":{},\"address\":{},\"data\":{},\"control\":\"{}\"}}", sample.frame, sample.ordinal, sample.phase.as_str(), sample.pc, address, data, json_escape(&sample.control));
+            let _ = write!(
+                out,
+                "\n    {{\"frame\":{},\"ordinal\":{},\"phase\":\"{}\",\"pc\":{},\"address\":{},\"data\":{},\"control\":\"{}\"}}",
+                sample.frame,
+                sample.ordinal,
+                sample.phase.as_str(),
+                sample.pc,
+                address,
+                data,
+                json_escape(&sample.control)
+            );
+        }
+
+        out.push_str("\n  ],\n  \"alu_events\": [");
+        for (index, event) in self.alu_events.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            let _ = write!(
+                out,
+                "\n    {{\"frame\":{},\"ordinal\":{},\"pc\":{},\"op\":\"{}\",\"lhs\":{},\"rhs\":{},\"rhs_effective\":{},\"result\":{},\"carry_chain\":{},\"control\":\"{}\"}}",
+                event.frame,
+                event.ordinal,
+                event.pc,
+                event.trace.op.as_str(),
+                event.trace.lhs,
+                event.trace.rhs,
+                event.trace.rhs_effective,
+                event.trace.result,
+                event.trace.carry_chain,
+                event.control
+            );
+        }
+
+        out.push_str("\n  ],\n  \"register_writes\": [");
+        for (index, event) in self.register_writes.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            let _ = write!(
+                out,
+                "\n    {{\"frame\":{},\"ordinal\":{},\"pc\":{},\"reg\":\"{}\",\"before\":{},\"after\":{},\"control\":\"{}\"}}",
+                event.frame,
+                event.ordinal,
+                event.pc,
+                event.reg.name(),
+                event.before,
+                event.after,
+                event.control
+            );
         }
         out.push_str("\n  ]\n}\n");
         out
@@ -165,9 +273,15 @@ impl MatchTrace {
 }
 
 fn projectile_json(projectile: Option<ProjectileSnapshot>) -> String {
-    projectile.map_or_else(|| "null".to_owned(), |value| format!("{{\"x\":{},\"y\":{}}}", value.x, value.y))
+    projectile.map_or_else(
+        || "null".to_owned(),
+        |value| format!("{{\"x\":{},\"y\":{}}}", value.x, value.y),
+    )
 }
 
 fn json_escape(input: &str) -> String {
-    input.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+    input
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
