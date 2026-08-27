@@ -194,10 +194,16 @@ impl MicroSequencer {
     }
 }
 
+/// Semantic role of a physical execute row.
+///
+/// This deliberately does not describe how the µPC arrived at the row. Dispatch,
+/// sequential advance and routine call/return are transition sources represented
+/// separately by `MicroAddressSource`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecuteRowKind {
-    Dispatch,
     Operand,
+    AluSelect,
+    Propagate,
     Commit,
     Idle,
 }
@@ -206,8 +212,9 @@ impl ExecuteRowKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Dispatch => "dispatch",
             Self::Operand => "operand",
+            Self::AluSelect => "alu_select",
+            Self::Propagate => "propagate",
             Self::Commit => "commit",
             Self::Idle => "idle",
         }
@@ -316,7 +323,7 @@ pub const fn execute_step_address(opcode: u8, step: u8) -> Option<u8> {
 }
 
 /// Current migration point inside each five-row execute block.
-/// LDI and ADDI are the first instructions whose commit control word moved to row 2.
+/// LDI and ADDI currently commit on row 2; unmigrated instructions still commit on row 0.
 #[must_use]
 pub const fn execute_control_step(opcode: u8) -> u8 {
     match opcode {
@@ -330,17 +337,15 @@ pub const fn execute_row_kind(opcode: u8, step: u8) -> Option<ExecuteRowKind> {
     if step >= uaddr::EXEC_ROWS || opcode_slot(opcode).is_none() {
         return None;
     }
-    if step == 0 {
-        return Some(ExecuteRowKind::Dispatch);
+
+    match opcode {
+        op::LDI | op::ADDI => Some(match step {
+            0 | 1 => ExecuteRowKind::Operand,
+            2 => ExecuteRowKind::Commit,
+            _ => ExecuteRowKind::Idle,
+        }),
+        _ => Some(if step == 0 { ExecuteRowKind::Commit } else { ExecuteRowKind::Idle }),
     }
-    let commit = execute_control_step(opcode);
-    if step == commit {
-        return Some(ExecuteRowKind::Commit);
-    }
-    if step < commit {
-        return Some(ExecuteRowKind::Operand);
-    }
-    Some(ExecuteRowKind::Idle)
 }
 
 #[must_use]
@@ -407,14 +412,15 @@ mod tests {
     }
 
     #[test]
-    fn execute_rows_expose_semantic_roles() {
+    fn execute_row_roles_do_not_duplicate_micro_pc_transition_sources() {
         for opcode in [op::LDI, op::ADDI] {
-            assert_eq!(execute_row_kind(opcode, 0), Some(ExecuteRowKind::Dispatch));
+            assert_eq!(execute_row_kind(opcode, 0), Some(ExecuteRowKind::Operand));
             assert_eq!(execute_row_kind(opcode, 1), Some(ExecuteRowKind::Operand));
             assert_eq!(execute_row_kind(opcode, 2), Some(ExecuteRowKind::Commit));
             assert_eq!(execute_row_kind(opcode, 3), Some(ExecuteRowKind::Idle));
             assert_eq!(execute_row_kind(opcode, 4), Some(ExecuteRowKind::Idle));
         }
+        assert_eq!(execute_row_kind(op::NOP, 0), Some(ExecuteRowKind::Commit));
         assert_eq!(execute_row_kind(0xAA, 0), None);
         assert_eq!(execute_row_kind(op::LDI, uaddr::EXEC_ROWS), None);
     }
