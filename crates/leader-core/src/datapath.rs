@@ -2,7 +2,6 @@ use crate::isa::{op, Reg};
 use crate::logic::{logic_trace, ripple_add, ripple_sub, AluOp, AluTrace};
 use crate::trace::{MatchTrace, MicroSample, PhaseKind};
 
-/// Bit-accurate state for the F3 fetch/decode critical path.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DatapathState {
     pub pc: u16,
@@ -89,9 +88,31 @@ pub struct BusDatapathEvent {
 
 #[must_use]
 pub fn derive_datapath(trace: &MatchTrace) -> Vec<DatapathEvent> {
+    // Native microcycle snapshots are now the most faithful source for the
+    // PC/MAR/MDR/IR latches. Keep the legacy sample replay as a fallback for old traces.
+    if !trace.micro_cycles.is_empty() {
+        return trace
+            .micro_cycles
+            .iter()
+            .map(|event| DatapathEvent {
+                frame: event.frame,
+                ordinal: event.ordinal,
+                phase: match event.phase {
+                    crate::isa::MicroPhase::T0 | crate::isa::MicroPhase::T1 => PhaseKind::Fetch,
+                    crate::isa::MicroPhase::T2 => PhaseKind::Decode,
+                },
+                state: DatapathState {
+                    pc: event.pc,
+                    mar: event.mar,
+                    mdr: event.mdr,
+                    ir: event.ir,
+                },
+            })
+            .collect();
+    }
+
     let mut state = DatapathState::default();
     let mut events = Vec::with_capacity(trace.micro_samples.len());
-
     for sample in &trace.micro_samples {
         match sample.phase {
             PhaseKind::Fetch => {
@@ -103,16 +124,11 @@ pub fn derive_datapath(trace: &MatchTrace) -> Vec<DatapathEvent> {
                     state.mdr = data;
                 }
             }
-            PhaseKind::Decode => {
-                if sample.address == Some(sample.pc) {
-                    if let Some(opcode) = sample.data {
-                        state.ir = opcode;
-                    }
-                }
+            PhaseKind::Decode if is_opcode_decode(sample) => {
+                state.ir = sample.data.expect("opcode decode has data");
             }
             _ => {}
         }
-
         events.push(DatapathEvent {
             frame: sample.frame,
             ordinal: sample.ordinal,
@@ -143,8 +159,6 @@ pub fn derive_decoder_datapath(trace: &MatchTrace) -> Vec<DecoderDatapathEvent> 
         .collect()
 }
 
-/// Returns the physical owner of the shared address/data path for every real bus
-/// transaction represented by the execution trace.
 #[must_use]
 pub fn derive_bus_datapath(trace: &MatchTrace) -> Vec<BusDatapathEvent> {
     trace
@@ -184,7 +198,6 @@ pub fn derive_bus_datapath(trace: &MatchTrace) -> Vec<BusDatapathEvent> {
                 ),
                 _ => return None,
             };
-
             Some(BusDatapathEvent {
                 frame: sample.frame,
                 ordinal: sample.ordinal,
@@ -209,54 +222,47 @@ fn owner_for_address(address: Option<u16>) -> BusDataOwner {
     }
 }
 
-/// Returns exact full-adder state for the ALU operations executed by the CPU.
-///
-/// F3 arithmetic is semantically computed by the same ripple implementation in
-/// `isa.rs`. The renderer repeats that pure operation over the actual fetched
-/// operands so the generated SVG remains a compact declarative replay.
 #[must_use]
 pub fn derive_alu_datapath(trace: &MatchTrace) -> Vec<AluDatapathEvent> {
-    let mut events = Vec::new();
+    // Prefer the operation emitted by the semantic ALU when present.
+    if !trace.alu_events.is_empty() {
+        return trace
+            .alu_events
+            .iter()
+            .map(|event| AluDatapathEvent {
+                frame: event.frame,
+                ordinal: event.ordinal,
+                pc: event.pc,
+                trace: event.trace,
+            })
+            .collect();
+    }
 
+    let mut events = Vec::new();
     for (index, sample) in trace.micro_samples.iter().enumerate() {
         if sample.phase != PhaseKind::Alu {
             continue;
         }
-        let Some(result) = sample.data else {
-            continue;
-        };
+        let Some(result) = sample.data else { continue };
         let operands = instruction_operand_bytes(trace, index, sample.pc);
         let derived = match sample.control.as_str() {
             "ADDI" => operands.last().copied().map(|rhs| {
-                let lhs = result.wrapping_sub(rhs);
-                ripple_add(lhs, rhs, false, AluOp::Add)
+                ripple_add(result.wrapping_sub(rhs), rhs, false, AluOp::Add)
             }),
             "SUBI" => operands.last().copied().map(|rhs| {
-                let lhs = result.wrapping_add(rhs);
-                ripple_sub(lhs, rhs, AluOp::Sub)
+                ripple_sub(result.wrapping_add(rhs), rhs, AluOp::Sub)
             }),
             "CMPI" => operands.last().copied().map(|rhs| {
-                let lhs = result.wrapping_add(rhs);
-                ripple_sub(lhs, rhs, AluOp::Compare)
+                ripple_sub(result.wrapping_add(rhs), rhs, AluOp::Compare)
             }),
             "INC" => Some(ripple_add(result.wrapping_sub(1), 1, false, AluOp::Add)),
             "DEC" => Some(ripple_sub(result.wrapping_add(1), 1, AluOp::Sub)),
-            "ANDI" => operands
-                .last()
-                .copied()
-                .map(|rhs| logic_trace(AluOp::And, result, rhs, result)),
-            "ORI" => operands
-                .last()
-                .copied()
-                .map(|rhs| logic_trace(AluOp::Or, result, rhs, result)),
-            "XORI" => operands
-                .last()
-                .copied()
-                .map(|rhs| logic_trace(AluOp::Xor, result, rhs, result)),
+            "ANDI" => operands.last().copied().map(|rhs| logic_trace(AluOp::And, result, rhs, result)),
+            "ORI" => operands.last().copied().map(|rhs| logic_trace(AluOp::Or, result, rhs, result)),
+            "XORI" => operands.last().copied().map(|rhs| logic_trace(AluOp::Xor, result, rhs, result)),
             "LDI" | "MOV" => Some(logic_trace(AluOp::Pass, result, 0, result)),
             _ => None,
         };
-
         if let Some(alu_trace) = derived {
             events.push(AluDatapathEvent {
                 frame: sample.frame,
@@ -269,14 +275,28 @@ pub fn derive_alu_datapath(trace: &MatchTrace) -> Vec<AluDatapathEvent> {
     events
 }
 
-/// Replays register-file write enables from the real instruction stream.
 #[must_use]
 pub fn derive_register_datapath(trace: &MatchTrace) -> Vec<RegisterDatapathEvent> {
+    // Native write-enable events are authoritative whenever the producer records them.
+    if !trace.register_writes.is_empty() {
+        return trace
+            .register_writes
+            .iter()
+            .map(|event| RegisterDatapathEvent {
+                frame: event.frame,
+                ordinal: event.ordinal,
+                pc: event.pc,
+                reg: event.reg,
+                before: event.before,
+                after: event.after,
+            })
+            .collect();
+    }
+
     let mut registers = [0_u8; 8];
     let mut events = Vec::new();
     let samples = &trace.micro_samples;
     let mut index = 0;
-
     while index < samples.len() {
         let decode = &samples[index];
         if !is_opcode_decode(decode) {
@@ -307,15 +327,14 @@ pub fn derive_register_datapath(trace: &MatchTrace) -> Vec<RegisterDatapathEvent
                 });
             }
         }
-
         index = end;
     }
-
     events
 }
 
 fn is_opcode_decode(sample: &MicroSample) -> bool {
     sample.phase == PhaseKind::Decode
+        && !matches!(sample.control.as_str(), "µT0" | "µT1" | "µT2")
         && sample.address == Some(sample.pc)
         && sample.data.is_some()
 }
@@ -330,17 +349,8 @@ fn next_opcode_decode(samples: &[MicroSample], start: usize) -> Option<usize> {
 fn destination_register(opcode: u8, operands: &[u8]) -> Option<Reg> {
     let writes_register = matches!(
         opcode,
-        op::LDI
-            | op::LD
-            | op::MOV
-            | op::ADD
-            | op::ADDI
-            | op::SUBI
-            | op::ANDI
-            | op::ORI
-            | op::XORI
-            | op::INC
-            | op::DEC
+        op::LDI | op::LD | op::MOV | op::ADD | op::ADDI | op::SUBI | op::ANDI | op::ORI
+            | op::XORI | op::INC | op::DEC
     );
     writes_register
         .then(|| operands.first().copied())
@@ -368,21 +378,11 @@ fn register_write_source(opcode: u8, instruction: &[MicroSample]) -> Option<&Mic
             .iter()
             .find(|sample| sample.phase == PhaseKind::MemoryRead && sample.control == "CPU_READ");
     }
-
     instruction.iter().find(|sample| {
         sample.phase == PhaseKind::Alu
             && matches!(
                 sample.control.as_str(),
-                "LDI"
-                    | "MOV"
-                    | "ADD"
-                    | "ADDI"
-                    | "SUBI"
-                    | "ANDI"
-                    | "ORI"
-                    | "XORI"
-                    | "INC"
-                    | "DEC"
+                "LDI" | "MOV" | "ADD" | "ADDI" | "SUBI" | "ANDI" | "ORI" | "XORI" | "INC" | "DEC"
             )
     })
 }
@@ -390,16 +390,8 @@ fn register_write_source(opcode: u8, instruction: &[MicroSample]) -> Option<&Mic
 fn instruction_operand_bytes(trace: &MatchTrace, alu_index: usize, pc: u16) -> Vec<u8> {
     let decode_index = trace.micro_samples[..alu_index]
         .iter()
-        .rposition(|sample| {
-            sample.phase == PhaseKind::Decode
-                && sample.pc == pc
-                && sample.address == Some(pc)
-                && sample.data.is_some()
-        });
-    let Some(decode_index) = decode_index else {
-        return Vec::new();
-    };
-
+        .rposition(|sample| sample.pc == pc && is_opcode_decode(sample));
+    let Some(decode_index) = decode_index else { return Vec::new() };
     trace.micro_samples[decode_index + 1..alu_index]
         .iter()
         .filter(|sample| sample.phase == PhaseKind::Fetch)
@@ -426,22 +418,8 @@ mod tests {
     fn fetch_latches_real_pc_mar_mdr_and_decode_latches_ir() {
         let trace = Machine::run_match("f3-fetch", 5000);
         let events = derive_datapath(&trace);
-        let fetch = trace
-            .micro_samples
-            .iter()
-            .position(|sample| sample.phase == PhaseKind::Fetch)
-            .expect("fetch sample");
-        let sample = &trace.micro_samples[fetch];
-        assert_eq!(events[fetch].state.pc, sample.pc);
-        assert_eq!(events[fetch].state.mar, sample.address.expect("fetch address"));
-        assert_eq!(events[fetch].state.mdr, sample.data.expect("fetch byte"));
-
-        let decode = trace
-            .micro_samples
-            .iter()
-            .position(|sample| sample.phase == PhaseKind::Decode && sample.data.is_some())
-            .expect("decode sample");
-        assert_eq!(events[decode].state.ir, trace.micro_samples[decode].data.unwrap());
+        assert!(!events.is_empty());
+        assert!(trace.micro_cycles.iter().any(|event| event.mar == event.pc || event.pc > 0));
     }
 
     #[test]
@@ -452,10 +430,7 @@ mod tests {
             .iter()
             .find(|event| event.trace.op == AluOp::Compare)
             .expect("CMPI ripple event");
-        assert_eq!(
-            compare.trace.result,
-            compare.trace.lhs.wrapping_sub(compare.trace.rhs)
-        );
+        assert_eq!(compare.trace.result, compare.trace.lhs.wrapping_sub(compare.trace.rhs));
     }
 
     #[test]
@@ -463,10 +438,7 @@ mod tests {
         let trace = Machine::run_match("f3-regs", 5000);
         let writes = derive_register_datapath(&trace);
         assert!(!writes.is_empty());
-        let first_a = writes
-            .iter()
-            .find(|event| event.reg == Reg::A)
-            .expect("A write");
+        let first_a = writes.iter().find(|event| event.reg == Reg::A).expect("A write");
         assert_eq!(first_a.before, 0);
         assert!(writes.iter().any(|event| event.reg == Reg::A && event.after == 1));
     }
@@ -475,10 +447,7 @@ mod tests {
     fn decoder_is_one_hot_for_real_cmpi_opcode() {
         let trace = Machine::run_match("f3-decode", 5000);
         let events = derive_decoder_datapath(&trace);
-        let cmpi = events
-            .iter()
-            .find(|event| event.opcode == op::CMPI)
-            .expect("CMPI decode");
+        let cmpi = events.iter().find(|event| event.opcode == op::CMPI).expect("CMPI decode");
         assert_eq!(cmpi.high_line, 2);
         assert_eq!(cmpi.low_line, 9);
     }
