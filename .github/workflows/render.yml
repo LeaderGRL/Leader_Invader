@@ -43,7 +43,7 @@ jobs:
       - name: Commit generated artifacts
         shell: bash
         run: |
-          if git diff --quiet -- generated/Leader.svg generated/trace.json; then
+          if [ -z "$(git status --porcelain -- generated/Leader.svg generated/trace.json)" ]; then
             echo "generated artifacts are already current"
             exit 0
           fi
