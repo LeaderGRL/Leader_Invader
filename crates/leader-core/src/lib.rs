@@ -28,7 +28,7 @@ pub use logic::{
 pub use machine::Machine;
 pub use microcode::{
     control_word, control_word_at, decode as decode_microcode, execute_address, uaddr, ControlWord,
-    MicroInstruction, MicroOp,
+    MicroAddressSource, MicroAddressTransition, MicroInstruction, MicroOp, MicroSequencer,
 };
 pub use pc_datapath::{derive_pc_datapath, PcDatapathEvent, PcDatapathKind};
 pub use stack_datapath::{derive_stack_datapath, StackDatapathEvent, StackDatapathKind};
