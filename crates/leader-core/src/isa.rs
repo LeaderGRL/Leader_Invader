@@ -35,33 +35,138 @@ pub mod op {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Reg { A = 0, B = 1, C = 2, D = 3, X = 4, Y = 5, T = 6, U = 7 }
+pub enum Reg {
+    A = 0,
+    B = 1,
+    C = 2,
+    D = 3,
+    X = 4,
+    Y = 5,
+    T = 6,
+    U = 7,
+}
 
 impl Reg {
-    pub const ALL: [Self; 8] = [Self::A, Self::B, Self::C, Self::D, Self::X, Self::Y, Self::T, Self::U];
-    #[must_use] pub const fn code(self) -> u8 { self as u8 }
-    #[must_use] pub const fn name(self) -> &'static str {
+    pub const ALL: [Self; 8] = [
+        Self::A,
+        Self::B,
+        Self::C,
+        Self::D,
+        Self::X,
+        Self::Y,
+        Self::T,
+        Self::U,
+    ];
+
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
         match self {
-            Self::A => "A", Self::B => "B", Self::C => "C", Self::D => "D",
-            Self::X => "X", Self::Y => "Y", Self::T => "T", Self::U => "U",
+            Self::A => "A",
+            Self::B => "B",
+            Self::C => "C",
+            Self::D => "D",
+            Self::X => "X",
+            Self::Y => "Y",
+            Self::T => "T",
+            Self::U => "U",
         }
     }
-    fn from_code(value: u8) -> Option<Self> { Self::ALL.get(value as usize).copied() }
+
+    fn from_code(value: u8) -> Option<Self> {
+        Self::ALL.get(value as usize).copied()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Flags { pub zero: bool, pub carry: bool, pub less: bool }
+pub struct Flags {
+    pub zero: bool,
+    pub carry: bool,
+    pub less: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StepOutcome { Continue, WaitVBlank, Halted, Fault { pc: u16, opcode: u8 } }
+pub enum StepOutcome {
+    Continue,
+    WaitVBlank,
+    Halted,
+    Fault { pc: u16, opcode: u8 },
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PcSource { Jump, Branch, Call, Return }
+pub enum PcSource {
+    Jump,
+    Branch,
+    Call,
+    Return,
+}
 
 impl PcSource {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
-        match self { Self::Jump => "jump", Self::Branch => "branch", Self::Call => "call", Self::Return => "return" }
+        match self {
+            Self::Jump => "jump",
+            Self::Branch => "branch",
+            Self::Call => "call",
+            Self::Return => "return",
+        }
+    }
+}
+
+/// Native clock phase of the semantic datapath.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MicroPhase {
+    T0,
+    T1,
+    T2,
+}
+
+impl MicroPhase {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::T0 => "t0",
+            Self::T1 => "t1",
+            Self::T2 => "t2",
+        }
+    }
+}
+
+/// Meaning of one native T-state. These events are emitted by the CPU at the
+/// exact point where the corresponding latch/bus transition becomes semantic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MicroCycleKind {
+    FetchAddress,
+    FetchData,
+    DecodeLatch,
+    OperandAddress,
+    OperandData,
+    OperandReady,
+    MemoryAddress,
+    MemoryRead,
+    MemoryWriteData,
+    MemoryWriteCommit,
+}
+
+impl MicroCycleKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FetchAddress => "fetch_address",
+            Self::FetchData => "fetch_data",
+            Self::DecodeLatch => "decode_latch",
+            Self::OperandAddress => "operand_address",
+            Self::OperandData => "operand_data",
+            Self::OperandReady => "operand_ready",
+            Self::MemoryAddress => "memory_address",
+            Self::MemoryRead => "memory_read",
+            Self::MemoryWriteData => "memory_write_data",
+            Self::MemoryWriteCommit => "memory_write_commit",
+        }
     }
 }
 
@@ -72,10 +177,43 @@ pub trait Bus {
     fn trace_decode(&mut self, pc: u16, opcode: u8, mnemonic: &'static str);
     fn trace_alu(&mut self, pc: u16, value: u8, control: &'static str);
     fn trace_control(&mut self, pc: u16, control: &'static str);
-    fn trace_alu_exact(&mut self, pc: u16, trace: AluTrace, control: &'static str) { self.trace_alu(pc, trace.result, control); }
-    fn trace_register_write(&mut self, _pc: u16, _reg: Reg, _before: u8, _after: u8, _control: &'static str) {}
+
+    fn trace_alu_exact(&mut self, pc: u16, trace: AluTrace, control: &'static str) {
+        self.trace_alu(pc, trace.result, control);
+    }
+
+    fn trace_register_write(
+        &mut self,
+        _pc: u16,
+        _reg: Reg,
+        _before: u8,
+        _after: u8,
+        _control: &'static str,
+    ) {
+    }
+
     fn trace_pc_increment(&mut self, _trace: PcIncrementTrace) {}
-    fn trace_pc_load(&mut self, _before: u16, _after: u16, _source: PcSource, _control: &'static str) {}
+
+    fn trace_pc_load(
+        &mut self,
+        _before: u16,
+        _after: u16,
+        _source: PcSource,
+        _control: &'static str,
+    ) {
+    }
+
+    fn trace_microcycle(
+        &mut self,
+        _phase: MicroPhase,
+        _kind: MicroCycleKind,
+        _pc: u16,
+        _mar: u16,
+        _mdr: u8,
+        _ir: u8,
+        _control: &'static str,
+    ) {
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,233 +224,564 @@ pub struct Cpu {
     mar: u16,
     mdr: u8,
     ir: u8,
+    phase: MicroPhase,
     flags: Flags,
     halted: bool,
 }
 
 impl Default for Cpu {
     fn default() -> Self {
-        Self { regs: [0; 8], pc: 0, sp: 0x7FFF, mar: 0, mdr: 0, ir: 0, flags: Flags::default(), halted: false }
+        Self {
+            regs: [0; 8],
+            pc: 0,
+            sp: 0x7FFF,
+            mar: 0,
+            mdr: 0,
+            ir: 0,
+            phase: MicroPhase::T0,
+            flags: Flags::default(),
+            halted: false,
+        }
     }
 }
 
 impl Cpu {
-    #[must_use] pub const fn pc(&self) -> u16 { self.pc }
-    #[must_use] pub const fn sp(&self) -> u16 { self.sp }
-    #[must_use] pub const fn mar(&self) -> u16 { self.mar }
-    #[must_use] pub const fn mdr(&self) -> u8 { self.mdr }
-    #[must_use] pub const fn ir(&self) -> u8 { self.ir }
-    #[must_use] pub const fn flags(&self) -> Flags { self.flags }
-    #[must_use] pub fn reg(&self, reg: Reg) -> u8 { self.regs[reg as usize] }
+    #[must_use]
+    pub const fn pc(&self) -> u16 {
+        self.pc
+    }
+
+    #[must_use]
+    pub const fn sp(&self) -> u16 {
+        self.sp
+    }
+
+    #[must_use]
+    pub const fn mar(&self) -> u16 {
+        self.mar
+    }
+
+    #[must_use]
+    pub const fn mdr(&self) -> u8 {
+        self.mdr
+    }
+
+    #[must_use]
+    pub const fn ir(&self) -> u8 {
+        self.ir
+    }
+
+    #[must_use]
+    pub const fn phase(&self) -> MicroPhase {
+        self.phase
+    }
+
+    #[must_use]
+    pub const fn flags(&self) -> Flags {
+        self.flags
+    }
+
+    #[must_use]
+    pub fn reg(&self, reg: Reg) -> u8 {
+        self.regs[reg as usize]
+    }
 
     pub fn step<B: Bus>(&mut self, bus: &mut B) -> StepOutcome {
-        if self.halted { return StepOutcome::Halted; }
-        let pc = self.pc;
-        let opcode = self.next8(bus);
-        self.ir = opcode;
-        let Some(micro) = decode_microcode(self.ir) else { return self.fault(pc, self.ir); };
-        bus.trace_decode(pc, self.ir, micro.mnemonic);
+        if self.halted {
+            return StepOutcome::Halted;
+        }
+
+        let instruction_pc = self.pc;
+        let opcode = self.fetch_opcode(bus);
+        let Some(micro) = decode_microcode(self.ir) else {
+            return self.fault(instruction_pc, self.ir);
+        };
+        bus.trace_decode(instruction_pc, self.ir, micro.mnemonic);
 
         match micro.operation {
             MicroOp::Nop => StepOutcome::Continue,
             MicroOp::LoadImmediate => {
-                let Some(reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
+                let Some(reg) = self.next_reg(bus) else {
+                    return self.fault(instruction_pc, opcode);
+                };
                 let value = self.next8(bus);
-                self.write_reg(bus, pc, reg, value, micro.mnemonic);
-                self.flags = Flags { zero: value == 0, carry: false, less: false };
-                bus.trace_alu_exact(pc, logic_trace(AluOp::Pass, value, 0, value), micro.mnemonic);
+                self.write_reg(bus, instruction_pc, reg, value, micro.mnemonic);
+                self.flags = Flags {
+                    zero: value == 0,
+                    carry: false,
+                    less: false,
+                };
+                bus.trace_alu_exact(
+                    instruction_pc,
+                    logic_trace(AluOp::Pass, value, 0, value),
+                    micro.mnemonic,
+                );
                 StepOutcome::Continue
             }
             MicroOp::LoadMemory => {
-                let Some(reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
+                let Some(reg) = self.next_reg(bus) else {
+                    return self.fault(instruction_pc, opcode);
+                };
                 let address = self.next16(bus);
-                let value = self.read_memory(bus, pc, address);
-                self.write_reg(bus, pc, reg, value, micro.mnemonic);
+                let value = self.read_memory(bus, instruction_pc, address, "LD");
+                self.write_reg(bus, instruction_pc, reg, value, micro.mnemonic);
                 self.flags.zero = value == 0;
                 self.flags.less = false;
                 StepOutcome::Continue
             }
             MicroOp::StoreMemory => {
                 let address = self.next16(bus);
-                let Some(reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
-                self.write_memory(bus, pc, address, self.regs[reg as usize]);
+                let Some(reg) = self.next_reg(bus) else {
+                    return self.fault(instruction_pc, opcode);
+                };
+                self.write_memory(
+                    bus,
+                    instruction_pc,
+                    address,
+                    self.regs[reg as usize],
+                    "ST",
+                );
                 StepOutcome::Continue
             }
             MicroOp::Move => {
-                let Some(dst) = self.next_reg(bus) else { return self.fault(pc, opcode); };
-                let Some(src) = self.next_reg(bus) else { return self.fault(pc, opcode); };
+                let Some(dst) = self.next_reg(bus) else {
+                    return self.fault(instruction_pc, opcode);
+                };
+                let Some(src) = self.next_reg(bus) else {
+                    return self.fault(instruction_pc, opcode);
+                };
                 let value = self.regs[src as usize];
-                self.write_reg(bus, pc, dst, value, micro.mnemonic);
+                self.write_reg(bus, instruction_pc, dst, value, micro.mnemonic);
                 self.flags.zero = value == 0;
                 self.flags.less = false;
-                bus.trace_alu_exact(pc, logic_trace(AluOp::Pass, value, 0, value), micro.mnemonic);
+                bus.trace_alu_exact(
+                    instruction_pc,
+                    logic_trace(AluOp::Pass, value, 0, value),
+                    micro.mnemonic,
+                );
                 StepOutcome::Continue
             }
             MicroOp::Add => {
-                let Some(dst) = self.next_reg(bus) else { return self.fault(pc, opcode); };
-                let Some(src) = self.next_reg(bus) else { return self.fault(pc, opcode); };
-                let trace = ripple_add(self.regs[dst as usize], self.regs[src as usize], false, AluOp::Add);
-                self.commit_arithmetic(bus, pc, dst, trace, micro.mnemonic);
+                let Some(dst) = self.next_reg(bus) else {
+                    return self.fault(instruction_pc, opcode);
+                };
+                let Some(src) = self.next_reg(bus) else {
+                    return self.fault(instruction_pc, opcode);
+                };
+                let trace = ripple_add(
+                    self.regs[dst as usize],
+                    self.regs[src as usize],
+                    false,
+                    AluOp::Add,
+                );
+                self.commit_arithmetic(bus, instruction_pc, dst, trace, micro.mnemonic);
                 StepOutcome::Continue
             }
-            MicroOp::AddImmediate => self.immediate_arithmetic(bus, pc, opcode, AluOp::Add, micro.mnemonic),
-            MicroOp::SubImmediate => self.immediate_arithmetic(bus, pc, opcode, AluOp::Sub, micro.mnemonic),
-            MicroOp::AndImmediate => self.immediate_logic(bus, pc, opcode, AluOp::And, micro.mnemonic),
-            MicroOp::OrImmediate => self.immediate_logic(bus, pc, opcode, AluOp::Or, micro.mnemonic),
-            MicroOp::XorImmediate => self.immediate_logic(bus, pc, opcode, AluOp::Xor, micro.mnemonic),
-            MicroOp::Increment => self.unary_arithmetic(bus, pc, opcode, true),
-            MicroOp::Decrement => self.unary_arithmetic(bus, pc, opcode, false),
+            MicroOp::AddImmediate => self.immediate_arithmetic(
+                bus,
+                instruction_pc,
+                opcode,
+                AluOp::Add,
+                micro.mnemonic,
+            ),
+            MicroOp::SubImmediate => self.immediate_arithmetic(
+                bus,
+                instruction_pc,
+                opcode,
+                AluOp::Sub,
+                micro.mnemonic,
+            ),
+            MicroOp::AndImmediate => self.immediate_logic(
+                bus,
+                instruction_pc,
+                opcode,
+                AluOp::And,
+                micro.mnemonic,
+            ),
+            MicroOp::OrImmediate => self.immediate_logic(
+                bus,
+                instruction_pc,
+                opcode,
+                AluOp::Or,
+                micro.mnemonic,
+            ),
+            MicroOp::XorImmediate => self.immediate_logic(
+                bus,
+                instruction_pc,
+                opcode,
+                AluOp::Xor,
+                micro.mnemonic,
+            ),
+            MicroOp::Increment => self.unary_arithmetic(bus, instruction_pc, opcode, true),
+            MicroOp::Decrement => self.unary_arithmetic(bus, instruction_pc, opcode, false),
             MicroOp::Compare => {
-                let Some(lhs_reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
-                let Some(rhs_reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
-                let trace = ripple_sub(self.regs[lhs_reg as usize], self.regs[rhs_reg as usize], AluOp::Compare);
-                self.commit_compare(bus, pc, trace, micro.mnemonic);
+                let Some(lhs_reg) = self.next_reg(bus) else {
+                    return self.fault(instruction_pc, opcode);
+                };
+                let Some(rhs_reg) = self.next_reg(bus) else {
+                    return self.fault(instruction_pc, opcode);
+                };
+                let trace = ripple_sub(
+                    self.regs[lhs_reg as usize],
+                    self.regs[rhs_reg as usize],
+                    AluOp::Compare,
+                );
+                self.commit_compare(bus, instruction_pc, trace, micro.mnemonic);
                 StepOutcome::Continue
             }
             MicroOp::CompareImmediate => {
-                let Some(reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
+                let Some(reg) = self.next_reg(bus) else {
+                    return self.fault(instruction_pc, opcode);
+                };
                 let rhs = self.next8(bus);
                 let trace = ripple_sub(self.regs[reg as usize], rhs, AluOp::Compare);
-                self.commit_compare(bus, pc, trace, micro.mnemonic);
+                self.commit_compare(bus, instruction_pc, trace, micro.mnemonic);
                 StepOutcome::Continue
             }
             MicroOp::Jump => {
                 let target = self.next16(bus);
                 self.load_pc(bus, target, PcSource::Jump, micro.mnemonic);
-                bus.trace_control(pc, micro.mnemonic);
+                bus.trace_control(instruction_pc, micro.mnemonic);
                 StepOutcome::Continue
             }
-            MicroOp::JumpZero => self.branch(bus, pc, self.flags.zero, micro.mnemonic),
-            MicroOp::JumpNotZero => self.branch(bus, pc, !self.flags.zero, micro.mnemonic),
-            MicroOp::JumpLess => self.branch(bus, pc, self.flags.less, micro.mnemonic),
-            MicroOp::JumpGreaterEqual => self.branch(bus, pc, !self.flags.less, micro.mnemonic),
-            MicroOp::JumpCarry => self.branch(bus, pc, self.flags.carry, micro.mnemonic),
+            MicroOp::JumpZero => {
+                self.branch(bus, instruction_pc, self.flags.zero, micro.mnemonic)
+            }
+            MicroOp::JumpNotZero => {
+                self.branch(bus, instruction_pc, !self.flags.zero, micro.mnemonic)
+            }
+            MicroOp::JumpLess => {
+                self.branch(bus, instruction_pc, self.flags.less, micro.mnemonic)
+            }
+            MicroOp::JumpGreaterEqual => {
+                self.branch(bus, instruction_pc, !self.flags.less, micro.mnemonic)
+            }
+            MicroOp::JumpCarry => {
+                self.branch(bus, instruction_pc, self.flags.carry, micro.mnemonic)
+            }
             MicroOp::Call => {
                 let target = self.next16(bus);
                 let ret = self.pc;
-                self.push(bus, pc, (ret >> 8) as u8);
-                self.push(bus, pc, ret as u8);
+                self.push(bus, instruction_pc, (ret >> 8) as u8);
+                self.push(bus, instruction_pc, ret as u8);
                 self.load_pc(bus, target, PcSource::Call, micro.mnemonic);
-                bus.trace_control(pc, micro.mnemonic);
+                bus.trace_control(instruction_pc, micro.mnemonic);
                 StepOutcome::Continue
             }
             MicroOp::Return => {
-                let lo = self.pop(bus, pc);
-                let hi = self.pop(bus, pc);
-                self.load_pc(bus, u16::from_le_bytes([lo, hi]), PcSource::Return, micro.mnemonic);
-                bus.trace_control(pc, micro.mnemonic);
+                let lo = self.pop(bus, instruction_pc);
+                let hi = self.pop(bus, instruction_pc);
+                self.load_pc(
+                    bus,
+                    u16::from_le_bytes([lo, hi]),
+                    PcSource::Return,
+                    micro.mnemonic,
+                );
+                bus.trace_control(instruction_pc, micro.mnemonic);
                 StepOutcome::Continue
             }
-            MicroOp::WaitVBlank => { bus.trace_control(pc, micro.mnemonic); StepOutcome::WaitVBlank }
-            MicroOp::Halt => { self.halted = true; bus.trace_control(pc, micro.mnemonic); StepOutcome::Halted }
+            MicroOp::WaitVBlank => {
+                bus.trace_control(instruction_pc, micro.mnemonic);
+                StepOutcome::WaitVBlank
+            }
+            MicroOp::Halt => {
+                self.halted = true;
+                bus.trace_control(instruction_pc, micro.mnemonic);
+                StepOutcome::Halted
+            }
         }
     }
 
-    fn next8<B: Bus>(&mut self, bus: &mut B) -> u8 {
+    /// Native opcode fetch microsequence:
+    /// T0: MAR <- PC
+    /// T1: MDR <- ROM[MAR], PC <- PC + 1
+    /// T2: IR <- MDR
+    fn fetch_opcode<B: Bus>(&mut self, bus: &mut B) -> u8 {
         self.mar = self.pc;
+        self.emit_cycle(bus, MicroPhase::T0, MicroCycleKind::FetchAddress, "FETCH_ADDR");
+
         self.mdr = bus.fetch8(self.mar);
         let increment = ripple_increment16(self.pc);
         self.pc = increment.after;
         bus.trace_pc_increment(increment);
+        self.emit_cycle(bus, MicroPhase::T1, MicroCycleKind::FetchData, "FETCH_DATA");
+
+        self.ir = self.mdr;
+        self.emit_cycle(bus, MicroPhase::T2, MicroCycleKind::DecodeLatch, "IR_LATCH");
+        self.ir
+    }
+
+    /// Operand/immediate byte fetch uses the same physical sequencer without
+    /// overwriting IR.
+    fn next8<B: Bus>(&mut self, bus: &mut B) -> u8 {
+        self.mar = self.pc;
+        self.emit_cycle(
+            bus,
+            MicroPhase::T0,
+            MicroCycleKind::OperandAddress,
+            "OPERAND_ADDR",
+        );
+
+        self.mdr = bus.fetch8(self.mar);
+        let increment = ripple_increment16(self.pc);
+        self.pc = increment.after;
+        bus.trace_pc_increment(increment);
+        self.emit_cycle(
+            bus,
+            MicroPhase::T1,
+            MicroCycleKind::OperandData,
+            "OPERAND_DATA",
+        );
+
+        self.emit_cycle(
+            bus,
+            MicroPhase::T2,
+            MicroCycleKind::OperandReady,
+            "OPERAND_READY",
+        );
         self.mdr
     }
 
-    fn next16<B: Bus>(&mut self, bus: &mut B) -> u16 { u16::from_le_bytes([self.next8(bus), self.next8(bus)]) }
-    fn next_reg<B: Bus>(&mut self, bus: &mut B) -> Option<Reg> { Reg::from_code(self.next8(bus)) }
+    fn next16<B: Bus>(&mut self, bus: &mut B) -> u16 {
+        u16::from_le_bytes([self.next8(bus), self.next8(bus)])
+    }
 
-    fn read_memory<B: Bus>(&mut self, bus: &mut B, pc: u16, address: u16) -> u8 {
+    fn next_reg<B: Bus>(&mut self, bus: &mut B) -> Option<Reg> {
+        Reg::from_code(self.next8(bus))
+    }
+
+    fn read_memory<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        pc: u16,
+        address: u16,
+        control: &'static str,
+    ) -> u8 {
         self.mar = address;
+        self.emit_cycle(bus, MicroPhase::T0, MicroCycleKind::MemoryAddress, control);
+
         self.mdr = bus.read8(pc, self.mar);
+        self.emit_cycle(bus, MicroPhase::T1, MicroCycleKind::MemoryRead, control);
+
+        self.emit_cycle(bus, MicroPhase::T2, MicroCycleKind::OperandReady, control);
         self.mdr
     }
 
-    fn write_memory<B: Bus>(&mut self, bus: &mut B, pc: u16, address: u16, value: u8) {
+    fn write_memory<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        pc: u16,
+        address: u16,
+        value: u8,
+        control: &'static str,
+    ) {
         self.mar = address;
+        self.emit_cycle(bus, MicroPhase::T0, MicroCycleKind::MemoryAddress, control);
+
         self.mdr = value;
+        self.emit_cycle(
+            bus,
+            MicroPhase::T1,
+            MicroCycleKind::MemoryWriteData,
+            control,
+        );
+
         bus.write8(pc, self.mar, self.mdr);
+        self.emit_cycle(
+            bus,
+            MicroPhase::T2,
+            MicroCycleKind::MemoryWriteCommit,
+            control,
+        );
     }
 
-    fn load_pc<B: Bus>(&mut self, bus: &mut B, target: u16, source: PcSource, control: &'static str) {
+    fn emit_cycle<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        phase: MicroPhase,
+        kind: MicroCycleKind,
+        control: &'static str,
+    ) {
+        self.phase = phase;
+        bus.trace_microcycle(
+            phase,
+            kind,
+            self.pc,
+            self.mar,
+            self.mdr,
+            self.ir,
+            control,
+        );
+    }
+
+    fn load_pc<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        target: u16,
+        source: PcSource,
+        control: &'static str,
+    ) {
         let before = self.pc;
         self.pc = target;
         bus.trace_pc_load(before, target, source, control);
     }
 
-    fn write_reg<B: Bus>(&mut self, bus: &mut B, pc: u16, reg: Reg, value: u8, control: &'static str) {
+    fn write_reg<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        pc: u16,
+        reg: Reg,
+        value: u8,
+        control: &'static str,
+    ) {
         let slot = &mut self.regs[reg as usize];
         let before = *slot;
         *slot = value;
         bus.trace_register_write(pc, reg, before, value, control);
     }
 
-    fn immediate_arithmetic<B: Bus>(&mut self, bus: &mut B, pc: u16, opcode: u8, op: AluOp, control: &'static str) -> StepOutcome {
-        let Some(reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
+    fn immediate_arithmetic<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        pc: u16,
+        opcode: u8,
+        operation: AluOp,
+        control: &'static str,
+    ) -> StepOutcome {
+        let Some(reg) = self.next_reg(bus) else {
+            return self.fault(pc, opcode);
+        };
         let rhs = self.next8(bus);
         let lhs = self.regs[reg as usize];
-        let trace = match op {
-            AluOp::Add => ripple_add(lhs, rhs, false, op),
-            AluOp::Sub => ripple_sub(lhs, rhs, op),
+        let trace = match operation {
+            AluOp::Add => ripple_add(lhs, rhs, false, operation),
+            AluOp::Sub => ripple_sub(lhs, rhs, operation),
             _ => unreachable!("immediate arithmetic only supports add/sub"),
         };
         self.commit_arithmetic(bus, pc, reg, trace, control);
         StepOutcome::Continue
     }
 
-    fn immediate_logic<B: Bus>(&mut self, bus: &mut B, pc: u16, opcode: u8, op: AluOp, control: &'static str) -> StepOutcome {
-        let Some(reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
+    fn immediate_logic<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        pc: u16,
+        opcode: u8,
+        operation: AluOp,
+        control: &'static str,
+    ) -> StepOutcome {
+        let Some(reg) = self.next_reg(bus) else {
+            return self.fault(pc, opcode);
+        };
         let rhs = self.next8(bus);
         let lhs = self.regs[reg as usize];
-        let result = match op { AluOp::And => lhs & rhs, AluOp::Or => lhs | rhs, AluOp::Xor => lhs ^ rhs, _ => unreachable!("logic op") };
-        let trace = logic_trace(op, lhs, rhs, result);
+        let result = match operation {
+            AluOp::And => lhs & rhs,
+            AluOp::Or => lhs | rhs,
+            AluOp::Xor => lhs ^ rhs,
+            _ => unreachable!("logic op"),
+        };
+        let trace = logic_trace(operation, lhs, rhs, result);
         self.write_reg(bus, pc, reg, result, control);
-        self.flags = Flags { zero: result == 0, carry: false, less: false };
+        self.flags = Flags {
+            zero: result == 0,
+            carry: false,
+            less: false,
+        };
         bus.trace_alu_exact(pc, trace, control);
         StepOutcome::Continue
     }
 
-    fn unary_arithmetic<B: Bus>(&mut self, bus: &mut B, pc: u16, opcode: u8, increment: bool) -> StepOutcome {
-        let Some(reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
+    fn unary_arithmetic<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        pc: u16,
+        opcode: u8,
+        increment: bool,
+    ) -> StepOutcome {
+        let Some(reg) = self.next_reg(bus) else {
+            return self.fault(pc, opcode);
+        };
         let lhs = self.regs[reg as usize];
-        let (trace, control) = if increment { (ripple_add(lhs, 1, false, AluOp::Add), "INC") } else { (ripple_sub(lhs, 1, AluOp::Sub), "DEC") };
+        let (trace, control) = if increment {
+            (ripple_add(lhs, 1, false, AluOp::Add), "INC")
+        } else {
+            (ripple_sub(lhs, 1, AluOp::Sub), "DEC")
+        };
         self.commit_arithmetic(bus, pc, reg, trace, control);
         StepOutcome::Continue
     }
 
-    fn commit_arithmetic<B: Bus>(&mut self, bus: &mut B, pc: u16, reg: Reg, trace: AluTrace, control: &'static str) {
+    fn commit_arithmetic<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        pc: u16,
+        reg: Reg,
+        trace: AluTrace,
+        control: &'static str,
+    ) {
         self.write_reg(bus, pc, reg, trace.result, control);
-        self.flags = Flags { zero: trace.result == 0, carry: trace.final_carry(), less: !trace.final_carry() && matches!(trace.op, AluOp::Sub) };
+        self.flags = Flags {
+            zero: trace.result == 0,
+            carry: trace.final_carry(),
+            less: !trace.final_carry() && matches!(trace.op, AluOp::Sub),
+        };
         bus.trace_alu_exact(pc, trace, control);
     }
 
-    fn commit_compare<B: Bus>(&mut self, bus: &mut B, pc: u16, trace: AluTrace, control: &'static str) {
-        self.flags = Flags { zero: trace.result == 0, carry: trace.final_carry(), less: !trace.final_carry() };
+    fn commit_compare<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        pc: u16,
+        trace: AluTrace,
+        control: &'static str,
+    ) {
+        self.flags = Flags {
+            zero: trace.result == 0,
+            carry: trace.final_carry(),
+            less: !trace.final_carry(),
+        };
         bus.trace_alu_exact(pc, trace, control);
     }
 
-    fn branch<B: Bus>(&mut self, bus: &mut B, pc: u16, condition: bool, control: &'static str) -> StepOutcome {
+    fn branch<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        pc: u16,
+        condition: bool,
+        control: &'static str,
+    ) -> StepOutcome {
         let target = self.next16(bus);
-        if condition { self.load_pc(bus, target, PcSource::Branch, control); }
+        if condition {
+            self.load_pc(bus, target, PcSource::Branch, control);
+        }
         bus.trace_control(pc, control);
         StepOutcome::Continue
     }
 
     fn push<B: Bus>(&mut self, bus: &mut B, pc: u16, value: u8) {
         self.sp = ripple_decrement16(self.sp).after;
-        self.write_memory(bus, pc, self.sp, value);
+        self.write_memory(bus, pc, self.sp, value, "STACK_PUSH");
     }
 
     fn pop<B: Bus>(&mut self, bus: &mut B, pc: u16) -> u8 {
-        let value = self.read_memory(bus, pc, self.sp);
+        let value = self.read_memory(bus, pc, self.sp, "STACK_POP");
         self.sp = ripple_increment16(self.sp).after;
         value
     }
 
-    fn fault(&mut self, pc: u16, opcode: u8) -> StepOutcome { self.halted = true; StepOutcome::Fault { pc, opcode } }
+    fn fault(&mut self, pc: u16, opcode: u8) -> StepOutcome {
+        self.halted = true;
+        StepOutcome::Fault { pc, opcode }
+    }
 }
 
 #[must_use]
 pub const fn mnemonic(value: u8) -> &'static str {
-    match decode_microcode(value) { Some(instruction) => instruction.mnemonic, None => "FAULT" }
+    match decode_microcode(value) {
+        Some(instruction) => instruction.mnemonic,
+        None => "FAULT",
+    }
 }
 
 #[must_use]
@@ -330,32 +799,130 @@ mod tests {
     use super::*;
 
     struct TestBus {
-        memory: Vec<u8>, exact_alu: Vec<AluTrace>, writes: Vec<(Reg, u8, u8)>,
-        pc_increments: Vec<PcIncrementTrace>, pc_loads: Vec<(u16, u16, PcSource, &'static str)>,
+        memory: Vec<u8>,
+        exact_alu: Vec<AluTrace>,
+        writes: Vec<(Reg, u8, u8)>,
+        pc_increments: Vec<PcIncrementTrace>,
+        pc_loads: Vec<(u16, u16, PcSource, &'static str)>,
+        cycles: Vec<(MicroPhase, MicroCycleKind, u16, u16, u8, u8)>,
     }
+
     impl Default for TestBus {
-        fn default() -> Self { Self { memory: vec![0; 65_536], exact_alu: vec![], writes: vec![], pc_increments: vec![], pc_loads: vec![] } }
+        fn default() -> Self {
+            Self {
+                memory: vec![0; 65_536],
+                exact_alu: vec![],
+                writes: vec![],
+                pc_increments: vec![],
+                pc_loads: vec![],
+                cycles: vec![],
+            }
+        }
     }
+
     impl Bus for TestBus {
-        fn fetch8(&mut self, pc: u16) -> u8 { self.memory[pc as usize] }
-        fn read8(&mut self, _pc: u16, address: u16) -> u8 { self.memory[address as usize] }
-        fn write8(&mut self, _pc: u16, address: u16, value: u8) { self.memory[address as usize] = value; }
+        fn fetch8(&mut self, pc: u16) -> u8 {
+            self.memory[pc as usize]
+        }
+
+        fn read8(&mut self, _pc: u16, address: u16) -> u8 {
+            self.memory[address as usize]
+        }
+
+        fn write8(&mut self, _pc: u16, address: u16, value: u8) {
+            self.memory[address as usize] = value;
+        }
+
         fn trace_decode(&mut self, _pc: u16, _opcode: u8, _mnemonic: &'static str) {}
         fn trace_alu(&mut self, _pc: u16, _value: u8, _control: &'static str) {}
         fn trace_control(&mut self, _pc: u16, _control: &'static str) {}
-        fn trace_alu_exact(&mut self, _pc: u16, trace: AluTrace, _control: &'static str) { self.exact_alu.push(trace); }
-        fn trace_register_write(&mut self, _pc: u16, reg: Reg, before: u8, after: u8, _control: &'static str) { self.writes.push((reg, before, after)); }
-        fn trace_pc_increment(&mut self, trace: PcIncrementTrace) { self.pc_increments.push(trace); }
-        fn trace_pc_load(&mut self, before: u16, after: u16, source: PcSource, control: &'static str) { self.pc_loads.push((before, after, source, control)); }
+
+        fn trace_alu_exact(&mut self, _pc: u16, trace: AluTrace, _control: &'static str) {
+            self.exact_alu.push(trace);
+        }
+
+        fn trace_register_write(
+            &mut self,
+            _pc: u16,
+            reg: Reg,
+            before: u8,
+            after: u8,
+            _control: &'static str,
+        ) {
+            self.writes.push((reg, before, after));
+        }
+
+        fn trace_pc_increment(&mut self, trace: PcIncrementTrace) {
+            self.pc_increments.push(trace);
+        }
+
+        fn trace_pc_load(
+            &mut self,
+            before: u16,
+            after: u16,
+            source: PcSource,
+            control: &'static str,
+        ) {
+            self.pc_loads.push((before, after, source, control));
+        }
+
+        fn trace_microcycle(
+            &mut self,
+            phase: MicroPhase,
+            kind: MicroCycleKind,
+            pc: u16,
+            mar: u16,
+            mdr: u8,
+            ir: u8,
+            _control: &'static str,
+        ) {
+            self.cycles.push((phase, kind, pc, mar, mdr, ir));
+        }
+    }
+
+    #[test]
+    fn opcode_fetch_is_native_t0_t1_t2() {
+        let mut bus = TestBus::default();
+        bus.memory[0x0123] = op::NOP;
+        let mut cpu = Cpu::default();
+        cpu.pc = 0x0123;
+        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
+
+        assert_eq!(bus.cycles.len(), 3);
+        assert_eq!(bus.cycles[0].0, MicroPhase::T0);
+        assert_eq!(bus.cycles[0].1, MicroCycleKind::FetchAddress);
+        assert_eq!(bus.cycles[0].3, 0x0123);
+        assert_eq!(bus.cycles[1].0, MicroPhase::T1);
+        assert_eq!(bus.cycles[1].1, MicroCycleKind::FetchData);
+        assert_eq!(bus.cycles[1].2, 0x0124);
+        assert_eq!(bus.cycles[1].4, op::NOP);
+        assert_eq!(bus.cycles[2].0, MicroPhase::T2);
+        assert_eq!(bus.cycles[2].1, MicroCycleKind::DecodeLatch);
+        assert_eq!(bus.cycles[2].5, op::NOP);
+        assert_eq!(cpu.phase(), MicroPhase::T2);
     }
 
     #[test]
     fn load_add_store_uses_exact_ripple_path() {
         let mut bus = TestBus::default();
-        let program = [op::LDI, Reg::A.code(), 4, op::ADDI, Reg::A.code(), 6, op::ST, 0x80, 0, Reg::A.code(), op::HALT];
+        let program = [
+            op::LDI,
+            Reg::A.code(),
+            4,
+            op::ADDI,
+            Reg::A.code(),
+            6,
+            op::ST,
+            0x80,
+            0,
+            Reg::A.code(),
+            op::HALT,
+        ];
         bus.memory[..program.len()].copy_from_slice(&program);
         let mut cpu = Cpu::default();
-        for _ in 0..3 { assert_eq!(cpu.step(&mut bus), StepOutcome::Continue); }
+        for _ in 0..3 {
+            assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
+        }
         assert_eq!(bus.memory[0x80], 10);
         assert_eq!(bus.exact_alu[1].result, 10);
         assert!(bus.writes.contains(&(Reg::A, 4, 10)));
@@ -381,27 +948,53 @@ mod tests {
     fn fetch_pc_advance_is_the_exact_ripple_incrementer() {
         let mut bus = TestBus::default();
         bus.memory[0x00FF] = op::NOP;
-        let mut cpu = Cpu::default(); cpu.pc = 0x00FF;
+        let mut cpu = Cpu::default();
+        cpu.pc = 0x00FF;
         assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
         let increment = bus.pc_increments.last().copied().expect("pc increment");
-        assert_eq!(increment.after, 0x0100); assert!(increment.low_byte_carry()); assert_eq!(cpu.pc(), increment.after);
+        assert_eq!(increment.after, 0x0100);
+        assert!(increment.low_byte_carry());
+        assert_eq!(cpu.pc(), increment.after);
     }
 
     #[test]
     fn jump_and_branch_select_nonsequential_pc_mux_sources() {
         let mut bus = TestBus::default();
-        let program = [op::JMP, 0x04, 0, op::HALT, op::JZ, 0x09, 0, op::HALT, op::HALT, op::HALT];
+        let program = [
+            op::JMP,
+            0x04,
+            0,
+            op::HALT,
+            op::JZ,
+            0x09,
+            0,
+            op::HALT,
+            op::HALT,
+            op::HALT,
+        ];
         bus.memory[..program.len()].copy_from_slice(&program);
         let mut cpu = Cpu::default();
-        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue); assert_eq!(cpu.pc(), 4); assert_eq!(bus.pc_loads[0].2, PcSource::Jump);
+        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
+        assert_eq!(cpu.pc(), 4);
+        assert_eq!(bus.pc_loads[0].2, PcSource::Jump);
         cpu.flags.zero = true;
-        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue); assert_eq!(cpu.pc(), 9); assert_eq!(bus.pc_loads[1].2, PcSource::Branch);
+        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
+        assert_eq!(cpu.pc(), 9);
+        assert_eq!(bus.pc_loads[1].2, PcSource::Branch);
     }
 
     #[test]
     fn undefined_opcode_faults_because_control_rom_has_no_entry() {
-        let mut bus = TestBus::default(); bus.memory[0] = 0xAA; let mut cpu = Cpu::default();
-        assert_eq!(cpu.step(&mut bus), StepOutcome::Fault { pc: 0, opcode: 0xAA });
+        let mut bus = TestBus::default();
+        bus.memory[0] = 0xAA;
+        let mut cpu = Cpu::default();
+        assert_eq!(
+            cpu.step(&mut bus),
+            StepOutcome::Fault {
+                pc: 0,
+                opcode: 0xAA
+            }
+        );
     }
 
     #[test]
@@ -412,9 +1005,11 @@ mod tests {
         let mut cpu = Cpu::default();
         let initial = cpu.sp();
         assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
-        assert_eq!(cpu.sp(), initial.wrapping_sub(2)); assert_eq!(cpu.pc(), 5);
+        assert_eq!(cpu.sp(), initial.wrapping_sub(2));
+        assert_eq!(cpu.pc(), 5);
         assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
-        assert_eq!(cpu.sp(), initial); assert_eq!(cpu.pc(), 3);
+        assert_eq!(cpu.sp(), initial);
+        assert_eq!(cpu.pc(), 3);
         assert_eq!(cpu.mar(), initial.wrapping_sub(1));
     }
 }
