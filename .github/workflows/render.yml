@@ -40,15 +40,22 @@ jobs:
         run: cargo run --release -p leader-cli -- render --seed "${{ steps.seed.outputs.value }}" --output generated/Leader.svg
       - name: Validate SVG
         run: python scripts/validate_svg.py generated/Leader.svg
-      - name: Commit generated artifacts
+      - name: Preserve full execution trace
+        uses: actions/upload-artifact@v4
+        with:
+          name: leader-trace-${{ github.sha }}
+          path: generated/trace.json
+          retention-days: 14
+          if-no-files-found: error
+      - name: Commit generated SVG
         shell: bash
         run: |
-          if [ -z "$(git status --porcelain -- generated/Leader.svg generated/trace.json)" ]; then
-            echo "generated artifacts are already current"
+          if [ -z "$(git status --porcelain -- generated/Leader.svg)" ]; then
+            echo "generated SVG is already current"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add generated/Leader.svg generated/trace.json
+          git add generated/Leader.svg
           git commit -m "chore(render): refresh deterministic README replay"
           git push
