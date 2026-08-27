@@ -1,0 +1,54 @@
+name: render-readme
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: Optional deterministic seed (defaults to commit SHA)
+        required: false
+        type: string
+  push:
+    paths-ignore:
+      - 'generated/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: render-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  render:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Choose seed
+        id: seed
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.seed }}" ]; then
+            echo "value=${{ inputs.seed }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Generate deterministic replay
+        run: cargo run --release -p leader-cli -- render --seed "${{ steps.seed.outputs.value }}" --output generated/Leader.svg
+      - name: Validate SVG
+        run: python scripts/validate_svg.py generated/Leader.svg
+      - name: Commit generated artifacts
+        shell: bash
+        run: |
+          if git diff --quiet -- generated/Leader.svg generated/trace.json; then
+            echo "generated artifacts are already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add generated/Leader.svg generated/trace.json
+          git commit -m "chore(render): refresh deterministic README replay"
+          git push
