@@ -24,10 +24,6 @@ impl AluOp {
     }
 }
 
-/// Exact logic-level state produced by one 8-bit ALU operation.
-///
-/// `carry_chain` stores carry-in for bit 0 in bit 0, then carry-out from
-/// slice N in bit N+1. Therefore bit 8 is the final carry-out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AluTrace {
     pub op: AluOp,
@@ -55,11 +51,39 @@ impl AluTrace {
     }
 }
 
-/// Computes a byte using eight explicit full-adder slices.
+/// Physical state of the 16-bit PC + 1 ripple incrementer.
 ///
-/// This function is intentionally the semantic arithmetic implementation used by
-/// the CPU, not merely a visualization helper. F3 SVG carry activity is generated
-/// from this exact chain.
+/// `carry_chain` uses bits 0..=16 exactly like the 8-bit ALU: bit 0 is the
+/// injected +1 carry, bit N+1 is the carry leaving slice N.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PcIncrementTrace {
+    pub before: u16,
+    pub after: u16,
+    pub carry_chain: u32,
+}
+
+impl PcIncrementTrace {
+    #[must_use]
+    pub const fn carry_in(self, bit: usize) -> bool {
+        self.carry_chain & (1_u32 << bit) != 0
+    }
+
+    #[must_use]
+    pub const fn carry_out(self, bit: usize) -> bool {
+        self.carry_chain & (1_u32 << (bit + 1)) != 0
+    }
+
+    #[must_use]
+    pub const fn low_byte_carry(self) -> bool {
+        self.carry_chain & (1_u32 << 8) != 0
+    }
+
+    #[must_use]
+    pub const fn overflow(self) -> bool {
+        self.carry_chain & (1_u32 << 16) != 0
+    }
+}
+
 #[must_use]
 pub fn ripple_add(lhs: u8, rhs: u8, carry_in: bool, op: AluOp) -> AluTrace {
     let mut result = 0_u8;
@@ -98,6 +122,33 @@ pub fn ripple_sub(lhs: u8, rhs: u8, op: AluOp) -> AluTrace {
     trace.rhs = rhs;
     trace.rhs_effective = effective;
     trace
+}
+
+/// Computes PC + 1 using sixteen explicit half-adder-like ripple slices.
+#[must_use]
+pub fn ripple_increment16(before: u16) -> PcIncrementTrace {
+    let mut after = 0_u16;
+    let mut carry = true;
+    let mut chain = 1_u32;
+
+    for bit in 0..16 {
+        let input = (before >> bit) & 1 != 0;
+        let output = input ^ carry;
+        let carry_out = input & carry;
+        if output {
+            after |= 1_u16 << bit;
+        }
+        carry = carry_out;
+        if carry {
+            chain |= 1_u32 << (bit + 1);
+        }
+    }
+
+    PcIncrementTrace {
+        before,
+        after,
+        carry_chain: chain,
+    }
 }
 
 #[must_use]
@@ -149,5 +200,21 @@ mod tests {
             assert!(trace.carry_chain & (1_u16 << boundary) != 0);
         }
         assert!(trace.carry_chain & (1_u16 << 5) == 0);
+    }
+
+    #[test]
+    fn pc_incrementer_matches_wrapping_add_for_all_addresses() {
+        for before in 0_u16..=u16::MAX {
+            let trace = ripple_increment16(before);
+            assert_eq!(trace.after, before.wrapping_add(1));
+        }
+    }
+
+    #[test]
+    fn pc_incrementer_exposes_low_to_high_carry() {
+        let trace = ripple_increment16(0x12ff);
+        assert_eq!(trace.after, 0x1300);
+        assert!(trace.low_byte_carry());
+        assert!(!trace.overflow());
     }
 }
