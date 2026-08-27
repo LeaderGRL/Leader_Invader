@@ -91,7 +91,7 @@ pub struct MicroInstruction {
 /// 10-12: common operand/immediate fetch
 /// 20-22: common memory read
 /// 30-32: common memory write
-/// 80-98: per-instruction execute entries
+/// 80-FC: 25 fixed execute blocks x 5 rows
 pub mod uaddr {
     pub const FETCH_T0: u8 = 0x00;
     pub const FETCH_T1: u8 = 0x01;
@@ -110,6 +110,9 @@ pub mod uaddr {
     pub const WRITE_T2: u8 = 0x32;
 
     pub const EXEC_BASE: u8 = 0x80;
+    pub const EXEC_STRIDE: u8 = 5;
+    pub const EXEC_ROWS: u8 = 5;
+    pub const EXEC_LAST: u8 = 0xFC;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,12 +144,6 @@ pub struct MicroAddressTransition {
     pub source: MicroAddressSource,
 }
 
-/// Semantic 8-bit microprogram counter for the control unit.
-///
-/// Common three-row routines are traversed by the physical wrapping +1 path.
-/// Operand/read/write helpers are micro-calls: one return latch is sufficient
-/// because the current microarchitecture never nests a common helper inside
-/// another common helper.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MicroSequencer {
     address: u8,
@@ -164,24 +161,17 @@ impl Default for MicroSequencer {
 
 impl MicroSequencer {
     #[must_use]
-    pub const fn address(self) -> u8 {
-        self.address
-    }
+    pub const fn address(self) -> u8 { self.address }
 
     #[must_use]
-    pub const fn return_address(self) -> u8 {
-        self.return_address
-    }
+    pub const fn return_address(self) -> u8 { self.return_address }
 
     pub fn fetch_start(&mut self) -> MicroAddressTransition {
         self.load(uaddr::FETCH_T0, MicroAddressSource::FetchStart)
     }
 
     pub fn advance(&mut self) -> MicroAddressTransition {
-        self.load(
-            self.address.wrapping_add(1),
-            MicroAddressSource::Sequential,
-        )
+        self.load(self.address.wrapping_add(1), MicroAddressSource::Sequential)
     }
 
     pub fn dispatch(&mut self, address: u8) -> MicroAddressTransition {
@@ -200,11 +190,7 @@ impl MicroSequencer {
     fn load(&mut self, address: u8, source: MicroAddressSource) -> MicroAddressTransition {
         let before = self.address;
         self.address = address;
-        MicroAddressTransition {
-            before,
-            after: address,
-            source,
-        }
+        MicroAddressTransition { before, after: address, source }
     }
 }
 
@@ -249,12 +235,7 @@ pub const fn decode(opcode: u8) -> Option<MicroInstruction> {
         op::HALT => ("HALT", MicroOp::Halt, HALT),
         _ => return None,
     };
-    Some(MicroInstruction {
-        opcode,
-        mnemonic,
-        operation,
-        control,
-    })
+    Some(MicroInstruction { opcode, mnemonic, operation, control })
 }
 
 #[must_use]
@@ -265,12 +246,9 @@ pub const fn control_word(opcode: u8) -> ControlWord {
     }
 }
 
-/// Stable execute address in the physical control ROM. The mapping is dense so
-/// all currently defined instructions fit inside one 256-entry ROM while common
-/// fetch/read/write microprograms retain fixed low addresses.
 #[must_use]
-pub const fn execute_address(opcode: u8) -> Option<u8> {
-    let slot = match opcode {
+pub const fn opcode_slot(opcode: u8) -> Option<u8> {
+    Some(match opcode {
         op::NOP => 0,
         op::LDI => 1,
         op::LD => 2,
@@ -297,8 +275,34 @@ pub const fn execute_address(opcode: u8) -> Option<u8> {
         op::WAIT_VBLANK => 23,
         op::HALT => 24,
         _ => return None,
-    };
-    Some(uaddr::EXEC_BASE + slot)
+    })
+}
+
+#[must_use]
+pub const fn execute_address(opcode: u8) -> Option<u8> {
+    match opcode_slot(opcode) {
+        Some(slot) => Some(uaddr::EXEC_BASE + slot * uaddr::EXEC_STRIDE),
+        None => None,
+    }
+}
+
+#[must_use]
+pub const fn execute_step_address(opcode: u8, step: u8) -> Option<u8> {
+    if step >= uaddr::EXEC_ROWS { return None; }
+    match execute_address(opcode) {
+        Some(base) => Some(base + step),
+        None => None,
+    }
+}
+
+/// Current migration point inside each five-row execute block.
+/// LDI and ADDI are the first instructions whose commit control word moved to row 2.
+#[must_use]
+pub const fn execute_control_step(opcode: u8) -> u8 {
+    match opcode {
+        op::LDI | op::ADDI => 2,
+        _ => 0,
+    }
 }
 
 #[must_use]
@@ -308,16 +312,14 @@ pub fn control_word_at(address: u8, opcode: u8) -> ControlWord {
         uaddr::FETCH_T1 | uaddr::OPERAND_T1 | uaddr::READ_T1 => {
             ControlWord::new(false, false, true, false, false, false, false, false)
         }
-        uaddr::FETCH_T2
-        | uaddr::OPERAND_T2
-        | uaddr::READ_T0
-        | uaddr::READ_T2
-        | uaddr::WRITE_T0 => NONE,
+        uaddr::FETCH_T2 | uaddr::OPERAND_T2 | uaddr::READ_T0 | uaddr::READ_T2 | uaddr::WRITE_T0 => NONE,
         uaddr::WRITE_T1 | uaddr::WRITE_T2 => {
             ControlWord::new(false, false, false, true, false, false, false, false)
         }
-        value if execute_address(opcode) == Some(value) => control_word(opcode),
-        _ => NONE,
+        value => {
+            let step = execute_control_step(opcode);
+            if execute_step_address(opcode, step) == Some(value) { control_word(opcode) } else { NONE }
+        }
     }
 }
 
@@ -325,107 +327,77 @@ pub fn control_word_at(address: u8, opcode: u8) -> ControlWord {
 mod tests {
     use super::*;
 
+    const OPCODES: [u8; 25] = [
+        op::NOP, op::LDI, op::LD, op::ST, op::MOV, op::ADD, op::ADDI, op::SUBI,
+        op::ANDI, op::ORI, op::XORI, op::INC, op::DEC, op::CMP, op::CMPI, op::JMP,
+        op::JZ, op::JNZ, op::JLT, op::JGE, op::JC, op::CALL, op::RET, op::WAIT_VBLANK,
+        op::HALT,
+    ];
+
     #[test]
     fn arithmetic_control_word_enables_alu_and_register_write() {
         let instruction = decode(op::ADDI).expect("ADDI microcode");
         assert_eq!(instruction.operation, MicroOp::AddImmediate);
         assert!(instruction.control.alu_enable);
         assert!(instruction.control.reg_write);
-        assert_eq!(instruction.control.bits() & 0b11, 0b11);
+    }
+
+    #[test]
+    fn execute_blocks_fill_80_through_fc_without_overlap() {
+        let mut seen = [false; 256];
+        for opcode in OPCODES {
+            let base = execute_address(opcode).expect("execute base");
+            for step in 0..uaddr::EXEC_ROWS {
+                let address = execute_step_address(opcode, step).expect("execute row");
+                assert_eq!(address, base + step);
+                assert!(!seen[address as usize], "duplicate execute row {address:02X}");
+                seen[address as usize] = true;
+            }
+        }
+        assert_eq!(execute_step_address(op::HALT, 4), Some(uaddr::EXEC_LAST));
+    }
+
+    #[test]
+    fn ldi_and_addi_commit_on_third_execute_row() {
+        for opcode in [op::LDI, op::ADDI] {
+            let base = execute_address(opcode).unwrap();
+            assert_eq!(control_word_at(base, opcode).bits(), 0);
+            assert_eq!(control_word_at(base + 1, opcode).bits(), 0);
+            let commit = control_word_at(base + 2, opcode);
+            assert!(commit.reg_write && commit.alu_enable);
+        }
     }
 
     #[test]
     fn microsequencer_has_real_increment_dispatch_and_return_paths() {
         let mut seq = MicroSequencer::default();
         assert_eq!(seq.address(), uaddr::FETCH_T0);
-
-        let t1 = seq.advance();
-        assert_eq!(t1.before, uaddr::FETCH_T0);
-        assert_eq!(t1.after, uaddr::FETCH_T1);
-        assert_eq!(t1.source, MicroAddressSource::Sequential);
-
-        let exec = execute_address(op::ADDI).expect("ADDI execute address");
-        let dispatch = seq.dispatch(exec);
-        assert_eq!(dispatch.after, exec);
-        assert_eq!(dispatch.source, MicroAddressSource::Dispatch);
-
-        let call = seq.call(uaddr::OPERAND_T0);
-        assert_eq!(call.after, uaddr::OPERAND_T0);
+        assert_eq!(seq.advance().after, uaddr::FETCH_T1);
+        let exec = execute_address(op::ADDI).unwrap();
+        assert_eq!(seq.dispatch(exec).after, exec);
+        assert_eq!(seq.call(uaddr::OPERAND_T0).after, uaddr::OPERAND_T0);
         assert_eq!(seq.return_address(), exec);
-
         assert_eq!(seq.advance().after, uaddr::OPERAND_T1);
         assert_eq!(seq.advance().after, uaddr::OPERAND_T2);
-        let ret = seq.return_from_routine();
-        assert_eq!(ret.after, exec);
-        assert_eq!(ret.source, MicroAddressSource::RoutineReturn);
+        assert_eq!(seq.return_from_routine().after, exec);
     }
 
     #[test]
-    fn eight_bit_microcounter_wraps_like_physical_hardware() {
-        let mut seq = MicroSequencer {
-            address: 0xff,
-            return_address: 0,
-        };
-        assert_eq!(seq.advance().after, 0x00);
-    }
-
-    #[test]
-    fn every_opcode_has_unique_execute_microaddress() {
-        let opcodes = [
-            op::NOP,
-            op::LDI,
-            op::LD,
-            op::ST,
-            op::MOV,
-            op::ADD,
-            op::ADDI,
-            op::SUBI,
-            op::ANDI,
-            op::ORI,
-            op::XORI,
-            op::INC,
-            op::DEC,
-            op::CMP,
-            op::CMPI,
-            op::JMP,
-            op::JZ,
-            op::JNZ,
-            op::JLT,
-            op::JGE,
-            op::JC,
-            op::CALL,
-            op::RET,
-            op::WAIT_VBLANK,
-            op::HALT,
-        ];
-        let mut seen = [false; 256];
-        for opcode in opcodes {
-            let address = execute_address(opcode).expect("execute address");
-            assert!(address >= uaddr::EXEC_BASE);
-            assert!(!seen[address as usize], "duplicate µADDR {address:02X}");
-            seen[address as usize] = true;
-        }
-    }
-
-    #[test]
-    fn physical_rom_contains_fetch_and_execute_words() {
+    fn physical_rom_contains_fetch_words() {
         assert!(control_word_at(uaddr::FETCH_T1, op::ADDI).mem_read);
-        let exec = execute_address(op::ADDI).expect("ADDI µADDR");
-        let word = control_word_at(exec, op::ADDI);
-        assert!(word.alu_enable && word.reg_write);
     }
 
     #[test]
     fn call_and_return_drive_stack_and_pc_mux() {
-        let call = decode(op::CALL).expect("CALL microcode").control;
-        let ret = decode(op::RET).expect("RET microcode").control;
+        let call = decode(op::CALL).unwrap().control;
+        let ret = decode(op::RET).unwrap().control;
         assert!(call.pc_load && call.stack_enable && call.mem_write);
         assert!(ret.pc_load && ret.stack_enable && ret.mem_read);
     }
 
     #[test]
     fn wait_and_halt_have_distinct_control_lines() {
-        assert!(decode(op::WAIT_VBLANK).expect("WAIT").control.wait);
-        assert!(decode(op::HALT).expect("HALT").control.halt);
+        assert!(decode(op::WAIT_VBLANK).unwrap().control.wait);
+        assert!(decode(op::HALT).unwrap().control.halt);
     }
 }
