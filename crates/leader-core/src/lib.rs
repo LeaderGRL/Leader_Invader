@@ -12,8 +12,10 @@ pub mod topology;
 pub mod trace;
 
 pub use datapath::{
-    bit16, bit8, derive_alu_datapath, derive_datapath, derive_register_datapath,
-    AluDatapathEvent, DatapathEvent, DatapathState, RegisterDatapathEvent,
+    bit16, bit8, derive_alu_datapath, derive_bus_datapath, derive_datapath,
+    derive_decoder_datapath, derive_register_datapath, AluDatapathEvent, BusAddressOwner,
+    BusCycle, BusDataOwner, BusDatapathEvent, DatapathEvent, DatapathState,
+    DecoderDatapathEvent, RegisterDatapathEvent,
 };
 pub use isa::{Cpu, Flags, Reg, StepOutcome};
 pub use logic::{logic_trace, ripple_add, ripple_sub, AluOp, AluTrace};
