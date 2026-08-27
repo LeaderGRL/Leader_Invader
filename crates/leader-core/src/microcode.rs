@@ -194,6 +194,26 @@ impl MicroSequencer {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecuteRowKind {
+    Dispatch,
+    Operand,
+    Commit,
+    Idle,
+}
+
+impl ExecuteRowKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Dispatch => "dispatch",
+            Self::Operand => "operand",
+            Self::Commit => "commit",
+            Self::Idle => "idle",
+        }
+    }
+}
+
 const NONE: ControlWord = ControlWord::new(false, false, false, false, false, false, false, false);
 const REG_ALU: ControlWord = ControlWord::new(true, true, false, false, false, false, false, false);
 const ALU_ONLY: ControlWord = ControlWord::new(false, true, false, false, false, false, false, false);
@@ -306,6 +326,24 @@ pub const fn execute_control_step(opcode: u8) -> u8 {
 }
 
 #[must_use]
+pub const fn execute_row_kind(opcode: u8, step: u8) -> Option<ExecuteRowKind> {
+    if step >= uaddr::EXEC_ROWS || opcode_slot(opcode).is_none() {
+        return None;
+    }
+    if step == 0 {
+        return Some(ExecuteRowKind::Dispatch);
+    }
+    let commit = execute_control_step(opcode);
+    if step == commit {
+        return Some(ExecuteRowKind::Commit);
+    }
+    if step < commit {
+        return Some(ExecuteRowKind::Operand);
+    }
+    Some(ExecuteRowKind::Idle)
+}
+
+#[must_use]
 pub fn control_word_at(address: u8, opcode: u8) -> ControlWord {
     match address {
         uaddr::FETCH_T0 | uaddr::OPERAND_T0 => NONE,
@@ -366,6 +404,19 @@ mod tests {
             let commit = control_word_at(base + 2, opcode);
             assert!(commit.reg_write && commit.alu_enable);
         }
+    }
+
+    #[test]
+    fn execute_rows_expose_semantic_roles() {
+        for opcode in [op::LDI, op::ADDI] {
+            assert_eq!(execute_row_kind(opcode, 0), Some(ExecuteRowKind::Dispatch));
+            assert_eq!(execute_row_kind(opcode, 1), Some(ExecuteRowKind::Operand));
+            assert_eq!(execute_row_kind(opcode, 2), Some(ExecuteRowKind::Commit));
+            assert_eq!(execute_row_kind(opcode, 3), Some(ExecuteRowKind::Idle));
+            assert_eq!(execute_row_kind(opcode, 4), Some(ExecuteRowKind::Idle));
+        }
+        assert_eq!(execute_row_kind(0xAA, 0), None);
+        assert_eq!(execute_row_kind(op::LDI, uaddr::EXEC_ROWS), None);
     }
 
     #[test]
