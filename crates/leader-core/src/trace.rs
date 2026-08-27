@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use crate::game::{GameState, Projectile, ALIEN_ROWS};
-use crate::isa::{PcSource, Reg};
+use crate::isa::{MicroCycleKind, MicroPhase, PcSource, Reg};
 use crate::logic::{AluTrace, PcIncrementTrace};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +43,19 @@ pub struct MicroSample {
     pub address: Option<u16>,
     pub data: Option<u8>,
     pub control: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MicroCycleEvent {
+    pub frame: u32,
+    pub ordinal: u16,
+    pub phase: MicroPhase,
+    pub kind: MicroCycleKind,
+    pub pc: u16,
+    pub mar: u16,
+    pub mdr: u8,
+    pub ir: u8,
+    pub control: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +158,7 @@ pub struct MatchTrace {
     pub seed_hash: u64,
     pub frames: Vec<FrameState>,
     pub micro_samples: Vec<MicroSample>,
+    pub micro_cycles: Vec<MicroCycleEvent>,
     pub alu_events: Vec<AluEvent>,
     pub register_writes: Vec<RegisterWriteEvent>,
     pub pc_events: Vec<PcEvent>,
@@ -163,6 +177,7 @@ impl MatchTrace {
             seed_hash,
             frames: Vec::new(),
             micro_samples: Vec::new(),
+            micro_cycles: Vec::new(),
             alu_events: Vec::new(),
             register_writes: Vec::new(),
             pc_events: Vec::new(),
@@ -176,7 +191,7 @@ impl MatchTrace {
 
     #[must_use]
     pub fn to_json(&self) -> String {
-        let mut out = String::with_capacity(self.frames.len() * 200);
+        let mut out = String::with_capacity(self.frames.len() * 240);
         let _ = write!(
             out,
             "{{\n  \"seed\": \"{}\",\n  \"seed_hash\": \"{:016x}\",\n  \"finished\": {},\n  \"total_frames\": {},\n  \"final_score\": {},\n  \"final_lives\": {},\n  \"kills\": [",
@@ -206,6 +221,12 @@ impl MatchTrace {
             let address = sample.address.map_or_else(|| "null".to_owned(), |value| value.to_string());
             let data = sample.data.map_or_else(|| "null".to_owned(), |value| value.to_string());
             let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"phase\":\"{}\",\"pc\":{},\"address\":{},\"data\":{},\"control\":\"{}\"}}", sample.frame, sample.ordinal, sample.phase.as_str(), sample.pc, address, data, json_escape(&sample.control));
+        }
+
+        out.push_str("\n  ],\n  \"micro_cycles\": [");
+        for (index, event) in self.micro_cycles.iter().enumerate() {
+            if index > 0 { out.push(','); }
+            let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"phase\":\"{}\",\"kind\":\"{}\",\"pc\":{},\"mar\":{},\"mdr\":{},\"ir\":{},\"control\":\"{}\"}}", event.frame, event.ordinal, event.phase.as_str(), event.kind.as_str(), event.pc, event.mar, event.mdr, event.ir, event.control);
         }
 
         out.push_str("\n  ],\n  \"alu_events\": [");
