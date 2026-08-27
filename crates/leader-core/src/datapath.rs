@@ -1,6 +1,9 @@
 use crate::isa::{op, Reg};
 use crate::logic::{logic_trace, ripple_add, ripple_sub, AluOp, AluTrace};
-use crate::trace::{MatchTrace, MicroSample, PhaseKind};
+use crate::trace::{
+    BusAddressSource as NativeBusAddressSource, BusDataSource as NativeBusDataSource,
+    BusTransactionKind as NativeBusTransactionKind, MatchTrace, MicroSample, PhaseKind,
+};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DatapathState {
@@ -88,8 +91,7 @@ pub struct BusDatapathEvent {
 
 #[must_use]
 pub fn derive_datapath(trace: &MatchTrace) -> Vec<DatapathEvent> {
-    // Native microcycle snapshots are now the most faithful source for the
-    // PC/MAR/MDR/IR latches. Keep the legacy sample replay as a fallback for old traces.
+    // Native microcycle snapshots are the authoritative source for latch state.
     if !trace.micro_cycles.is_empty() {
         return trace
             .micro_cycles
@@ -161,6 +163,44 @@ pub fn derive_decoder_datapath(trace: &MatchTrace) -> Vec<DecoderDatapathEvent> 
 
 #[must_use]
 pub fn derive_bus_datapath(trace: &MatchTrace) -> Vec<BusDatapathEvent> {
+    // Native transactions are emitted at the actual bus boundary. The legacy
+    // PhaseKind reconstruction remains only for traces created before F3.
+    if !trace.bus_transactions.is_empty() {
+        return trace
+            .bus_transactions
+            .iter()
+            .map(|event| BusDatapathEvent {
+                frame: event.frame,
+                ordinal: event.ordinal,
+                pc: event.pc,
+                address: event.address,
+                data: event.data,
+                address_owner: match event.address_source {
+                    NativeBusAddressSource::ProgramCounter => BusAddressOwner::ProgramCounter,
+                    NativeBusAddressSource::Cpu => BusAddressOwner::Cpu,
+                    NativeBusAddressSource::Dma => BusAddressOwner::Dma,
+                    NativeBusAddressSource::None => BusAddressOwner::None,
+                },
+                data_owner: match event.data_source {
+                    NativeBusDataSource::Rom => BusDataOwner::Rom,
+                    NativeBusDataSource::Ram => BusDataOwner::Ram,
+                    NativeBusDataSource::Vram => BusDataOwner::Vram,
+                    NativeBusDataSource::Cpu => BusDataOwner::Cpu,
+                    NativeBusDataSource::Device => BusDataOwner::Device,
+                    NativeBusDataSource::None => BusDataOwner::None,
+                },
+                cycle: match event.kind {
+                    NativeBusTransactionKind::Fetch => BusCycle::Fetch,
+                    NativeBusTransactionKind::Read => BusCycle::Read,
+                    NativeBusTransactionKind::Write => BusCycle::Write,
+                    NativeBusTransactionKind::Input => BusCycle::Input,
+                    NativeBusTransactionKind::Dma => BusCycle::Dma,
+                    NativeBusTransactionKind::Scanout => BusCycle::Scanout,
+                },
+            })
+            .collect();
+    }
+
     trace
         .micro_samples
         .iter()
@@ -224,7 +264,6 @@ fn owner_for_address(address: Option<u16>) -> BusDataOwner {
 
 #[must_use]
 pub fn derive_alu_datapath(trace: &MatchTrace) -> Vec<AluDatapathEvent> {
-    // Prefer the operation emitted by the semantic ALU when present.
     if !trace.alu_events.is_empty() {
         return trace
             .alu_events
@@ -243,18 +282,14 @@ pub fn derive_alu_datapath(trace: &MatchTrace) -> Vec<AluDatapathEvent> {
         if sample.phase != PhaseKind::Alu {
             continue;
         }
-        let Some(result) = sample.data else { continue };
+        let Some(result) = sample.data else {
+            continue;
+        };
         let operands = instruction_operand_bytes(trace, index, sample.pc);
         let derived = match sample.control.as_str() {
-            "ADDI" => operands.last().copied().map(|rhs| {
-                ripple_add(result.wrapping_sub(rhs), rhs, false, AluOp::Add)
-            }),
-            "SUBI" => operands.last().copied().map(|rhs| {
-                ripple_sub(result.wrapping_add(rhs), rhs, AluOp::Sub)
-            }),
-            "CMPI" => operands.last().copied().map(|rhs| {
-                ripple_sub(result.wrapping_add(rhs), rhs, AluOp::Compare)
-            }),
+            "ADDI" => operands.last().copied().map(|rhs| ripple_add(result.wrapping_sub(rhs), rhs, false, AluOp::Add)),
+            "SUBI" => operands.last().copied().map(|rhs| ripple_sub(result.wrapping_add(rhs), rhs, AluOp::Sub)),
+            "CMPI" => operands.last().copied().map(|rhs| ripple_sub(result.wrapping_add(rhs), rhs, AluOp::Compare)),
             "INC" => Some(ripple_add(result.wrapping_sub(1), 1, false, AluOp::Add)),
             "DEC" => Some(ripple_sub(result.wrapping_add(1), 1, AluOp::Sub)),
             "ANDI" => operands.last().copied().map(|rhs| logic_trace(AluOp::And, result, rhs, result)),
@@ -277,7 +312,6 @@ pub fn derive_alu_datapath(trace: &MatchTrace) -> Vec<AluDatapathEvent> {
 
 #[must_use]
 pub fn derive_register_datapath(trace: &MatchTrace) -> Vec<RegisterDatapathEvent> {
-    // Native write-enable events are authoritative whenever the producer records them.
     if !trace.register_writes.is_empty() {
         return trace
             .register_writes
@@ -391,7 +425,7 @@ fn instruction_operand_bytes(trace: &MatchTrace, alu_index: usize, pc: u16) -> V
     let decode_index = trace.micro_samples[..alu_index]
         .iter()
         .rposition(|sample| sample.pc == pc && is_opcode_decode(sample));
-    let Some(decode_index) = decode_index else { return Vec::new() };
+    let Some(decode_index) = decode_index else { return Vec::new(); };
     trace.micro_samples[decode_index + 1..alu_index]
         .iter()
         .filter(|sample| sample.phase == PhaseKind::Fetch)
@@ -453,9 +487,11 @@ mod tests {
     }
 
     #[test]
-    fn bus_ownership_matches_fetch_ram_and_dma_cycles() {
+    fn native_bus_stream_is_authoritative_for_renderer_ownership() {
         let trace = Machine::run_match("f3-bus", 5000);
+        assert!(!trace.bus_transactions.is_empty());
         let events = derive_bus_datapath(&trace);
+        assert_eq!(events.len(), trace.bus_transactions.len());
         assert!(events.iter().any(|event| {
             event.cycle == BusCycle::Fetch
                 && event.address_owner == BusAddressOwner::ProgramCounter
@@ -469,5 +505,18 @@ mod tests {
                 && event.address_owner == BusAddressOwner::Dma
                 && event.data_owner == BusDataOwner::Vram
         }));
+        let mut native_only = trace.clone();
+        native_only.micro_samples.clear();
+        let native_events = derive_bus_datapath(&native_only);
+        assert_eq!(native_events, events);
+    }
+
+    #[test]
+    fn legacy_bus_reconstruction_remains_available_for_old_traces() {
+        let mut trace = Machine::run_match("f3-bus-legacy", 5000);
+        trace.bus_transactions.clear();
+        let events = derive_bus_datapath(&trace);
+        assert!(!events.is_empty());
+        assert!(events.iter().any(|event| event.cycle == BusCycle::Fetch));
     }
 }
