@@ -2,7 +2,10 @@ use crate::logic::{
     logic_trace, ripple_add, ripple_decrement16, ripple_increment16, ripple_sub, AluOp, AluTrace,
     PcIncrementTrace,
 };
-use crate::microcode::{decode as decode_microcode, MicroOp};
+use crate::microcode::{
+    control_word_at, decode as decode_microcode, execute_address, uaddr, MicroAddressTransition,
+    MicroOp, MicroSequencer,
+};
 use crate::trace::PhaseKind;
 
 pub mod op {
@@ -136,6 +139,7 @@ pub trait Bus {
     fn trace_register_write(&mut self, _pc: u16, _reg: Reg, _before: u8, _after: u8, _control: &'static str) {}
     fn trace_pc_increment(&mut self, _trace: PcIncrementTrace) {}
     fn trace_pc_load(&mut self, _before: u16, _after: u16, _source: PcSource, _control: &'static str) {}
+    fn trace_microaddress(&mut self, _transition: MicroAddressTransition, _opcode: u8, _control_bits: u8, _label: &'static str) {}
 
     fn trace_microcycle(
         &mut self,
@@ -159,12 +163,15 @@ pub trait Bus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cpu {
     regs: [u8; 8], pc: u16, sp: u16, mar: u16, mdr: u8, ir: u8, phase: MicroPhase,
-    flags: Flags, halted: bool,
+    micro: MicroSequencer, flags: Flags, halted: bool,
 }
 
 impl Default for Cpu {
     fn default() -> Self {
-        Self { regs: [0; 8], pc: 0, sp: 0x7FFF, mar: 0, mdr: 0, ir: 0, phase: MicroPhase::T0, flags: Flags::default(), halted: false }
+        Self {
+            regs: [0; 8], pc: 0, sp: 0x7FFF, mar: 0, mdr: 0, ir: 0, phase: MicroPhase::T0,
+            micro: MicroSequencer::default(), flags: Flags::default(), halted: false,
+        }
     }
 }
 
@@ -175,6 +182,7 @@ impl Cpu {
     #[must_use] pub const fn mdr(&self) -> u8 { self.mdr }
     #[must_use] pub const fn ir(&self) -> u8 { self.ir }
     #[must_use] pub const fn phase(&self) -> MicroPhase { self.phase }
+    #[must_use] pub const fn micro_address(&self) -> u8 { self.micro.address() }
     #[must_use] pub const fn flags(&self) -> Flags { self.flags }
     #[must_use] pub fn reg(&self, reg: Reg) -> u8 { self.regs[reg as usize] }
 
@@ -184,6 +192,9 @@ impl Cpu {
         let instruction_pc = self.pc;
         let opcode = self.fetch_opcode(bus);
         let Some(micro) = decode_microcode(self.ir) else { return self.fault(instruction_pc, self.ir); };
+        let Some(exec) = execute_address(self.ir) else { return self.fault(instruction_pc, self.ir); };
+        let transition = self.micro.dispatch(exec);
+        self.publish_microaddress(bus, transition, micro.mnemonic);
         bus.trace_decode(instruction_pc, self.ir, micro.mnemonic);
 
         match micro.operation {
@@ -282,49 +293,97 @@ impl Cpu {
     }
 
     fn fetch_opcode<B: Bus>(&mut self, bus: &mut B) -> u8 {
+        let transition = self.micro.fetch_start();
+        self.publish_microaddress(bus, transition, "FETCH_ADDR");
         self.mar = self.pc;
         self.emit_cycle(bus, MicroPhase::T0, MicroCycleKind::FetchAddress, "FETCH_ADDR");
+
+        let transition = self.micro.advance();
+        self.publish_microaddress(bus, transition, "FETCH_DATA");
         self.mdr = bus.fetch8(self.mar);
         let increment = ripple_increment16(self.pc);
         self.pc = increment.after;
         bus.trace_pc_increment(increment);
         self.emit_cycle(bus, MicroPhase::T1, MicroCycleKind::FetchData, "FETCH_DATA");
+
+        let transition = self.micro.advance();
+        self.publish_microaddress(bus, transition, "IR_LATCH");
         self.ir = self.mdr;
         self.emit_cycle(bus, MicroPhase::T2, MicroCycleKind::DecodeLatch, "IR_LATCH");
         self.ir
     }
 
     fn next8<B: Bus>(&mut self, bus: &mut B) -> u8 {
+        let transition = self.micro.call(uaddr::OPERAND_T0);
+        self.publish_microaddress(bus, transition, "OPERAND_ADDR");
         self.mar = self.pc;
         self.emit_cycle(bus, MicroPhase::T0, MicroCycleKind::OperandAddress, "OPERAND_ADDR");
+
+        let transition = self.micro.advance();
+        self.publish_microaddress(bus, transition, "OPERAND_DATA");
         self.mdr = bus.fetch8(self.mar);
         let increment = ripple_increment16(self.pc);
         self.pc = increment.after;
         bus.trace_pc_increment(increment);
         self.emit_cycle(bus, MicroPhase::T1, MicroCycleKind::OperandData, "OPERAND_DATA");
+
+        let transition = self.micro.advance();
+        self.publish_microaddress(bus, transition, "OPERAND_READY");
         self.emit_cycle(bus, MicroPhase::T2, MicroCycleKind::OperandReady, "OPERAND_READY");
-        self.mdr
+        let value = self.mdr;
+
+        let transition = self.micro.return_from_routine();
+        self.publish_microaddress(bus, transition, "EXEC_RETURN");
+        value
     }
 
     fn next16<B: Bus>(&mut self, bus: &mut B) -> u16 { u16::from_le_bytes([self.next8(bus), self.next8(bus)]) }
     fn next_reg<B: Bus>(&mut self, bus: &mut B) -> Option<Reg> { Reg::from_code(self.next8(bus)) }
 
     fn read_memory<B: Bus>(&mut self, bus: &mut B, pc: u16, address: u16, control: &'static str) -> u8 {
+        let transition = self.micro.call(uaddr::READ_T0);
+        self.publish_microaddress(bus, transition, control);
         self.mar = address;
         self.emit_cycle(bus, MicroPhase::T0, MicroCycleKind::MemoryAddress, control);
+
+        let transition = self.micro.advance();
+        self.publish_microaddress(bus, transition, control);
         self.mdr = bus.read8(pc, self.mar);
         self.emit_cycle(bus, MicroPhase::T1, MicroCycleKind::MemoryRead, control);
+
+        let transition = self.micro.advance();
+        self.publish_microaddress(bus, transition, control);
         self.emit_cycle(bus, MicroPhase::T2, MicroCycleKind::OperandReady, control);
-        self.mdr
+        let value = self.mdr;
+
+        let transition = self.micro.return_from_routine();
+        self.publish_microaddress(bus, transition, "EXEC_RETURN");
+        value
     }
 
     fn write_memory<B: Bus>(&mut self, bus: &mut B, pc: u16, address: u16, value: u8, control: &'static str) {
+        let transition = self.micro.call(uaddr::WRITE_T0);
+        self.publish_microaddress(bus, transition, control);
         self.mar = address;
         self.emit_cycle(bus, MicroPhase::T0, MicroCycleKind::MemoryAddress, control);
+
+        let transition = self.micro.advance();
+        self.publish_microaddress(bus, transition, control);
         self.mdr = value;
         self.emit_cycle(bus, MicroPhase::T1, MicroCycleKind::MemoryWriteData, control);
+
+        let transition = self.micro.advance();
+        self.publish_microaddress(bus, transition, control);
         bus.write8(pc, self.mar, self.mdr);
         self.emit_cycle(bus, MicroPhase::T2, MicroCycleKind::MemoryWriteCommit, control);
+
+        let transition = self.micro.return_from_routine();
+        self.publish_microaddress(bus, transition, "EXEC_RETURN");
+    }
+
+    fn publish_microaddress<B: Bus>(&self, bus: &mut B, transition: MicroAddressTransition, label: &'static str) {
+        let word = control_word_at(transition.after, self.ir);
+        bus.trace_microaddress(transition, self.ir, word.bits(), label);
     }
 
     fn emit_cycle<B: Bus>(&mut self, bus: &mut B, phase: MicroPhase, kind: MicroCycleKind, control: &'static str) {
@@ -433,11 +492,12 @@ mod tests {
         memory: Vec<u8>, exact_alu: Vec<AluTrace>, writes: Vec<(Reg, u8, u8)>,
         pc_increments: Vec<PcIncrementTrace>, pc_loads: Vec<(u16, u16, PcSource, &'static str)>,
         cycles: Vec<(MicroPhase, MicroCycleKind, u16, u16, u8, u8)>,
+        micro_addresses: Vec<MicroAddressTransition>,
     }
 
     impl Default for TestBus {
         fn default() -> Self {
-            Self { memory: vec![0; 65_536], exact_alu: vec![], writes: vec![], pc_increments: vec![], pc_loads: vec![], cycles: vec![] }
+            Self { memory: vec![0; 65_536], exact_alu: vec![], writes: vec![], pc_increments: vec![], pc_loads: vec![], cycles: vec![], micro_addresses: vec![] }
         }
     }
 
@@ -452,13 +512,14 @@ mod tests {
         fn trace_register_write(&mut self, _pc: u16, reg: Reg, before: u8, after: u8, _control: &'static str) { self.writes.push((reg, before, after)); }
         fn trace_pc_increment(&mut self, trace: PcIncrementTrace) { self.pc_increments.push(trace); }
         fn trace_pc_load(&mut self, before: u16, after: u16, source: PcSource, control: &'static str) { self.pc_loads.push((before, after, source, control)); }
+        fn trace_microaddress(&mut self, transition: MicroAddressTransition, _opcode: u8, _control_bits: u8, _label: &'static str) { self.micro_addresses.push(transition); }
         fn trace_microcycle(&mut self, phase: MicroPhase, kind: MicroCycleKind, pc: u16, mar: u16, mdr: u8, ir: u8, _control: &'static str) {
             self.cycles.push((phase, kind, pc, mar, mdr, ir));
         }
     }
 
     #[test]
-    fn opcode_fetch_is_native_t0_t1_t2() {
+    fn opcode_fetch_is_native_t0_t1_t2_and_dispatches_micro_pc() {
         let mut bus = TestBus::default();
         bus.memory[0x0123] = op::NOP;
         let mut cpu = Cpu::default();
@@ -476,6 +537,23 @@ mod tests {
         assert_eq!(bus.cycles[2].1, MicroCycleKind::DecodeLatch);
         assert_eq!(bus.cycles[2].5, op::NOP);
         assert_eq!(cpu.phase(), MicroPhase::T2);
+        assert_eq!(bus.micro_addresses[0].after, uaddr::FETCH_T0);
+        assert_eq!(bus.micro_addresses[1].after, uaddr::FETCH_T1);
+        assert_eq!(bus.micro_addresses[2].after, uaddr::FETCH_T2);
+        assert_eq!(cpu.micro_address(), execute_address(op::NOP).unwrap());
+    }
+
+    #[test]
+    fn operand_helper_is_a_real_micro_call_and_return() {
+        let mut bus = TestBus::default();
+        let program = [op::LDI, Reg::A.code(), 4, op::HALT];
+        bus.memory[..program.len()].copy_from_slice(&program);
+        let mut cpu = Cpu::default();
+        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
+        let exec = execute_address(op::LDI).unwrap();
+        assert!(bus.micro_addresses.iter().any(|t| t.source == crate::microcode::MicroAddressSource::RoutineCall && t.after == uaddr::OPERAND_T0));
+        assert!(bus.micro_addresses.iter().any(|t| t.source == crate::microcode::MicroAddressSource::RoutineReturn && t.after == exec));
+        assert_eq!(cpu.micro_address(), exec);
     }
 
     #[test]
