@@ -545,7 +545,7 @@ impl Bus for Machine {
         &mut self,
         transition: MicroAddressTransition,
         opcode: u8,
-        control_bits: u8,
+        control_bits: u32,
         label: &'static str,
     ) {
         self.trace.micro_addresses.push(MicroAddressEvent {
@@ -663,6 +663,7 @@ mod tests {
         assert!(trace.alu_events.iter().any(|event| event.control == "CMPI"));
         assert!(trace.register_writes.iter().any(|event| event.control == "LDI"));
         assert!(trace.pc_events.iter().any(|event| matches!(event.kind, PcEventKind::Load { .. })));
+        assert!(trace.micro_addresses.iter().any(|event| event.control_bits > u32::from(u8::MAX)));
         assert!(trace.bus_transactions.iter().any(|event| {
             event.kind == BusTransactionKind::Fetch
                 && event.address_source == BusAddressSource::ProgramCounter
