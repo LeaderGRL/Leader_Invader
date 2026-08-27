@@ -300,7 +300,7 @@ const fn execute_internal(opcode: u8, step: u8) -> u16 {
             1 => if opcode == op::LD { ADDR_LO_LOAD } else { ADDR_HI_LOAD },
             2 => if opcode == op::LD { ADDR_HI_LOAD } else { OPERAND_A_LOAD | REG_SELECT },
             3 => BUS_ADDRESS_ENABLE | BUS_DATA_ENABLE,
-            4 => ARCH_COMMIT,
+            4 => if opcode == op::LD { FLAGS_LOAD | ARCH_COMMIT } else { ARCH_COMMIT },
             _ => 0,
         };
     }
@@ -314,7 +314,7 @@ const fn execute_internal(opcode: u8, step: u8) -> u16 {
         return match step { 0 | 1 => BUS_ADDRESS_ENABLE | BUS_DATA_ENABLE, 2 | 3 => PC_SELECT, 4 => ARCH_COMMIT, _ => 0 };
     }
     match opcode {
-        op::LDI | op::ADDI => match step { 0 => OPERAND_A_LOAD | REG_SELECT, 1 => OPERAND_B_LOAD, 2 => ARCH_COMMIT, _ => 0 },
+        op::LDI | op::ADDI => match step { 0 => OPERAND_A_LOAD | REG_SELECT, 1 => OPERAND_B_LOAD, 2 => FLAGS_LOAD | ARCH_COMMIT, _ => 0 },
         _ => if step == 0 { ARCH_COMMIT } else { 0 },
     }
 }
@@ -419,12 +419,16 @@ mod tests {
     }
 
     #[test]
-    fn ldi_and_addi_roles_are_operand_operand_commit() {
+    fn ldi_addi_and_ld_commit_rows_enable_flag_latching() {
         for opcode in [op::LDI, op::ADDI] {
             assert_eq!(execute_row_kind(opcode, 0), Some(ExecuteRowKind::Operand));
             assert_eq!(execute_row_kind(opcode, 1), Some(ExecuteRowKind::Operand));
             assert_eq!(execute_row_kind(opcode, 2), Some(ExecuteRowKind::Commit));
+            let base = execute_address(opcode).unwrap();
+            assert!(control_word_at(base + 2, opcode).has_internal(internal::FLAGS_LOAD));
         }
+        let ld = execute_address(op::LD).unwrap();
+        assert!(control_word_at(ld + 4, op::LD).has_internal(internal::FLAGS_LOAD));
     }
 
     #[test]
