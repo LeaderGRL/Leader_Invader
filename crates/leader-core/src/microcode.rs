@@ -201,7 +201,7 @@ pub const fn execute_address(opcode: u8) -> Option<u8> {
 }
 
 #[must_use]
-pub const fn control_word_at(address: u8, opcode: u8) -> ControlWord {
+pub fn control_word_at(address: u8, opcode: u8) -> ControlWord {
     match address {
         uaddr::FETCH_T0 | uaddr::OPERAND_T0 => NONE,
         uaddr::FETCH_T1 | uaddr::OPERAND_T1 | uaddr::READ_T1 => {
