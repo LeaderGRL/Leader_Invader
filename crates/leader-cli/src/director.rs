@@ -1,5 +1,6 @@
 use leader_core::{
-    bit16, bit8, derive_alu_datapath, derive_datapath, AluOp, MatchTrace, Rect, Topology,
+    bit16, bit8, derive_alu_datapath, derive_datapath, derive_register_datapath, AluOp,
+    MatchTrace, Rect, Topology,
 };
 use leader_svg::RenderConfig;
 
@@ -66,12 +67,12 @@ fn render_f3_datapath(topology: &Topology, trace: &MatchTrace, config: RenderCon
     if trace.total_frames == 0 {
         return String::new();
     }
-    let events = derive_datapath(trace);
-    let stride = (events.len() / 180).max(1);
     let total = config.total();
-    let mut out = String::with_capacity(650_000);
+    let mut out = String::with_capacity(800_000);
     out.push_str("<g id=\"f3-datapath\">\n");
 
+    let events = derive_datapath(trace);
+    let stride = (events.len() / 180).max(1);
     for event in events.iter().step_by(stride) {
         if !matches!(
             event.phase,
@@ -145,6 +146,26 @@ fn render_f3_datapath(topology: &Topology, trace: &MatchTrace, config: RenderCon
                 && !event.trace.final_carry()
             {
                 glow_node(out, topology, "flagN", "#ef7caf");
+            }
+        });
+    }
+
+    let register_events = derive_register_datapath(trace);
+    let register_stride = (register_events.len() / 140).max(1);
+    for event in register_events.iter().step_by(register_stride) {
+        let moment = trace_moment(event.frame, event.ordinal, trace, config) + 0.028;
+        pulse_group(&mut out, moment, total, |out| {
+            glow_node(out, topology, "writeDec", "#ef7caf");
+            glow_node(out, topology, "writeBus", "#4bc8f3");
+            for bit in 0..8 {
+                let id = format!("reg{}{bit}", event.reg.name());
+                let before = bit8(event.before, bit);
+                let after = bit8(event.after, bit);
+                if after {
+                    glow_node(out, topology, &id, "#67d9b3");
+                } else if before != after {
+                    glow_node(out, topology, &id, "#ff9b71");
+                }
             }
         });
     }
@@ -293,8 +314,6 @@ fn hold_group(
 }
 
 fn display_screen(bounds: Rect) -> Rect {
-    // Wider than the previous framebuffer crop: keep visible bezel and breathing
-    // room so the README does not feel like a hard fullscreen takeover.
     aspect_rect(
         Rect::new(
             bounds.x + 18.0,
@@ -378,5 +397,15 @@ mod tests {
         let shot = display_screen(display.bounds);
         assert!(shot.w > 380.0);
         assert!(shot.h > 210.0);
+    }
+
+    #[test]
+    fn f3_render_contains_real_register_bank_ids() {
+        let topology = build_topology();
+        let trace = Machine::run_match("director-regs", 5000);
+        let rendered = render_f3_datapath(&topology, &trace, RenderConfig::default());
+        assert!(topology.node("regA0").is_some());
+        assert!(topology.node("regC0").is_some());
+        assert!(rendered.contains("writeDec"));
     }
 }
