@@ -508,7 +508,13 @@ const fn execute_internal(opcode: u8, step: u8) -> u16 {
     if is_five_row_alu(opcode) {
         return match step {
             0 => OPERAND_A_LOAD | REG_SELECT,
-            1 => OPERAND_B_LOAD | REG_SELECT,
+            1 => {
+                if matches!(opcode, op::MOV | op::ADD | op::CMP) {
+                    OPERAND_B_LOAD | REG_SELECT
+                } else {
+                    OPERAND_B_LOAD
+                }
+            }
             2 => ALU_OP_LOAD,
             3 => FLAGS_LOAD,
             4 => ARCH_COMMIT,
@@ -734,10 +740,24 @@ mod tests {
         let base = execute_address(op::ADD).unwrap();
         assert!(control_word_at(base, op::ADD).has_internal(internal::OPERAND_A_LOAD));
         assert!(control_word_at(base + 1, op::ADD).has_internal(internal::OPERAND_B_LOAD));
+        assert!(control_word_at(base + 1, op::ADD).has_internal(internal::REG_SELECT));
         assert!(control_word_at(base + 2, op::ADD).has_internal(internal::ALU_OP_LOAD));
         assert!(control_word_at(base + 3, op::ADD).has_internal(internal::FLAGS_LOAD));
         assert!(control_word_at(base + 4, op::ADD).has_internal(internal::ARCH_COMMIT));
         assert!(control_word_at(base + 4, op::ADD).reg_write);
+    }
+
+    #[test]
+    fn register_select_is_only_asserted_for_register_encoded_operands() {
+        for opcode in [op::MOV, op::ADD, op::CMP] {
+            let base = execute_address(opcode).unwrap();
+            assert!(control_word_at(base + 1, opcode).has_internal(internal::REG_SELECT));
+        }
+        for opcode in [op::SUBI, op::ANDI, op::ORI, op::XORI, op::INC, op::DEC, op::CMPI] {
+            let base = execute_address(opcode).unwrap();
+            assert!(control_word_at(base + 1, opcode).has_internal(internal::OPERAND_B_LOAD));
+            assert!(!control_word_at(base + 1, opcode).has_internal(internal::REG_SELECT));
+        }
     }
 
     #[test]
@@ -767,6 +787,7 @@ mod tests {
             assert!(row0.has_internal(internal::REG_SELECT));
             assert!(row1.has_internal(internal::OPERAND_B_LOAD));
             assert!(row1.has_internal(internal::ALU_OP_LOAD));
+            assert!(!row1.has_internal(internal::REG_SELECT));
             assert!(row2.has_internal(internal::FLAGS_LOAD));
             assert!(row2.has_internal(internal::ARCH_COMMIT));
             assert!(row2.alu_enable);
