@@ -6,6 +6,7 @@ pub mod isa;
 pub mod layout;
 pub mod logic;
 pub mod machine;
+pub mod microcode;
 pub mod pc_datapath;
 pub mod program;
 pub mod rng;
@@ -23,6 +24,7 @@ pub use logic::{
     logic_trace, ripple_add, ripple_increment16, ripple_sub, AluOp, AluTrace, PcIncrementTrace,
 };
 pub use machine::Machine;
+pub use microcode::{control_word, ControlWord};
 pub use pc_datapath::{derive_pc_datapath, PcDatapathEvent, PcDatapathKind};
 pub use topology::{Group, Link, Node, Rect, SignalKind, Topology};
 pub use trace::{
