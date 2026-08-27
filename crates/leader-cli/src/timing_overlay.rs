@@ -14,25 +14,45 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: R
 }
 
 fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
-    let stride = (trace.micro_samples.len() / 220).max(1);
+    let native_count = trace
+        .micro_samples
+        .iter()
+        .filter(|sample| matches!(sample.control.as_str(), "µT0" | "µT1" | "µT2"))
+        .count();
+    let stride = (native_count / 260).max(1);
     let total = config.total();
     let mut out = String::with_capacity(180_000);
     out.push_str("<g id=\"f3-timing\">\n");
 
-    for sample in trace.micro_samples.iter().step_by(stride) {
+    let mut native_index = 0_usize;
+    for sample in &trace.micro_samples {
         let base = trace_moment(sample.frame, sample.ordinal, trace, config);
+        let native = match sample.control.as_str() {
+            "µT0" => Some(("phase0", "#67d9b3")),
+            "µT1" => Some(("phase1", "#4bc8f3")),
+            "µT2" => Some(("phase2", "#ef7caf")),
+            _ => None,
+        };
+
+        if let Some((node, color)) = native {
+            if native_index % stride == 0 {
+                phase_pulse(&mut out, topology, node, base, total, color);
+            }
+            native_index += 1;
+            continue;
+        }
+
+        // DMA and raster scanout are peripheral clocks, not CPU T-states.
+        // Keep them visible as an independent hardware cadence.
         match sample.phase {
-            PhaseKind::Fetch | PhaseKind::MemoryRead | PhaseKind::MemoryWrite | PhaseKind::Dma => {
-                phase_pulse(&mut out, topology, "phase0", base, total, "#67d9b3");
-                phase_pulse(&mut out, topology, "phase1", base + 0.032, total, "#4bc8f3");
-            }
-            PhaseKind::Decode | PhaseKind::Alu | PhaseKind::Input | PhaseKind::VBlank => {
-                phase_pulse(&mut out, topology, "phase2", base + 0.055, total, "#ef7caf");
-            }
-            PhaseKind::Scanout => {
+            PhaseKind::Dma => {
                 phase_pulse(&mut out, topology, "phase0", base, total, "#72d4e7");
                 phase_pulse(&mut out, topology, "phase1", base + 0.024, total, "#72d4e7");
             }
+            PhaseKind::Scanout => {
+                phase_pulse(&mut out, topology, "phase1", base, total, "#72d4e7");
+            }
+            _ => {}
         }
     }
 
@@ -55,7 +75,7 @@ fn phase_pulse(out: &mut String, topology: &Topology, id: &str, moment: f32, tot
 fn trace_moment(frame: u32, ordinal: u16, trace: &MatchTrace, config: RenderConfig) -> f32 {
     config.game_start()
         + frame as f32 / trace.total_frames.max(1) as f32 * config.game_seconds
-        + f32::from(ordinal.min(15)) * 0.0035
+        + f32::from(ordinal.min(31)) * 0.0025
 }
 
 fn norm(value: f32, total: f32) -> f32 { (value / total).clamp(0.0, 1.0) }
@@ -66,9 +86,12 @@ mod tests {
     use leader_core::{build_topology, Machine};
 
     #[test]
-    fn timing_overlay_is_driven_by_real_trace_phases() {
+    fn timing_overlay_is_driven_by_native_cpu_t_states() {
         let topology = build_topology();
         let trace = Machine::run_match("timing-overlay", 5000);
+        assert!(trace.micro_samples.iter().any(|sample| sample.control == "µT0"));
+        assert!(trace.micro_samples.iter().any(|sample| sample.control == "µT1"));
+        assert!(trace.micro_samples.iter().any(|sample| sample.control == "µT2"));
         let rendered = render(&topology, &trace, RenderConfig::default());
         assert!(rendered.contains("id=\"f3-timing\""));
         assert!(rendered.len() > 500);
