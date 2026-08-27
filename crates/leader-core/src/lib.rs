@@ -6,6 +6,7 @@ pub mod isa;
 pub mod layout;
 pub mod logic;
 pub mod machine;
+pub mod pc_datapath;
 pub mod program;
 pub mod rng;
 pub mod topology;
@@ -17,13 +18,16 @@ pub use datapath::{
     BusCycle, BusDataOwner, BusDatapathEvent, DatapathEvent, DatapathState,
     DecoderDatapathEvent, RegisterDatapathEvent,
 };
-pub use isa::{Cpu, Flags, Reg, StepOutcome};
-pub use logic::{logic_trace, ripple_add, ripple_sub, AluOp, AluTrace};
+pub use isa::{Cpu, Flags, PcSource, Reg, StepOutcome};
+pub use logic::{
+    logic_trace, ripple_add, ripple_increment16, ripple_sub, AluOp, AluTrace, PcIncrementTrace,
+};
 pub use machine::Machine;
+pub use pc_datapath::{derive_pc_datapath, PcDatapathEvent, PcDatapathKind};
 pub use topology::{Group, Link, Node, Rect, SignalKind, Topology};
 pub use trace::{
-    AluEvent, FrameState, KillEvent, MatchTrace, MicroSample, PhaseKind, ProjectileSnapshot,
-    RegisterWriteEvent,
+    AluEvent, FrameState, KillEvent, MatchTrace, MicroSample, PcEvent, PcEventKind, PhaseKind,
+    ProjectileSnapshot, RegisterWriteEvent,
 };
 
 #[must_use]
