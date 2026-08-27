@@ -1,8 +1,9 @@
 use crate::game::{Bot, GameState, InputState, Projectile, ALIEN_COLS, ALIEN_H, ALIEN_ROWS, ALIEN_W, PLAYER_Y, SCREEN_H, SCREEN_W};
 use crate::isa::{Bus, Cpu, MicroCycleKind, MicroPhase, StepOutcome};
+use crate::microcode::{control_word_at, execute_address, uaddr};
 use crate::program::{build_game_rom, command, DEVICE_CMD, DEVICE_STATUS, INPUT_PORT, RAM_BASE};
 use crate::rng::{hash_seed, DeterministicRng};
-use crate::trace::{FrameState, KillEvent, MatchTrace, MicroCycleEvent, MicroSample, PhaseKind};
+use crate::trace::{FrameState, KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PhaseKind};
 
 const ROM_LIMIT: usize = 0x2000;
 const VRAM: usize = 0x8000;
@@ -291,6 +292,18 @@ impl Machine {
         self.ordinal = self.ordinal.saturating_add(1);
     }
 
+    fn push_micro_address(&mut self, address: u8, opcode: u8, label: &'static str) {
+        let word = control_word_at(address, opcode);
+        self.trace.micro_addresses.push(MicroAddressEvent {
+            frame: self.game.frame,
+            ordinal: self.ordinal,
+            address,
+            opcode,
+            control_bits: word.bits(),
+            label,
+        });
+    }
+
     fn sync_game_to_ram(&mut self) {
         self.mem[RAM_BASE as usize] = self.game.player_x as u8;
         self.mem[(RAM_BASE + 1) as usize] = self.game.fleet_x as u8;
@@ -346,6 +359,9 @@ impl Bus for Machine {
     }
 
     fn trace_decode(&mut self, pc: u16, opcode: u8, mnemonic: &'static str) {
+        if let Some(address) = execute_address(opcode) {
+            self.push_micro_address(address, opcode, mnemonic);
+        }
         self.sample(pc, PhaseKind::Decode, Some(pc), Some(opcode), mnemonic);
     }
 
@@ -378,6 +394,25 @@ impl Bus for Machine {
             ir,
             control,
         });
+
+        let address = match kind {
+            MicroCycleKind::FetchAddress => uaddr::FETCH_T0,
+            MicroCycleKind::FetchData => uaddr::FETCH_T1,
+            MicroCycleKind::DecodeLatch => uaddr::FETCH_T2,
+            MicroCycleKind::OperandAddress => uaddr::OPERAND_T0,
+            MicroCycleKind::OperandData => uaddr::OPERAND_T1,
+            MicroCycleKind::OperandReady => {
+                if matches!(control, "LD" | "STACK_POP") { uaddr::READ_T2 } else { uaddr::OPERAND_T2 }
+            }
+            MicroCycleKind::MemoryAddress => {
+                if matches!(control, "ST" | "STACK_PUSH") { uaddr::WRITE_T0 } else { uaddr::READ_T0 }
+            }
+            MicroCycleKind::MemoryRead => uaddr::READ_T1,
+            MicroCycleKind::MemoryWriteData => uaddr::WRITE_T1,
+            MicroCycleKind::MemoryWriteCommit => uaddr::WRITE_T2,
+        };
+        self.push_micro_address(address, ir, control);
+
         let timing = match phase {
             MicroPhase::T0 => "µT0",
             MicroPhase::T1 => "µT1",
@@ -441,12 +476,9 @@ mod tests {
         assert!(trace.micro_samples.iter().any(|s| s.control == "RET"));
         assert!(trace.micro_samples.iter().any(|s| s.control == "WAIT_VBLANK"));
         assert!(!trace.micro_cycles.is_empty());
-        assert!(trace.micro_cycles.iter().any(|event| {
-            event.phase == MicroPhase::T0 && event.kind == MicroCycleKind::FetchAddress
-        }));
-        assert!(trace.micro_cycles.iter().any(|event| {
-            event.phase == MicroPhase::T2 && event.kind == MicroCycleKind::DecodeLatch
-        }));
+        assert!(!trace.micro_addresses.is_empty());
+        assert!(trace.micro_addresses.iter().any(|event| event.address == uaddr::FETCH_T0));
+        assert!(trace.micro_addresses.iter().any(|event| event.address >= uaddr::EXEC_BASE));
     }
 
     #[test]
