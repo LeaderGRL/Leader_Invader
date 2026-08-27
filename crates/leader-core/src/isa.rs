@@ -1,6 +1,7 @@
 use crate::logic::{
     logic_trace, ripple_add, ripple_increment16, ripple_sub, AluOp, AluTrace, PcIncrementTrace,
 };
+use crate::microcode::{decode as decode_microcode, MicroOp};
 use crate::trace::PhaseKind;
 
 pub mod op {
@@ -98,7 +99,6 @@ pub enum StepOutcome {
     Fault { pc: u16, opcode: u8 },
 }
 
-/// Physical source selected by the program-counter input mux.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PcSource {
     Jump,
@@ -141,11 +141,8 @@ pub trait Bus {
     ) {
     }
 
-    /// Called for every sequential byte fetch. The CPU state is already computed
-    /// by this exact ripple trace; implementations may record it for diagnostics.
     fn trace_pc_increment(&mut self, _trace: PcIncrementTrace) {}
 
-    /// Called only when the PC input mux selects a non-sequential source.
     fn trace_pc_load(
         &mut self,
         _before: u16,
@@ -205,36 +202,43 @@ impl Cpu {
 
         let pc = self.pc;
         let opcode = self.next8(bus);
-        bus.trace_decode(pc, opcode, mnemonic(opcode));
+        let Some(micro) = decode_microcode(opcode) else {
+            return self.fault(pc, opcode);
+        };
+        bus.trace_decode(pc, opcode, micro.mnemonic);
 
-        match opcode {
-            op::NOP => StepOutcome::Continue,
-            op::LDI => {
+        match micro.operation {
+            MicroOp::Nop => StepOutcome::Continue,
+            MicroOp::LoadImmediate => {
                 let Some(reg) = self.next_reg(bus) else {
                     return self.fault(pc, opcode);
                 };
                 let value = self.next8(bus);
-                self.write_reg(bus, pc, reg, value, "LDI");
+                self.write_reg(bus, pc, reg, value, micro.mnemonic);
                 self.flags = Flags {
                     zero: value == 0,
                     carry: false,
                     less: false,
                 };
-                bus.trace_alu_exact(pc, logic_trace(AluOp::Pass, value, 0, value), "LDI");
+                bus.trace_alu_exact(
+                    pc,
+                    logic_trace(AluOp::Pass, value, 0, value),
+                    micro.mnemonic,
+                );
                 StepOutcome::Continue
             }
-            op::LD => {
+            MicroOp::LoadMemory => {
                 let Some(reg) = self.next_reg(bus) else {
                     return self.fault(pc, opcode);
                 };
                 let address = self.next16(bus);
                 let value = bus.read8(pc, address);
-                self.write_reg(bus, pc, reg, value, "LD");
+                self.write_reg(bus, pc, reg, value, micro.mnemonic);
                 self.flags.zero = value == 0;
                 self.flags.less = false;
                 StepOutcome::Continue
             }
-            op::ST => {
+            MicroOp::StoreMemory => {
                 let address = self.next16(bus);
                 let Some(reg) = self.next_reg(bus) else {
                     return self.fault(pc, opcode);
@@ -242,7 +246,7 @@ impl Cpu {
                 bus.write8(pc, address, self.regs[reg as usize]);
                 StepOutcome::Continue
             }
-            op::MOV => {
+            MicroOp::Move => {
                 let Some(dst) = self.next_reg(bus) else {
                     return self.fault(pc, opcode);
                 };
@@ -250,13 +254,17 @@ impl Cpu {
                     return self.fault(pc, opcode);
                 };
                 let value = self.regs[src as usize];
-                self.write_reg(bus, pc, dst, value, "MOV");
+                self.write_reg(bus, pc, dst, value, micro.mnemonic);
                 self.flags.zero = value == 0;
                 self.flags.less = false;
-                bus.trace_alu_exact(pc, logic_trace(AluOp::Pass, value, 0, value), "MOV");
+                bus.trace_alu_exact(
+                    pc,
+                    logic_trace(AluOp::Pass, value, 0, value),
+                    micro.mnemonic,
+                );
                 StepOutcome::Continue
             }
-            op::ADD => {
+            MicroOp::Add => {
                 let Some(dst) = self.next_reg(bus) else {
                     return self.fault(pc, opcode);
                 };
@@ -269,17 +277,27 @@ impl Cpu {
                     false,
                     AluOp::Add,
                 );
-                self.commit_arithmetic(bus, pc, dst, trace, "ADD");
+                self.commit_arithmetic(bus, pc, dst, trace, micro.mnemonic);
                 StepOutcome::Continue
             }
-            op::ADDI => self.immediate_arithmetic(bus, pc, opcode, AluOp::Add, "ADDI"),
-            op::SUBI => self.immediate_arithmetic(bus, pc, opcode, AluOp::Sub, "SUBI"),
-            op::ANDI => self.immediate_logic(bus, pc, opcode, AluOp::And, "ANDI"),
-            op::ORI => self.immediate_logic(bus, pc, opcode, AluOp::Or, "ORI"),
-            op::XORI => self.immediate_logic(bus, pc, opcode, AluOp::Xor, "XORI"),
-            op::INC => self.unary_arithmetic(bus, pc, opcode, true),
-            op::DEC => self.unary_arithmetic(bus, pc, opcode, false),
-            op::CMP => {
+            MicroOp::AddImmediate => {
+                self.immediate_arithmetic(bus, pc, opcode, AluOp::Add, micro.mnemonic)
+            }
+            MicroOp::SubImmediate => {
+                self.immediate_arithmetic(bus, pc, opcode, AluOp::Sub, micro.mnemonic)
+            }
+            MicroOp::AndImmediate => {
+                self.immediate_logic(bus, pc, opcode, AluOp::And, micro.mnemonic)
+            }
+            MicroOp::OrImmediate => {
+                self.immediate_logic(bus, pc, opcode, AluOp::Or, micro.mnemonic)
+            }
+            MicroOp::XorImmediate => {
+                self.immediate_logic(bus, pc, opcode, AluOp::Xor, micro.mnemonic)
+            }
+            MicroOp::Increment => self.unary_arithmetic(bus, pc, opcode, true),
+            MicroOp::Decrement => self.unary_arithmetic(bus, pc, opcode, false),
+            MicroOp::Compare => {
                 let Some(lhs_reg) = self.next_reg(bus) else {
                     return self.fault(pc, opcode);
                 };
@@ -291,61 +309,60 @@ impl Cpu {
                     self.regs[rhs_reg as usize],
                     AluOp::Compare,
                 );
-                self.commit_compare(bus, pc, trace, "CMP");
+                self.commit_compare(bus, pc, trace, micro.mnemonic);
                 StepOutcome::Continue
             }
-            op::CMPI => {
+            MicroOp::CompareImmediate => {
                 let Some(reg) = self.next_reg(bus) else {
                     return self.fault(pc, opcode);
                 };
                 let rhs = self.next8(bus);
                 let trace = ripple_sub(self.regs[reg as usize], rhs, AluOp::Compare);
-                self.commit_compare(bus, pc, trace, "CMPI");
+                self.commit_compare(bus, pc, trace, micro.mnemonic);
                 StepOutcome::Continue
             }
-            op::JMP => {
+            MicroOp::Jump => {
                 let target = self.next16(bus);
-                self.load_pc(bus, target, PcSource::Jump, "JMP");
-                bus.trace_control(pc, "JMP");
+                self.load_pc(bus, target, PcSource::Jump, micro.mnemonic);
+                bus.trace_control(pc, micro.mnemonic);
                 StepOutcome::Continue
             }
-            op::JZ => self.branch(bus, pc, self.flags.zero, "JZ"),
-            op::JNZ => self.branch(bus, pc, !self.flags.zero, "JNZ"),
-            op::JLT => self.branch(bus, pc, self.flags.less, "JLT"),
-            op::JGE => self.branch(bus, pc, !self.flags.less, "JGE"),
-            op::JC => self.branch(bus, pc, self.flags.carry, "JC"),
-            op::CALL => {
+            MicroOp::JumpZero => self.branch(bus, pc, self.flags.zero, micro.mnemonic),
+            MicroOp::JumpNotZero => self.branch(bus, pc, !self.flags.zero, micro.mnemonic),
+            MicroOp::JumpLess => self.branch(bus, pc, self.flags.less, micro.mnemonic),
+            MicroOp::JumpGreaterEqual => {
+                self.branch(bus, pc, !self.flags.less, micro.mnemonic)
+            }
+            MicroOp::JumpCarry => self.branch(bus, pc, self.flags.carry, micro.mnemonic),
+            MicroOp::Call => {
                 let target = self.next16(bus);
                 let ret = self.pc;
                 self.push(bus, pc, (ret >> 8) as u8);
                 self.push(bus, pc, ret as u8);
-                self.load_pc(bus, target, PcSource::Call, "CALL");
-                bus.trace_control(pc, "CALL");
+                self.load_pc(bus, target, PcSource::Call, micro.mnemonic);
+                bus.trace_control(pc, micro.mnemonic);
                 StepOutcome::Continue
             }
-            op::RET => {
+            MicroOp::Return => {
                 let lo = self.pop(bus, pc);
                 let hi = self.pop(bus, pc);
                 let target = u16::from_le_bytes([lo, hi]);
-                self.load_pc(bus, target, PcSource::Return, "RET");
-                bus.trace_control(pc, "RET");
+                self.load_pc(bus, target, PcSource::Return, micro.mnemonic);
+                bus.trace_control(pc, micro.mnemonic);
                 StepOutcome::Continue
             }
-            op::WAIT_VBLANK => {
-                bus.trace_control(pc, "WAIT_VBLANK");
+            MicroOp::WaitVBlank => {
+                bus.trace_control(pc, micro.mnemonic);
                 StepOutcome::WaitVBlank
             }
-            op::HALT => {
+            MicroOp::Halt => {
                 self.halted = true;
-                bus.trace_control(pc, "HALT");
+                bus.trace_control(pc, micro.mnemonic);
                 StepOutcome::Halted
             }
-            _ => self.fault(pc, opcode),
         }
     }
 
-    /// Fetches one byte and advances the semantic PC through the same sixteen-bit
-    /// ripple incrementer represented by INC LO / CARRY / INC HI in the SVG.
     fn next8<B: Bus>(&mut self, bus: &mut B) -> u8 {
         let before = self.pc;
         let value = bus.fetch8(before);
@@ -529,51 +546,18 @@ impl Cpu {
 
 #[must_use]
 pub const fn mnemonic(value: u8) -> &'static str {
-    match value {
-        op::NOP => "NOP",
-        op::LDI => "LDI",
-        op::LD => "LD",
-        op::ST => "ST",
-        op::MOV => "MOV",
-        op::ADD => "ADD",
-        op::ADDI => "ADDI",
-        op::SUBI => "SUBI",
-        op::ANDI => "ANDI",
-        op::ORI => "ORI",
-        op::XORI => "XORI",
-        op::INC => "INC",
-        op::DEC => "DEC",
-        op::CMP => "CMP",
-        op::CMPI => "CMPI",
-        op::JMP => "JMP",
-        op::JZ => "JZ",
-        op::JNZ => "JNZ",
-        op::JLT => "JLT",
-        op::JGE => "JGE",
-        op::JC => "JC",
-        op::CALL => "CALL",
-        op::RET => "RET",
-        op::WAIT_VBLANK => "WAIT_VBLANK",
-        op::HALT => "HALT",
-        _ => "FAULT",
+    match decode_microcode(value) {
+        Some(instruction) => instruction.mnemonic,
+        None => "FAULT",
     }
 }
 
 #[must_use]
 pub const fn phase_for_opcode(value: u8) -> PhaseKind {
-    match value {
-        op::LD => PhaseKind::MemoryRead,
-        op::ST => PhaseKind::MemoryWrite,
-        op::ADD
-        | op::ADDI
-        | op::SUBI
-        | op::ANDI
-        | op::ORI
-        | op::XORI
-        | op::INC
-        | op::DEC
-        | op::CMP
-        | op::CMPI => PhaseKind::Alu,
+    match decode_microcode(value) {
+        Some(instruction) if instruction.control.mem_read => PhaseKind::MemoryRead,
+        Some(instruction) if instruction.control.mem_write => PhaseKind::MemoryWrite,
+        Some(instruction) if instruction.control.alu_enable => PhaseKind::Alu,
         _ => PhaseKind::Decode,
     }
 }
@@ -716,5 +700,19 @@ mod tests {
         assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
         assert_eq!(cpu.pc(), 9);
         assert_eq!(bus.pc_loads[1].2, PcSource::Branch);
+    }
+
+    #[test]
+    fn undefined_opcode_faults_because_control_rom_has_no_entry() {
+        let mut bus = TestBus::default();
+        bus.memory[0] = 0xAA;
+        let mut cpu = Cpu::default();
+        assert_eq!(
+            cpu.step(&mut bus),
+            StepOutcome::Fault {
+                pc: 0,
+                opcode: 0xAA,
+            }
+        );
     }
 }
