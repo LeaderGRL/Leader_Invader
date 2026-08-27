@@ -287,14 +287,35 @@ pub fn derive_alu_datapath(trace: &MatchTrace) -> Vec<AluDatapathEvent> {
         };
         let operands = instruction_operand_bytes(trace, index, sample.pc);
         let derived = match sample.control.as_str() {
-            "ADDI" => operands.last().copied().map(|rhs| ripple_add(result.wrapping_sub(rhs), rhs, false, AluOp::Add)),
-            "SUBI" => operands.last().copied().map(|rhs| ripple_sub(result.wrapping_add(rhs), rhs, AluOp::Sub)),
-            "CMPI" => operands.last().copied().map(|rhs| ripple_sub(result.wrapping_add(rhs), rhs, AluOp::Compare)),
-            "INC" => Some(ripple_add(result.wrapping_sub(1), 1, false, AluOp::Add)),
+            "ADDI" => operands.last().copied().map(|rhs| {
+                ripple_add(result.wrapping_sub(rhs), rhs, false, AluOp::Add)
+            }),
+            "SUBI" => operands
+                .last()
+                .copied()
+                .map(|rhs| ripple_sub(result.wrapping_add(rhs), rhs, AluOp::Sub)),
+            "CMPI" => operands.last().copied().map(|rhs| {
+                ripple_sub(result.wrapping_add(rhs), rhs, AluOp::Compare)
+            }),
+            "INC" => Some(ripple_add(
+                result.wrapping_sub(1),
+                1,
+                false,
+                AluOp::Add,
+            )),
             "DEC" => Some(ripple_sub(result.wrapping_add(1), 1, AluOp::Sub)),
-            "ANDI" => operands.last().copied().map(|rhs| logic_trace(AluOp::And, result, rhs, result)),
-            "ORI" => operands.last().copied().map(|rhs| logic_trace(AluOp::Or, result, rhs, result)),
-            "XORI" => operands.last().copied().map(|rhs| logic_trace(AluOp::Xor, result, rhs, result)),
+            "ANDI" => operands
+                .last()
+                .copied()
+                .map(|rhs| logic_trace(AluOp::And, result, rhs, result)),
+            "ORI" => operands
+                .last()
+                .copied()
+                .map(|rhs| logic_trace(AluOp::Or, result, rhs, result)),
+            "XORI" => operands
+                .last()
+                .copied()
+                .map(|rhs| logic_trace(AluOp::Xor, result, rhs, result)),
             "LDI" | "MOV" => Some(logic_trace(AluOp::Pass, result, 0, result)),
             _ => None,
         };
@@ -383,8 +404,17 @@ fn next_opcode_decode(samples: &[MicroSample], start: usize) -> Option<usize> {
 fn destination_register(opcode: u8, operands: &[u8]) -> Option<Reg> {
     let writes_register = matches!(
         opcode,
-        op::LDI | op::LD | op::MOV | op::ADD | op::ADDI | op::SUBI | op::ANDI | op::ORI
-            | op::XORI | op::INC | op::DEC
+        op::LDI
+            | op::LD
+            | op::MOV
+            | op::ADD
+            | op::ADDI
+            | op::SUBI
+            | op::ANDI
+            | op::ORI
+            | op::XORI
+            | op::INC
+            | op::DEC
     );
     writes_register
         .then(|| operands.first().copied())
@@ -408,15 +438,24 @@ fn reg_from_code(code: u8) -> Option<Reg> {
 
 fn register_write_source(opcode: u8, instruction: &[MicroSample]) -> Option<&MicroSample> {
     if opcode == op::LD {
-        return instruction
-            .iter()
-            .find(|sample| sample.phase == PhaseKind::MemoryRead && sample.control == "CPU_READ");
+        return instruction.iter().find(|sample| {
+            sample.phase == PhaseKind::MemoryRead && sample.control == "CPU_READ"
+        });
     }
     instruction.iter().find(|sample| {
         sample.phase == PhaseKind::Alu
             && matches!(
                 sample.control.as_str(),
-                "LDI" | "MOV" | "ADD" | "ADDI" | "SUBI" | "ANDI" | "ORI" | "XORI" | "INC" | "DEC"
+                "LDI"
+                    | "MOV"
+                    | "ADD"
+                    | "ADDI"
+                    | "SUBI"
+                    | "ANDI"
+                    | "ORI"
+                    | "XORI"
+                    | "INC"
+                    | "DEC"
             )
     })
 }
@@ -425,7 +464,9 @@ fn instruction_operand_bytes(trace: &MatchTrace, alu_index: usize, pc: u16) -> V
     let decode_index = trace.micro_samples[..alu_index]
         .iter()
         .rposition(|sample| sample.pc == pc && is_opcode_decode(sample));
-    let Some(decode_index) = decode_index else { return Vec::new(); };
+    let Some(decode_index) = decode_index else {
+        return Vec::new();
+    };
     trace.micro_samples[decode_index + 1..alu_index]
         .iter()
         .filter(|sample| sample.phase == PhaseKind::Fetch)
@@ -453,7 +494,10 @@ mod tests {
         let trace = Machine::run_match("f3-fetch", 5000);
         let events = derive_datapath(&trace);
         assert!(!events.is_empty());
-        assert!(trace.micro_cycles.iter().any(|event| event.mar == event.pc || event.pc > 0));
+        assert!(trace
+            .micro_cycles
+            .iter()
+            .any(|event| event.mar == event.pc || event.pc > 0));
     }
 
     #[test]
@@ -464,7 +508,20 @@ mod tests {
             .iter()
             .find(|event| event.trace.op == AluOp::Compare)
             .expect("CMPI ripple event");
-        assert_eq!(compare.trace.result, compare.trace.lhs.wrapping_sub(compare.trace.rhs));
+        assert_eq!(
+            compare.trace.result,
+            compare.trace.lhs.wrapping_sub(compare.trace.rhs)
+        );
+    }
+
+    #[test]
+    fn native_alu_stream_is_independent_from_semantic_samples() {
+        let trace = Machine::run_match("f3-alu-native", 5000);
+        let expected = derive_alu_datapath(&trace);
+        assert!(!expected.is_empty());
+        let mut without_samples = trace.clone();
+        without_samples.micro_samples.clear();
+        assert_eq!(derive_alu_datapath(&without_samples), expected);
     }
 
     #[test]
@@ -472,16 +529,34 @@ mod tests {
         let trace = Machine::run_match("f3-regs", 5000);
         let writes = derive_register_datapath(&trace);
         assert!(!writes.is_empty());
-        let first_a = writes.iter().find(|event| event.reg == Reg::A).expect("A write");
+        let first_a = writes
+            .iter()
+            .find(|event| event.reg == Reg::A)
+            .expect("A write");
         assert_eq!(first_a.before, 0);
-        assert!(writes.iter().any(|event| event.reg == Reg::A && event.after == 1));
+        assert!(writes
+            .iter()
+            .any(|event| event.reg == Reg::A && event.after == 1));
+    }
+
+    #[test]
+    fn native_register_stream_is_independent_from_semantic_samples() {
+        let trace = Machine::run_match("f3-reg-native", 5000);
+        let expected = derive_register_datapath(&trace);
+        assert!(!expected.is_empty());
+        let mut without_samples = trace.clone();
+        without_samples.micro_samples.clear();
+        assert_eq!(derive_register_datapath(&without_samples), expected);
     }
 
     #[test]
     fn decoder_is_one_hot_for_real_cmpi_opcode() {
         let trace = Machine::run_match("f3-decode", 5000);
         let events = derive_decoder_datapath(&trace);
-        let cmpi = events.iter().find(|event| event.opcode == op::CMPI).expect("CMPI decode");
+        let cmpi = events
+            .iter()
+            .find(|event| event.opcode == op::CMPI)
+            .expect("CMPI decode");
         assert_eq!(cmpi.high_line, 2);
         assert_eq!(cmpi.low_line, 9);
     }
