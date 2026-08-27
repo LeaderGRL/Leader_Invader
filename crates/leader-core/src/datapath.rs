@@ -92,15 +92,18 @@ pub fn derive_alu_datapath(trace: &MatchTrace) -> Vec<AluDatapathEvent> {
             }),
             "INC" => Some(ripple_add(result.wrapping_sub(1), 1, false, AluOp::Add)),
             "DEC" => Some(ripple_sub(result.wrapping_add(1), 1, AluOp::Sub)),
-            "ANDI" => operands.last().copied().map(|rhs| {
-                logic_trace(AluOp::And, result, rhs, result)
-            }),
-            "ORI" => operands.last().copied().map(|rhs| {
-                logic_trace(AluOp::Or, result, rhs, result)
-            }),
-            "XORI" => operands.last().copied().map(|rhs| {
-                logic_trace(AluOp::Xor, result, rhs, result)
-            }),
+            "ANDI" => operands
+                .last()
+                .copied()
+                .map(|rhs| logic_trace(AluOp::And, result, rhs, result)),
+            "ORI" => operands
+                .last()
+                .copied()
+                .map(|rhs| logic_trace(AluOp::Or, result, rhs, result)),
+            "XORI" => operands
+                .last()
+                .copied()
+                .map(|rhs| logic_trace(AluOp::Xor, result, rhs, result)),
             "LDI" | "MOV" => Some(logic_trace(AluOp::Pass, result, 0, result)),
             _ => None,
         };
@@ -128,9 +131,13 @@ fn instruction_operand_bytes(trace: &MatchTrace, alu_index: usize, pc: u16) -> V
     let Some(decode_index) = decode_index else {
         return Vec::new();
     };
+
+    // Operand fetch samples carry the address being fetched in `sample.pc`, not
+    // the instruction's starting PC. All fetches after this decode and before the
+    // ALU event belong to this single, synchronous instruction execution.
     trace.micro_samples[decode_index + 1..alu_index]
         .iter()
-        .filter(|sample| sample.phase == PhaseKind::Fetch && sample.pc == pc)
+        .filter(|sample| sample.phase == PhaseKind::Fetch)
         .filter_map(|sample| sample.data)
         .collect()
 }
