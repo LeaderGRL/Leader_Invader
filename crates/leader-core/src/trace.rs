@@ -110,6 +110,87 @@ pub struct PcEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BusAddressSource {
+    ProgramCounter,
+    Cpu,
+    Dma,
+    None,
+}
+
+impl BusAddressSource {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ProgramCounter => "program_counter",
+            Self::Cpu => "cpu",
+            Self::Dma => "dma",
+            Self::None => "none",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BusDataSource {
+    Rom,
+    Ram,
+    Vram,
+    Cpu,
+    Device,
+    None,
+}
+
+impl BusDataSource {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rom => "rom",
+            Self::Ram => "ram",
+            Self::Vram => "vram",
+            Self::Cpu => "cpu",
+            Self::Device => "device",
+            Self::None => "none",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BusTransactionKind {
+    Fetch,
+    Read,
+    Write,
+    Input,
+    Dma,
+    Scanout,
+}
+
+impl BusTransactionKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fetch => "fetch",
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Input => "input",
+            Self::Dma => "dma",
+            Self::Scanout => "scanout",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BusTransactionEvent {
+    pub frame: u32,
+    pub ordinal: u16,
+    pub pc: u16,
+    pub address: Option<u16>,
+    pub data: Option<u8>,
+    pub address_source: BusAddressSource,
+    pub data_source: BusDataSource,
+    pub kind: BusTransactionKind,
+    pub control: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectileSnapshot {
     pub x: i16,
     pub y: i16,
@@ -173,6 +254,7 @@ pub struct MatchTrace {
     pub micro_samples: Vec<MicroSample>,
     pub micro_cycles: Vec<MicroCycleEvent>,
     pub micro_addresses: Vec<MicroAddressEvent>,
+    pub bus_transactions: Vec<BusTransactionEvent>,
     pub alu_events: Vec<AluEvent>,
     pub register_writes: Vec<RegisterWriteEvent>,
     pub pc_events: Vec<PcEvent>,
@@ -193,6 +275,7 @@ impl MatchTrace {
             micro_samples: Vec::new(),
             micro_cycles: Vec::new(),
             micro_addresses: Vec::new(),
+            bus_transactions: Vec::new(),
             alu_events: Vec::new(),
             register_writes: Vec::new(),
             pc_events: Vec::new(),
@@ -206,7 +289,7 @@ impl MatchTrace {
 
     #[must_use]
     pub fn to_json(&self) -> String {
-        let mut out = String::with_capacity(self.frames.len() * 280);
+        let mut out = String::with_capacity(self.frames.len() * 320);
         let _ = write!(
             out,
             "{{\n  \"seed\": \"{}\",\n  \"seed_hash\": \"{:016x}\",\n  \"finished\": {},\n  \"total_frames\": {},\n  \"final_score\": {},\n  \"final_lives\": {},\n  \"kills\": [",
@@ -248,6 +331,14 @@ impl MatchTrace {
         for (index, event) in self.micro_addresses.iter().enumerate() {
             if index > 0 { out.push(','); }
             let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"before\":{},\"address\":{},\"source\":\"{}\",\"opcode\":{},\"control_bits\":{},\"label\":\"{}\"}}", event.frame, event.ordinal, event.before, event.address, event.source.as_str(), event.opcode, event.control_bits, event.label);
+        }
+
+        out.push_str("\n  ],\n  \"bus_transactions\": [");
+        for (index, event) in self.bus_transactions.iter().enumerate() {
+            if index > 0 { out.push(','); }
+            let address = event.address.map_or_else(|| "null".to_owned(), |value| value.to_string());
+            let data = event.data.map_or_else(|| "null".to_owned(), |value| value.to_string());
+            let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"pc\":{},\"address\":{},\"data\":{},\"address_source\":\"{}\",\"data_source\":\"{}\",\"kind\":\"{}\",\"control\":\"{}\"}}", event.frame, event.ordinal, event.pc, address, data, event.address_source.as_str(), event.data_source.as_str(), event.kind.as_str(), event.control);
         }
 
         out.push_str("\n  ],\n  \"alu_events\": [");
