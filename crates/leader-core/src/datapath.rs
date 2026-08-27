@@ -1,5 +1,6 @@
+use crate::isa::{op, Reg};
 use crate::logic::{logic_trace, ripple_add, ripple_sub, AluOp, AluTrace};
-use crate::trace::{MatchTrace, PhaseKind};
+use crate::trace::{MatchTrace, MicroSample, PhaseKind};
 
 /// Bit-accurate state for the F3 fetch/decode critical path.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -22,7 +23,18 @@ pub struct DatapathEvent {
 pub struct AluDatapathEvent {
     pub frame: u32,
     pub ordinal: u16,
+    pub pc: u16,
     pub trace: AluTrace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegisterDatapathEvent {
+    pub frame: u32,
+    pub ordinal: u16,
+    pub pc: u16,
+    pub reg: Reg,
+    pub before: u8,
+    pub after: u8,
 }
 
 #[must_use]
@@ -61,10 +73,11 @@ pub fn derive_datapath(trace: &MatchTrace) -> Vec<DatapathEvent> {
     events
 }
 
-/// Reconstructs exact full-adder slice state for arithmetic instructions from the
-/// causal instruction trace. Immediate operands are the real bytes fetched by the
-/// CPU. The pre-operation lhs is recovered from the recorded result using modular
-/// byte arithmetic, then the result is recomputed through the F3 ripple network.
+/// Returns exact full-adder state for the ALU operations executed by the CPU.
+///
+/// F3 arithmetic is now semantically computed by the same ripple implementation in
+/// `isa.rs`. The renderer repeats that pure operation over the actual fetched
+/// operands so the generated SVG can remain a compact declarative replay.
 #[must_use]
 pub fn derive_alu_datapath(trace: &MatchTrace) -> Vec<AluDatapathEvent> {
     let mut events = Vec::new();
@@ -108,15 +121,138 @@ pub fn derive_alu_datapath(trace: &MatchTrace) -> Vec<AluDatapathEvent> {
             _ => None,
         };
 
-        if let Some(trace) = derived {
+        if let Some(alu_trace) = derived {
             events.push(AluDatapathEvent {
                 frame: sample.frame,
                 ordinal: sample.ordinal,
-                trace,
+                pc: sample.pc,
+                trace: alu_trace,
             });
         }
     }
     events
+}
+
+/// Replays register-file write enables from the real instruction stream.
+///
+/// The state starts at CPU reset (all eight registers are zero). Each event is
+/// sourced from either the instruction's CPU ALU result or its CPU memory read,
+/// never from presentation heuristics.
+#[must_use]
+pub fn derive_register_datapath(trace: &MatchTrace) -> Vec<RegisterDatapathEvent> {
+    let mut registers = [0_u8; 8];
+    let mut events = Vec::new();
+    let samples = &trace.micro_samples;
+    let mut index = 0;
+
+    while index < samples.len() {
+        let decode = &samples[index];
+        if !is_opcode_decode(decode) {
+            index += 1;
+            continue;
+        }
+        let opcode = decode.data.expect("opcode decode has data");
+        let end = next_opcode_decode(samples, index + 1).unwrap_or(samples.len());
+        let instruction = &samples[index + 1..end];
+        let operands = instruction
+            .iter()
+            .filter(|sample| sample.phase == PhaseKind::Fetch)
+            .filter_map(|sample| sample.data)
+            .collect::<Vec<_>>();
+
+        if let Some(reg) = destination_register(opcode, &operands) {
+            if let Some(source) = register_write_source(opcode, instruction) {
+                let slot = &mut registers[reg as usize];
+                let before = *slot;
+                *slot = source.data.expect("register source has value");
+                events.push(RegisterDatapathEvent {
+                    frame: source.frame,
+                    ordinal: source.ordinal,
+                    pc: decode.pc,
+                    reg,
+                    before,
+                    after: *slot,
+                });
+            }
+        }
+
+        index = end;
+    }
+
+    events
+}
+
+fn is_opcode_decode(sample: &MicroSample) -> bool {
+    sample.phase == PhaseKind::Decode
+        && sample.address == Some(sample.pc)
+        && sample.data.is_some()
+}
+
+fn next_opcode_decode(samples: &[MicroSample], start: usize) -> Option<usize> {
+    samples[start..]
+        .iter()
+        .position(is_opcode_decode)
+        .map(|offset| start + offset)
+}
+
+fn destination_register(opcode: u8, operands: &[u8]) -> Option<Reg> {
+    let writes_register = matches!(
+        opcode,
+        op::LDI
+            | op::LD
+            | op::MOV
+            | op::ADD
+            | op::ADDI
+            | op::SUBI
+            | op::ANDI
+            | op::ORI
+            | op::XORI
+            | op::INC
+            | op::DEC
+    );
+    writes_register
+        .then(|| operands.first().copied())
+        .flatten()
+        .and_then(reg_from_code)
+}
+
+fn reg_from_code(code: u8) -> Option<Reg> {
+    match code {
+        0 => Some(Reg::A),
+        1 => Some(Reg::B),
+        2 => Some(Reg::C),
+        3 => Some(Reg::D),
+        4 => Some(Reg::X),
+        5 => Some(Reg::Y),
+        6 => Some(Reg::T),
+        7 => Some(Reg::U),
+        _ => None,
+    }
+}
+
+fn register_write_source(opcode: u8, instruction: &[MicroSample]) -> Option<&MicroSample> {
+    if opcode == op::LD {
+        return instruction
+            .iter()
+            .find(|sample| sample.phase == PhaseKind::MemoryRead && sample.control == "CPU_READ");
+    }
+
+    instruction.iter().find(|sample| {
+        sample.phase == PhaseKind::Alu
+            && matches!(
+                sample.control.as_str(),
+                "LDI"
+                    | "MOV"
+                    | "ADD"
+                    | "ADDI"
+                    | "SUBI"
+                    | "ANDI"
+                    | "ORI"
+                    | "XORI"
+                    | "INC"
+                    | "DEC"
+            )
+    })
 }
 
 fn instruction_operand_bytes(trace: &MatchTrace, alu_index: usize, pc: u16) -> Vec<u8> {
@@ -132,9 +268,6 @@ fn instruction_operand_bytes(trace: &MatchTrace, alu_index: usize, pc: u16) -> V
         return Vec::new();
     };
 
-    // Operand fetch samples carry the address being fetched in `sample.pc`, not
-    // the instruction's starting PC. All fetches after this decode and before the
-    // ALU event belong to this single, synchronous instruction execution.
     trace.micro_samples[decode_index + 1..alu_index]
         .iter()
         .filter(|sample| sample.phase == PhaseKind::Fetch)
@@ -191,5 +324,18 @@ mod tests {
             compare.trace.result,
             compare.trace.lhs.wrapping_sub(compare.trace.rhs)
         );
+    }
+
+    #[test]
+    fn register_file_replay_tracks_real_a_writes() {
+        let trace = Machine::run_match("f3-regs", 5000);
+        let writes = derive_register_datapath(&trace);
+        assert!(!writes.is_empty());
+        let first_a = writes
+            .iter()
+            .find(|event| event.reg == Reg::A)
+            .expect("A write");
+        assert_eq!(first_a.before, 0);
+        assert!(writes.iter().any(|event| event.reg == Reg::A && event.after == 1));
     }
 }
