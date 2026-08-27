@@ -223,6 +223,7 @@ impl ExecuteRowKind {
 
 const NONE: ControlWord = ControlWord::new(false, false, false, false, false, false, false, false);
 const REG_ALU: ControlWord = ControlWord::new(true, true, false, false, false, false, false, false);
+const REG_WRITE: ControlWord = ControlWord::new(true, false, false, false, false, false, false, false);
 const ALU_ONLY: ControlWord = ControlWord::new(false, true, false, false, false, false, false, false);
 const LOAD: ControlWord = ControlWord::new(true, false, true, false, false, false, false, false);
 const STORE: ControlWord = ControlWord::new(false, false, false, true, false, false, false, false);
@@ -322,13 +323,25 @@ pub const fn execute_step_address(opcode: u8, step: u8) -> Option<u8> {
     }
 }
 
-/// Current migration point inside each five-row execute block.
-/// LDI and ADDI currently commit on row 2; unmigrated instructions still commit on row 0.
+#[must_use]
+pub const fn is_five_row_alu(opcode: u8) -> bool {
+    matches!(
+        opcode,
+        op::MOV | op::ADD | op::SUBI | op::ANDI | op::ORI | op::XORI | op::INC | op::DEC
+            | op::CMP | op::CMPI
+    )
+}
+
+/// Row containing the final architectural commit for the currently migrated instruction.
 #[must_use]
 pub const fn execute_control_step(opcode: u8) -> u8 {
-    match opcode {
-        op::LDI | op::ADDI => 2,
-        _ => 0,
+    if is_five_row_alu(opcode) {
+        4
+    } else {
+        match opcode {
+            op::LDI | op::ADDI => 2,
+            _ => 0,
+        }
     }
 }
 
@@ -338,6 +351,16 @@ pub const fn execute_row_kind(opcode: u8, step: u8) -> Option<ExecuteRowKind> {
         return None;
     }
 
+    if is_five_row_alu(opcode) {
+        return Some(match step {
+            0 | 1 => ExecuteRowKind::Operand,
+            2 => ExecuteRowKind::AluSelect,
+            3 => ExecuteRowKind::Propagate,
+            4 => ExecuteRowKind::Commit,
+            _ => ExecuteRowKind::Idle,
+        });
+    }
+
     match opcode {
         op::LDI | op::ADDI => Some(match step {
             0 | 1 => ExecuteRowKind::Operand,
@@ -345,6 +368,26 @@ pub const fn execute_row_kind(opcode: u8, step: u8) -> Option<ExecuteRowKind> {
             _ => ExecuteRowKind::Idle,
         }),
         _ => Some(if step == 0 { ExecuteRowKind::Commit } else { ExecuteRowKind::Idle }),
+    }
+}
+
+#[must_use]
+pub const fn execute_row_control(opcode: u8, step: u8) -> ControlWord {
+    if is_five_row_alu(opcode) {
+        return match step {
+            2 | 3 => ALU_ONLY,
+            4 => match opcode {
+                op::CMP | op::CMPI => NONE,
+                _ => REG_WRITE,
+            },
+            _ => NONE,
+        };
+    }
+
+    if step == execute_control_step(opcode) {
+        control_word(opcode)
+    } else {
+        NONE
     }
 }
 
@@ -360,8 +403,11 @@ pub fn control_word_at(address: u8, opcode: u8) -> ControlWord {
             ControlWord::new(false, false, false, true, false, false, false, false)
         }
         value => {
-            let step = execute_control_step(opcode);
-            if execute_step_address(opcode, step) == Some(value) { control_word(opcode) } else { NONE }
+            let Some(base) = execute_address(opcode) else { return NONE; };
+            if value < base || value >= base.saturating_add(uaddr::EXEC_ROWS) {
+                return NONE;
+            }
+            execute_row_control(opcode, value - base)
         }
     }
 }
@@ -375,6 +421,11 @@ mod tests {
         op::ANDI, op::ORI, op::XORI, op::INC, op::DEC, op::CMP, op::CMPI, op::JMP,
         op::JZ, op::JNZ, op::JLT, op::JGE, op::JC, op::CALL, op::RET, op::WAIT_VBLANK,
         op::HALT,
+    ];
+
+    const FIVE_ROW_ALU: [u8; 10] = [
+        op::MOV, op::ADD, op::SUBI, op::ANDI, op::ORI, op::XORI, op::INC, op::DEC,
+        op::CMP, op::CMPI,
     ];
 
     #[test]
@@ -401,25 +452,40 @@ mod tests {
     }
 
     #[test]
-    fn ldi_and_addi_commit_on_third_execute_row() {
+    fn ldi_and_addi_keep_three_row_programs() {
         for opcode in [op::LDI, op::ADDI] {
             let base = execute_address(opcode).unwrap();
-            assert_eq!(control_word_at(base, opcode).bits(), 0);
-            assert_eq!(control_word_at(base + 1, opcode).bits(), 0);
-            let commit = control_word_at(base + 2, opcode);
-            assert!(commit.reg_write && commit.alu_enable);
-        }
-    }
-
-    #[test]
-    fn execute_row_roles_do_not_duplicate_micro_pc_transition_sources() {
-        for opcode in [op::LDI, op::ADDI] {
             assert_eq!(execute_row_kind(opcode, 0), Some(ExecuteRowKind::Operand));
             assert_eq!(execute_row_kind(opcode, 1), Some(ExecuteRowKind::Operand));
             assert_eq!(execute_row_kind(opcode, 2), Some(ExecuteRowKind::Commit));
             assert_eq!(execute_row_kind(opcode, 3), Some(ExecuteRowKind::Idle));
             assert_eq!(execute_row_kind(opcode, 4), Some(ExecuteRowKind::Idle));
+            assert_eq!(control_word_at(base, opcode).bits(), 0);
+            assert_eq!(control_word_at(base + 1, opcode).bits(), 0);
+            assert_eq!(control_word_at(base + 2, opcode).bits(), control_word(opcode).bits());
         }
+    }
+
+    #[test]
+    fn five_row_alu_has_operand_select_propagate_and_commit_rows() {
+        for opcode in FIVE_ROW_ALU {
+            let base = execute_address(opcode).unwrap();
+            assert_eq!(execute_row_kind(opcode, 0), Some(ExecuteRowKind::Operand));
+            assert_eq!(execute_row_kind(opcode, 1), Some(ExecuteRowKind::Operand));
+            assert_eq!(execute_row_kind(opcode, 2), Some(ExecuteRowKind::AluSelect));
+            assert_eq!(execute_row_kind(opcode, 3), Some(ExecuteRowKind::Propagate));
+            assert_eq!(execute_row_kind(opcode, 4), Some(ExecuteRowKind::Commit));
+            assert_eq!(control_word_at(base, opcode).bits(), 0);
+            assert_eq!(control_word_at(base + 1, opcode).bits(), 0);
+            assert!(control_word_at(base + 2, opcode).alu_enable);
+            assert!(control_word_at(base + 3, opcode).alu_enable);
+            assert_eq!(control_word_at(base + 4, opcode).reg_write, !matches!(opcode, op::CMP | op::CMPI));
+        }
+    }
+
+    #[test]
+    fn execute_row_roles_do_not_duplicate_micro_pc_transition_sources() {
+        assert_eq!(execute_row_kind(op::LDI, 0), Some(ExecuteRowKind::Operand));
         assert_eq!(execute_row_kind(op::NOP, 0), Some(ExecuteRowKind::Commit));
         assert_eq!(execute_row_kind(0xAA, 0), None);
         assert_eq!(execute_row_kind(op::LDI, uaddr::EXEC_ROWS), None);

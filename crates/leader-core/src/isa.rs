@@ -224,23 +224,8 @@ impl Cpu {
                 self.write_memory(bus, instruction_pc, address, self.regs[reg as usize], "ST");
                 StepOutcome::Continue
             }
-            MicroOp::Move => {
-                let Some(dst) = self.next_reg(bus) else { return self.fault(instruction_pc, opcode); };
-                let Some(src) = self.next_reg(bus) else { return self.fault(instruction_pc, opcode); };
-                let value = self.regs[src as usize];
-                self.write_reg(bus, instruction_pc, dst, value, micro.mnemonic);
-                self.flags.zero = value == 0;
-                self.flags.less = false;
-                bus.trace_alu_exact(instruction_pc, logic_trace(AluOp::Pass, value, 0, value), micro.mnemonic);
-                StepOutcome::Continue
-            }
-            MicroOp::Add => {
-                let Some(dst) = self.next_reg(bus) else { return self.fault(instruction_pc, opcode); };
-                let Some(src) = self.next_reg(bus) else { return self.fault(instruction_pc, opcode); };
-                let trace = ripple_add(self.regs[dst as usize], self.regs[src as usize], false, AluOp::Add);
-                self.commit_arithmetic(bus, instruction_pc, dst, trace, micro.mnemonic);
-                StepOutcome::Continue
-            }
+            MicroOp::Move => self.binary_register_alu(bus, instruction_pc, opcode, AluOp::Pass, micro.mnemonic, false),
+            MicroOp::Add => self.binary_register_alu(bus, instruction_pc, opcode, AluOp::Add, micro.mnemonic, false),
             MicroOp::AddImmediate => self.immediate_arithmetic(bus, instruction_pc, opcode, AluOp::Add, micro.mnemonic),
             MicroOp::SubImmediate => self.immediate_arithmetic(bus, instruction_pc, opcode, AluOp::Sub, micro.mnemonic),
             MicroOp::AndImmediate => self.immediate_logic(bus, instruction_pc, opcode, AluOp::And, micro.mnemonic),
@@ -248,20 +233,8 @@ impl Cpu {
             MicroOp::XorImmediate => self.immediate_logic(bus, instruction_pc, opcode, AluOp::Xor, micro.mnemonic),
             MicroOp::Increment => self.unary_arithmetic(bus, instruction_pc, opcode, true),
             MicroOp::Decrement => self.unary_arithmetic(bus, instruction_pc, opcode, false),
-            MicroOp::Compare => {
-                let Some(lhs_reg) = self.next_reg(bus) else { return self.fault(instruction_pc, opcode); };
-                let Some(rhs_reg) = self.next_reg(bus) else { return self.fault(instruction_pc, opcode); };
-                let trace = ripple_sub(self.regs[lhs_reg as usize], self.regs[rhs_reg as usize], AluOp::Compare);
-                self.commit_compare(bus, instruction_pc, trace, micro.mnemonic);
-                StepOutcome::Continue
-            }
-            MicroOp::CompareImmediate => {
-                let Some(reg) = self.next_reg(bus) else { return self.fault(instruction_pc, opcode); };
-                let rhs = self.next8(bus);
-                let trace = ripple_sub(self.regs[reg as usize], rhs, AluOp::Compare);
-                self.commit_compare(bus, instruction_pc, trace, micro.mnemonic);
-                StepOutcome::Continue
-            }
+            MicroOp::Compare => self.binary_register_alu(bus, instruction_pc, opcode, AluOp::Compare, micro.mnemonic, true),
+            MicroOp::CompareImmediate => self.compare_immediate(bus, instruction_pc, opcode, micro.mnemonic),
             MicroOp::Jump => {
                 let target = self.next16(bus);
                 self.load_pc(bus, target, PcSource::Jump, micro.mnemonic);
@@ -411,50 +384,142 @@ impl Cpu {
         bus.trace_register_write(pc, reg, before, value, control);
     }
 
+    fn binary_register_alu<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        pc: u16,
+        opcode: u8,
+        operation: AluOp,
+        control: &'static str,
+        compare: bool,
+    ) -> StepOutcome {
+        let Some(lhs_reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
+        self.advance_execute(bus, "ALU_OPERAND_B");
+        let Some(rhs_reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
+        let lhs = self.regs[lhs_reg as usize];
+        let rhs = self.regs[rhs_reg as usize];
+
+        self.advance_execute(bus, "ALU_SELECT");
+        self.advance_execute(bus, "ALU_PROPAGATE");
+        let trace = match operation {
+            AluOp::Pass => logic_trace(operation, rhs, 0, rhs),
+            AluOp::Add => ripple_add(lhs, rhs, false, operation),
+            AluOp::Compare => ripple_sub(lhs, rhs, operation),
+            _ => unreachable!("binary register ALU operation"),
+        };
+        if compare {
+            self.latch_compare_flags(trace);
+        } else if operation == AluOp::Pass {
+            self.flags = Flags { zero: trace.result == 0, carry: false, less: false };
+        } else {
+            self.latch_arithmetic_flags(trace);
+        }
+        bus.trace_alu_exact(pc, trace, control);
+
+        self.advance_execute(bus, "ALU_COMMIT");
+        if !compare {
+            self.write_reg(bus, pc, lhs_reg, trace.result, control);
+        }
+        StepOutcome::Continue
+    }
+
     fn immediate_arithmetic<B: Bus>(&mut self, bus: &mut B, pc: u16, opcode: u8, operation: AluOp, control: &'static str) -> StepOutcome {
         let Some(reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
-        if opcode == op::ADDI { self.advance_execute(bus, "ADDI_VALUE"); }
+
+        if opcode == op::ADDI {
+            self.advance_execute(bus, "ADDI_VALUE");
+            let rhs = self.next8(bus);
+            self.advance_execute(bus, "ADDI_COMMIT");
+            let trace = ripple_add(self.regs[reg as usize], rhs, false, operation);
+            self.commit_arithmetic(bus, pc, reg, trace, control);
+            return StepOutcome::Continue;
+        }
+
+        self.advance_execute(bus, "ALU_OPERAND_B");
         let rhs = self.next8(bus);
-        if opcode == op::ADDI { self.advance_execute(bus, "ADDI_COMMIT"); }
         let lhs = self.regs[reg as usize];
+        self.advance_execute(bus, "ALU_SELECT");
+        self.advance_execute(bus, "ALU_PROPAGATE");
         let trace = match operation {
-            AluOp::Add => ripple_add(lhs, rhs, false, operation),
             AluOp::Sub => ripple_sub(lhs, rhs, operation),
-            _ => unreachable!("immediate arithmetic only supports add/sub"),
+            _ => unreachable!("five-row immediate arithmetic only supports subtraction"),
         };
-        self.commit_arithmetic(bus, pc, reg, trace, control);
+        self.latch_arithmetic_flags(trace);
+        bus.trace_alu_exact(pc, trace, control);
+        self.advance_execute(bus, "ALU_COMMIT");
+        self.write_reg(bus, pc, reg, trace.result, control);
         StepOutcome::Continue
     }
 
     fn immediate_logic<B: Bus>(&mut self, bus: &mut B, pc: u16, opcode: u8, operation: AluOp, control: &'static str) -> StepOutcome {
         let Some(reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
+        self.advance_execute(bus, "ALU_OPERAND_B");
         let rhs = self.next8(bus);
         let lhs = self.regs[reg as usize];
-        let result = match operation { AluOp::And => lhs & rhs, AluOp::Or => lhs | rhs, AluOp::Xor => lhs ^ rhs, _ => unreachable!("logic op") };
+        self.advance_execute(bus, "ALU_SELECT");
+        self.advance_execute(bus, "ALU_PROPAGATE");
+        let result = match operation {
+            AluOp::And => lhs & rhs,
+            AluOp::Or => lhs | rhs,
+            AluOp::Xor => lhs ^ rhs,
+            _ => unreachable!("logic operation"),
+        };
         let trace = logic_trace(operation, lhs, rhs, result);
-        self.write_reg(bus, pc, reg, result, control);
         self.flags = Flags { zero: result == 0, carry: false, less: false };
         bus.trace_alu_exact(pc, trace, control);
+        self.advance_execute(bus, "ALU_COMMIT");
+        self.write_reg(bus, pc, reg, result, control);
         StepOutcome::Continue
     }
 
     fn unary_arithmetic<B: Bus>(&mut self, bus: &mut B, pc: u16, opcode: u8, increment: bool) -> StepOutcome {
         let Some(reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
         let lhs = self.regs[reg as usize];
-        let (trace, control) = if increment { (ripple_add(lhs, 1, false, AluOp::Add), "INC") } else { (ripple_sub(lhs, 1, AluOp::Sub), "DEC") };
-        self.commit_arithmetic(bus, pc, reg, trace, control);
+        self.advance_execute(bus, "ALU_CONST_ONE");
+        self.advance_execute(bus, "ALU_SELECT");
+        self.advance_execute(bus, "ALU_PROPAGATE");
+        let (trace, control) = if increment {
+            (ripple_add(lhs, 1, false, AluOp::Add), "INC")
+        } else {
+            (ripple_sub(lhs, 1, AluOp::Sub), "DEC")
+        };
+        self.latch_arithmetic_flags(trace);
+        bus.trace_alu_exact(pc, trace, control);
+        self.advance_execute(bus, "ALU_COMMIT");
+        self.write_reg(bus, pc, reg, trace.result, control);
         StepOutcome::Continue
     }
 
-    fn commit_arithmetic<B: Bus>(&mut self, bus: &mut B, pc: u16, reg: Reg, trace: AluTrace, control: &'static str) {
-        self.write_reg(bus, pc, reg, trace.result, control);
-        self.flags = Flags { zero: trace.result == 0, carry: trace.final_carry(), less: !trace.final_carry() && matches!(trace.op, AluOp::Sub) };
+    fn compare_immediate<B: Bus>(&mut self, bus: &mut B, pc: u16, opcode: u8, control: &'static str) -> StepOutcome {
+        let Some(reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
+        self.advance_execute(bus, "ALU_OPERAND_B");
+        let rhs = self.next8(bus);
+        let lhs = self.regs[reg as usize];
+        self.advance_execute(bus, "ALU_SELECT");
+        self.advance_execute(bus, "ALU_PROPAGATE");
+        let trace = ripple_sub(lhs, rhs, AluOp::Compare);
+        self.latch_compare_flags(trace);
         bus.trace_alu_exact(pc, trace, control);
+        self.advance_execute(bus, "ALU_COMMIT");
+        StepOutcome::Continue
     }
 
-    fn commit_compare<B: Bus>(&mut self, bus: &mut B, pc: u16, trace: AluTrace, control: &'static str) {
+    fn latch_arithmetic_flags(&mut self, trace: AluTrace) {
+        self.flags = Flags {
+            zero: trace.result == 0,
+            carry: trace.final_carry(),
+            less: !trace.final_carry() && matches!(trace.op, AluOp::Sub),
+        };
+    }
+
+    fn latch_compare_flags(&mut self, trace: AluTrace) {
         self.flags = Flags { zero: trace.result == 0, carry: trace.final_carry(), less: !trace.final_carry() };
+    }
+
+    fn commit_arithmetic<B: Bus>(&mut self, bus: &mut B, pc: u16, reg: Reg, trace: AluTrace, control: &'static str) {
+        self.latch_arithmetic_flags(trace);
         bus.trace_alu_exact(pc, trace, control);
+        self.write_reg(bus, pc, reg, trace.result, control);
     }
 
     fn branch<B: Bus>(&mut self, bus: &mut B, pc: u16, condition: bool, control: &'static str) -> StepOutcome {
@@ -527,6 +592,14 @@ mod tests {
         }
     }
 
+    fn assert_five_execute_rows(cpu: &Cpu, bus: &TestBus, opcode: u8) {
+        let base = execute_address(opcode).unwrap();
+        for step in 0..5 {
+            assert!(bus.micro_addresses.iter().any(|t| t.after == base + step), "missing opcode {opcode:02X} execute row {step}");
+        }
+        assert_eq!(cpu.micro_address(), base + 4);
+    }
+
     #[test]
     fn opcode_fetch_is_native_t0_t1_t2_and_dispatches_micro_pc() {
         let mut bus = TestBus::default();
@@ -572,6 +645,67 @@ mod tests {
         assert_eq!(cpu.micro_address(), base + 2);
         assert_eq!(cpu.reg(Reg::A), 10);
         assert_eq!(bus.exact_alu.last().unwrap().result, 10);
+    }
+
+    #[test]
+    fn register_alu_instructions_are_causal_five_row_programs() {
+        for (opcode, lhs, rhs, expected, writes) in [
+            (op::MOV, 0x12, 0xA5, 0xA5, true),
+            (op::ADD, 7, 9, 16, true),
+            (op::CMP, 7, 9, 0xFE, false),
+        ] {
+            let mut bus = TestBus::default();
+            bus.memory[..3].copy_from_slice(&[opcode, Reg::A.code(), Reg::B.code()]);
+            let mut cpu = Cpu::default();
+            cpu.regs[Reg::A as usize] = lhs;
+            cpu.regs[Reg::B as usize] = rhs;
+            assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
+            assert_five_execute_rows(&cpu, &bus, opcode);
+            assert_eq!(bus.exact_alu.last().unwrap().result, expected);
+            assert_eq!(bus.writes.iter().any(|(reg, _, after)| *reg == Reg::A && *after == expected), writes);
+        }
+    }
+
+    #[test]
+    fn immediate_alu_instructions_are_causal_five_row_programs() {
+        for (opcode, lhs, rhs, expected) in [
+            (op::SUBI, 9, 4, 5),
+            (op::ANDI, 0b1100, 0b1010, 0b1000),
+            (op::ORI, 0b1100, 0b0011, 0b1111),
+            (op::XORI, 0b1100, 0b1010, 0b0110),
+        ] {
+            let mut bus = TestBus::default();
+            bus.memory[..3].copy_from_slice(&[opcode, Reg::A.code(), rhs]);
+            let mut cpu = Cpu::default();
+            cpu.regs[Reg::A as usize] = lhs;
+            assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
+            assert_five_execute_rows(&cpu, &bus, opcode);
+            assert_eq!(cpu.reg(Reg::A), expected);
+            assert_eq!(bus.exact_alu.last().unwrap().result, expected);
+        }
+    }
+
+    #[test]
+    fn unary_and_compare_immediate_use_all_five_rows() {
+        for (opcode, before, expected) in [(op::INC, 4, 5), (op::DEC, 4, 3)] {
+            let mut bus = TestBus::default();
+            bus.memory[..2].copy_from_slice(&[opcode, Reg::A.code()]);
+            let mut cpu = Cpu::default();
+            cpu.regs[Reg::A as usize] = before;
+            assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
+            assert_five_execute_rows(&cpu, &bus, opcode);
+            assert_eq!(cpu.reg(Reg::A), expected);
+        }
+
+        let mut bus = TestBus::default();
+        bus.memory[..3].copy_from_slice(&[op::CMPI, Reg::A.code(), 9]);
+        let mut cpu = Cpu::default();
+        cpu.regs[Reg::A as usize] = 7;
+        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
+        assert_five_execute_rows(&cpu, &bus, op::CMPI);
+        assert!(cpu.flags().less);
+        assert!(!cpu.flags().zero);
+        assert!(bus.writes.is_empty());
     }
 
     #[test]
