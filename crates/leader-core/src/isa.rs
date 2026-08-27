@@ -355,12 +355,13 @@ mod tests {
         let program = [op::LDI, Reg::A.code(), 4, op::ADDI, Reg::A.code(), 6, op::ST, 0x80, 0, Reg::A.code(), op::HALT];
         bus.memory[..program.len()].copy_from_slice(&program);
         let mut cpu = Cpu::default();
-        for _ in 0..4 { cpu.step(&mut bus); }
+        for _ in 0..3 { assert_eq!(cpu.step(&mut bus), StepOutcome::Continue); }
         assert_eq!(bus.memory[0x80], 10);
         assert_eq!(bus.exact_alu[1].result, 10);
         assert!(bus.writes.contains(&(Reg::A, 4, 10)));
         assert_eq!(cpu.mar(), 0x80);
         assert_eq!(cpu.mdr(), 10);
+        assert_eq!(cpu.step(&mut bus), StepOutcome::Halted);
     }
 
     #[test]
