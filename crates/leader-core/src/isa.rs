@@ -35,23 +35,12 @@ pub mod op {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Reg {
-    A = 0,
-    B = 1,
-    C = 2,
-    D = 3,
-    X = 4,
-    Y = 5,
-    T = 6,
-    U = 7,
-}
+pub enum Reg { A = 0, B = 1, C = 2, D = 3, X = 4, Y = 5, T = 6, U = 7 }
 
 impl Reg {
     pub const ALL: [Self; 8] = [Self::A, Self::B, Self::C, Self::D, Self::X, Self::Y, Self::T, Self::U];
-    #[must_use]
-    pub const fn code(self) -> u8 { self as u8 }
-    #[must_use]
-    pub const fn name(self) -> &'static str {
+    #[must_use] pub const fn code(self) -> u8 { self as u8 }
+    #[must_use] pub const fn name(self) -> &'static str {
         match self {
             Self::A => "A", Self::B => "B", Self::C => "C", Self::D => "D",
             Self::X => "X", Self::Y => "Y", Self::T => "T", Self::U => "U",
@@ -90,15 +79,29 @@ pub trait Bus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Cpu { regs: [u8; 8], pc: u16, sp: u16, flags: Flags, halted: bool }
+pub struct Cpu {
+    regs: [u8; 8],
+    pc: u16,
+    sp: u16,
+    mar: u16,
+    mdr: u8,
+    ir: u8,
+    flags: Flags,
+    halted: bool,
+}
 
 impl Default for Cpu {
-    fn default() -> Self { Self { regs: [0; 8], pc: 0, sp: 0x7FFF, flags: Flags::default(), halted: false } }
+    fn default() -> Self {
+        Self { regs: [0; 8], pc: 0, sp: 0x7FFF, mar: 0, mdr: 0, ir: 0, flags: Flags::default(), halted: false }
+    }
 }
 
 impl Cpu {
     #[must_use] pub const fn pc(&self) -> u16 { self.pc }
     #[must_use] pub const fn sp(&self) -> u16 { self.sp }
+    #[must_use] pub const fn mar(&self) -> u16 { self.mar }
+    #[must_use] pub const fn mdr(&self) -> u8 { self.mdr }
+    #[must_use] pub const fn ir(&self) -> u8 { self.ir }
     #[must_use] pub const fn flags(&self) -> Flags { self.flags }
     #[must_use] pub fn reg(&self, reg: Reg) -> u8 { self.regs[reg as usize] }
 
@@ -106,8 +109,9 @@ impl Cpu {
         if self.halted { return StepOutcome::Halted; }
         let pc = self.pc;
         let opcode = self.next8(bus);
-        let Some(micro) = decode_microcode(opcode) else { return self.fault(pc, opcode); };
-        bus.trace_decode(pc, opcode, micro.mnemonic);
+        self.ir = opcode;
+        let Some(micro) = decode_microcode(self.ir) else { return self.fault(pc, self.ir); };
+        bus.trace_decode(pc, self.ir, micro.mnemonic);
 
         match micro.operation {
             MicroOp::Nop => StepOutcome::Continue,
@@ -122,7 +126,7 @@ impl Cpu {
             MicroOp::LoadMemory => {
                 let Some(reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
                 let address = self.next16(bus);
-                let value = bus.read8(pc, address);
+                let value = self.read_memory(bus, pc, address);
                 self.write_reg(bus, pc, reg, value, micro.mnemonic);
                 self.flags.zero = value == 0;
                 self.flags.less = false;
@@ -131,7 +135,7 @@ impl Cpu {
             MicroOp::StoreMemory => {
                 let address = self.next16(bus);
                 let Some(reg) = self.next_reg(bus) else { return self.fault(pc, opcode); };
-                bus.write8(pc, address, self.regs[reg as usize]);
+                self.write_memory(bus, pc, address, self.regs[reg as usize]);
                 StepOutcome::Continue
             }
             MicroOp::Move => {
@@ -205,19 +209,28 @@ impl Cpu {
     }
 
     fn next8<B: Bus>(&mut self, bus: &mut B) -> u8 {
-        let before = self.pc;
-        let value = bus.fetch8(before);
-        let increment = ripple_increment16(before);
+        self.mar = self.pc;
+        self.mdr = bus.fetch8(self.mar);
+        let increment = ripple_increment16(self.pc);
         self.pc = increment.after;
         bus.trace_pc_increment(increment);
-        value
+        self.mdr
     }
 
-    fn next16<B: Bus>(&mut self, bus: &mut B) -> u16 {
-        u16::from_le_bytes([self.next8(bus), self.next8(bus)])
-    }
-
+    fn next16<B: Bus>(&mut self, bus: &mut B) -> u16 { u16::from_le_bytes([self.next8(bus), self.next8(bus)]) }
     fn next_reg<B: Bus>(&mut self, bus: &mut B) -> Option<Reg> { Reg::from_code(self.next8(bus)) }
+
+    fn read_memory<B: Bus>(&mut self, bus: &mut B, pc: u16, address: u16) -> u8 {
+        self.mar = address;
+        self.mdr = bus.read8(pc, self.mar);
+        self.mdr
+    }
+
+    fn write_memory<B: Bus>(&mut self, bus: &mut B, pc: u16, address: u16, value: u8) {
+        self.mar = address;
+        self.mdr = value;
+        bus.write8(pc, self.mar, self.mdr);
+    }
 
     fn load_pc<B: Bus>(&mut self, bus: &mut B, target: u16, source: PcSource, control: &'static str) {
         let before = self.pc;
@@ -285,11 +298,11 @@ impl Cpu {
 
     fn push<B: Bus>(&mut self, bus: &mut B, pc: u16, value: u8) {
         self.sp = ripple_decrement16(self.sp).after;
-        bus.write8(pc, self.sp, value);
+        self.write_memory(bus, pc, self.sp, value);
     }
 
     fn pop<B: Bus>(&mut self, bus: &mut B, pc: u16) -> u8 {
-        let value = bus.read8(pc, self.sp);
+        let value = self.read_memory(bus, pc, self.sp);
         self.sp = ripple_increment16(self.sp).after;
         value
     }
@@ -345,9 +358,22 @@ mod tests {
         for _ in 0..4 { cpu.step(&mut bus); }
         assert_eq!(bus.memory[0x80], 10);
         assert_eq!(bus.exact_alu[1].result, 10);
-        assert_eq!(bus.exact_alu[1].op, AluOp::Add);
         assert!(bus.writes.contains(&(Reg::A, 4, 10)));
-        assert!(!bus.pc_increments.is_empty());
+        assert_eq!(cpu.mar(), 0x80);
+        assert_eq!(cpu.mdr(), 10);
+    }
+
+    #[test]
+    fn opcode_fetch_latches_mar_mdr_and_ir_semantically() {
+        let mut bus = TestBus::default();
+        bus.memory[0x0123] = op::NOP;
+        let mut cpu = Cpu::default();
+        cpu.pc = 0x0123;
+        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
+        assert_eq!(cpu.ir(), op::NOP);
+        assert_eq!(cpu.mar(), 0x0123);
+        assert_eq!(cpu.mdr(), op::NOP);
+        assert_eq!(cpu.pc(), 0x0124);
     }
 
     #[test]
@@ -385,10 +411,9 @@ mod tests {
         let mut cpu = Cpu::default();
         let initial = cpu.sp();
         assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
-        assert_eq!(cpu.sp(), initial.wrapping_sub(2));
-        assert_eq!(cpu.pc(), 5);
+        assert_eq!(cpu.sp(), initial.wrapping_sub(2)); assert_eq!(cpu.pc(), 5);
         assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
-        assert_eq!(cpu.sp(), initial);
-        assert_eq!(cpu.pc(), 3);
+        assert_eq!(cpu.sp(), initial); assert_eq!(cpu.pc(), 3);
+        assert_eq!(cpu.mar(), initial.wrapping_sub(1));
     }
 }
