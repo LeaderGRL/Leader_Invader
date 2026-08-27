@@ -1,6 +1,60 @@
 use leader_core::{MatchTrace, MicroAddressSource, Topology};
 use leader_svg::RenderConfig;
 
+#[derive(Debug, Clone, Copy, Default)]
+struct SourceSampler {
+    fetch_seen: usize,
+    sequential_seen: usize,
+    dispatch_seen: usize,
+    call_seen: usize,
+    return_seen: usize,
+    fetch_stride: usize,
+    sequential_stride: usize,
+    dispatch_stride: usize,
+    call_stride: usize,
+    return_stride: usize,
+}
+
+impl SourceSampler {
+    fn for_trace(trace: &MatchTrace) -> Self {
+        let mut counts = [0_usize; 5];
+        for event in &trace.micro_addresses {
+            counts[source_index(event.source)] += 1;
+        }
+        Self {
+            fetch_stride: (counts[0] / 24).max(1),
+            sequential_stride: (counts[1] / 150).max(1),
+            dispatch_stride: (counts[2] / 60).max(1),
+            call_stride: (counts[3] / 70).max(1),
+            return_stride: (counts[4] / 70).max(1),
+            ..Self::default()
+        }
+    }
+
+    fn take(&mut self, source: MicroAddressSource) -> bool {
+        let (seen, stride) = match source {
+            MicroAddressSource::FetchStart => (&mut self.fetch_seen, self.fetch_stride),
+            MicroAddressSource::Sequential => (&mut self.sequential_seen, self.sequential_stride),
+            MicroAddressSource::Dispatch => (&mut self.dispatch_seen, self.dispatch_stride),
+            MicroAddressSource::RoutineCall => (&mut self.call_seen, self.call_stride),
+            MicroAddressSource::RoutineReturn => (&mut self.return_seen, self.return_stride),
+        };
+        let take = *seen % stride == 0;
+        *seen += 1;
+        take
+    }
+}
+
+const fn source_index(source: MicroAddressSource) -> usize {
+    match source {
+        MicroAddressSource::FetchStart => 0,
+        MicroAddressSource::Sequential => 1,
+        MicroAddressSource::Dispatch => 2,
+        MicroAddressSource::RoutineCall => 3,
+        MicroAddressSource::RoutineReturn => 4,
+    }
+}
+
 #[must_use]
 pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
     if trace.total_frames == 0 || trace.micro_addresses.is_empty() {
@@ -18,12 +72,15 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: R
 }
 
 fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
-    let stride = (trace.micro_addresses.len() / 320).max(1);
     let total = config.total();
+    let mut sampler = SourceSampler::for_trace(trace);
     let mut out = String::with_capacity(260_000);
     out.push_str("<g id=\"f3-microcode\">\n");
 
-    for event in trace.micro_addresses.iter().step_by(stride) {
+    for event in &trace.micro_addresses {
+        if !sampler.take(event.source) {
+            continue;
+        }
         let moment = trace_moment(event.frame, event.ordinal, trace, config) + 0.008;
         let address_color = transition_color(event.source, event.address);
 
@@ -130,6 +187,21 @@ fn norm(value: f32, total: f32) -> f32 {
 mod tests {
     use super::*;
     use leader_core::{build_topology, Machine};
+
+    #[test]
+    fn sampler_preserves_each_transition_class() {
+        let trace = Machine::run_match("microcode-sampler", 5000);
+        let mut sampler = SourceSampler::for_trace(&trace);
+        let mut rendered_source = [false; 5];
+        for event in &trace.micro_addresses {
+            if sampler.take(event.source) {
+                rendered_source[source_index(event.source)] = true;
+            }
+        }
+        for (index, seen) in rendered_source.into_iter().enumerate() {
+            assert!(seen, "microaddress source {index} was lost during sampling");
+        }
+    }
 
     #[test]
     fn real_replay_renders_semantic_micro_pc_transitions() {
