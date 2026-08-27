@@ -51,10 +51,6 @@ impl AluTrace {
     }
 }
 
-/// Physical state of the 16-bit PC + 1 ripple incrementer.
-///
-/// `carry_chain` uses bits 0..=16 exactly like the 8-bit ALU: bit 0 is the
-/// injected +1 carry, bit N+1 is the carry leaving slice N.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PcIncrementTrace {
     pub before: u16,
@@ -81,6 +77,38 @@ impl PcIncrementTrace {
     #[must_use]
     pub const fn overflow(self) -> bool {
         self.carry_chain & (1_u32 << 16) != 0
+    }
+}
+
+/// Exact state of a 16-bit decrement-by-one ripple network.
+/// `borrow_chain` bit 0 is the injected decrement request; bit N+1 is the
+/// borrow leaving slice N.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Decrement16Trace {
+    pub before: u16,
+    pub after: u16,
+    pub borrow_chain: u32,
+}
+
+impl Decrement16Trace {
+    #[must_use]
+    pub const fn borrow_in(self, bit: usize) -> bool {
+        self.borrow_chain & (1_u32 << bit) != 0
+    }
+
+    #[must_use]
+    pub const fn borrow_out(self, bit: usize) -> bool {
+        self.borrow_chain & (1_u32 << (bit + 1)) != 0
+    }
+
+    #[must_use]
+    pub const fn low_byte_borrow(self) -> bool {
+        self.borrow_chain & (1_u32 << 8) != 0
+    }
+
+    #[must_use]
+    pub const fn underflow(self) -> bool {
+        self.borrow_chain & (1_u32 << 16) != 0
     }
 }
 
@@ -124,7 +152,6 @@ pub fn ripple_sub(lhs: u8, rhs: u8, op: AluOp) -> AluTrace {
     trace
 }
 
-/// Computes PC + 1 using sixteen explicit half-adder-like ripple slices.
 #[must_use]
 pub fn ripple_increment16(before: u16) -> PcIncrementTrace {
     let mut after = 0_u16;
@@ -148,6 +175,32 @@ pub fn ripple_increment16(before: u16) -> PcIncrementTrace {
         before,
         after,
         carry_chain: chain,
+    }
+}
+
+#[must_use]
+pub fn ripple_decrement16(before: u16) -> Decrement16Trace {
+    let mut after = 0_u16;
+    let mut borrow = true;
+    let mut chain = 1_u32;
+
+    for bit in 0..16 {
+        let input = (before >> bit) & 1 != 0;
+        let output = input ^ borrow;
+        let borrow_out = !input & borrow;
+        if output {
+            after |= 1_u16 << bit;
+        }
+        borrow = borrow_out;
+        if borrow {
+            chain |= 1_u32 << (bit + 1);
+        }
+    }
+
+    Decrement16Trace {
+        before,
+        after,
+        borrow_chain: chain,
     }
 }
 
@@ -216,5 +269,21 @@ mod tests {
         assert_eq!(trace.after, 0x1300);
         assert!(trace.low_byte_carry());
         assert!(!trace.overflow());
+    }
+
+    #[test]
+    fn decrementer_matches_wrapping_sub_for_all_addresses() {
+        for before in 0_u16..=u16::MAX {
+            let trace = ripple_decrement16(before);
+            assert_eq!(trace.after, before.wrapping_sub(1));
+        }
+    }
+
+    #[test]
+    fn decrementer_exposes_low_to_high_borrow() {
+        let trace = ripple_decrement16(0x1200);
+        assert_eq!(trace.after, 0x11ff);
+        assert!(trace.low_byte_borrow());
+        assert!(!trace.underflow());
     }
 }
