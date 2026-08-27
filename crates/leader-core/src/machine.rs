@@ -1,11 +1,13 @@
 use crate::game::{Bot, GameState, InputState, Projectile, ALIEN_COLS, ALIEN_H, ALIEN_ROWS, ALIEN_W, PLAYER_Y, SCREEN_H, SCREEN_W};
-use crate::isa::{Bus, Cpu, MicroCycleKind, MicroPhase, StepOutcome};
+use crate::isa::{Bus, Cpu, MicroCycleKind, MicroPhase, PcSource, Reg, StepOutcome};
+use crate::logic::{AluTrace, PcIncrementTrace};
 use crate::microcode::MicroAddressTransition;
 use crate::program::{build_game_rom, command, DEVICE_CMD, DEVICE_STATUS, INPUT_PORT, RAM_BASE};
 use crate::rng::{hash_seed, DeterministicRng};
 use crate::trace::{
-    BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind, FrameState, KillEvent,
-    MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PhaseKind,
+    AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind, FrameState,
+    KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent, PcEventKind,
+    PhaseKind, RegisterWriteEvent,
 };
 
 const ROM_LIMIT: usize = 0x2000;
@@ -478,6 +480,63 @@ impl Bus for Machine {
         self.sample(pc, PhaseKind::Alu, None, Some(value), control);
     }
 
+    fn trace_alu_exact(&mut self, pc: u16, trace: AluTrace, control: &'static str) {
+        self.trace.alu_events.push(AluEvent {
+            frame: self.game.frame,
+            ordinal: self.ordinal,
+            pc,
+            trace,
+            control,
+        });
+        self.sample(pc, PhaseKind::Alu, None, Some(trace.result), control);
+    }
+
+    fn trace_register_write(
+        &mut self,
+        pc: u16,
+        reg: Reg,
+        before: u8,
+        after: u8,
+        control: &'static str,
+    ) {
+        self.trace.register_writes.push(RegisterWriteEvent {
+            frame: self.game.frame,
+            ordinal: self.ordinal,
+            pc,
+            reg,
+            before,
+            after,
+            control,
+        });
+    }
+
+    fn trace_pc_increment(&mut self, trace: PcIncrementTrace) {
+        self.trace.pc_events.push(PcEvent {
+            frame: self.game.frame,
+            ordinal: self.ordinal,
+            kind: PcEventKind::Increment(trace),
+        });
+    }
+
+    fn trace_pc_load(
+        &mut self,
+        before: u16,
+        after: u16,
+        source: PcSource,
+        control: &'static str,
+    ) {
+        self.trace.pc_events.push(PcEvent {
+            frame: self.game.frame,
+            ordinal: self.ordinal,
+            kind: PcEventKind::Load {
+                before,
+                after,
+                source,
+                control,
+            },
+        });
+    }
+
     fn trace_control(&mut self, pc: u16, control: &'static str) {
         self.sample(pc, PhaseKind::Decode, Some(pc), None, control);
     }
@@ -598,6 +657,12 @@ mod tests {
         assert!(!trace.micro_cycles.is_empty());
         assert!(!trace.micro_addresses.is_empty());
         assert!(!trace.bus_transactions.is_empty());
+        assert!(!trace.alu_events.is_empty());
+        assert!(!trace.register_writes.is_empty());
+        assert!(!trace.pc_events.is_empty());
+        assert!(trace.alu_events.iter().any(|event| event.control == "CMPI"));
+        assert!(trace.register_writes.iter().any(|event| event.control == "LDI"));
+        assert!(trace.pc_events.iter().any(|event| matches!(event.kind, PcEventKind::Load { .. })));
         assert!(trace.bus_transactions.iter().any(|event| {
             event.kind == BusTransactionKind::Fetch
                 && event.address_source == BusAddressSource::ProgramCounter
