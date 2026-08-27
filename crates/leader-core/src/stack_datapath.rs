@@ -1,5 +1,5 @@
 use crate::logic::{ripple_decrement16, ripple_increment16, Decrement16Trace, PcIncrementTrace};
-use crate::trace::{MatchTrace, PhaseKind};
+use crate::trace::{BusTransactionKind, MatchTrace, PhaseKind};
 
 const STACK_WINDOW_START: u16 = 0x7F00;
 const STACK_WINDOW_END: u16 = 0x7FFF;
@@ -22,6 +22,47 @@ pub struct StackDatapathEvent {
 
 #[must_use]
 pub fn derive_stack_datapath(trace: &MatchTrace) -> Vec<StackDatapathEvent> {
+    if !trace.bus_transactions.is_empty() {
+        return trace
+            .bus_transactions
+            .iter()
+            .filter_map(|transaction| {
+                let address = transaction.address?;
+                let data = transaction.data?;
+                if !(STACK_WINDOW_START..=STACK_WINDOW_END).contains(&address) {
+                    return None;
+                }
+
+                let kind = match transaction.kind {
+                    BusTransactionKind::Write => {
+                        let before = address.wrapping_add(1);
+                        let step = ripple_decrement16(before);
+                        debug_assert_eq!(step.after, address);
+                        StackDatapathKind::Push(step)
+                    }
+                    BusTransactionKind::Read => {
+                        let step = ripple_increment16(address);
+                        StackDatapathKind::Pop(step)
+                    }
+                    _ => return None,
+                };
+
+                Some(StackDatapathEvent {
+                    frame: transaction.frame,
+                    ordinal: transaction.ordinal,
+                    pc: transaction.pc,
+                    address,
+                    data,
+                    kind,
+                })
+            })
+            .collect();
+    }
+
+    derive_legacy_stack_datapath(trace)
+}
+
+fn derive_legacy_stack_datapath(trace: &MatchTrace) -> Vec<StackDatapathEvent> {
     trace
         .micro_samples
         .iter()
@@ -80,6 +121,16 @@ mod tests {
     }
 
     #[test]
+    fn native_stack_stream_is_independent_from_semantic_samples() {
+        let trace = Machine::run_match("f3-stack-native", 5000);
+        let expected = derive_stack_datapath(&trace);
+        assert!(!expected.is_empty());
+        let mut without_samples = trace.clone();
+        without_samples.micro_samples.clear();
+        assert_eq!(derive_stack_datapath(&without_samples), expected);
+    }
+
+    #[test]
     fn push_and_pop_steps_are_bit_accurate() {
         let trace = Machine::run_match("f3-stack-bits", 5000);
         let events = derive_stack_datapath(&trace);
@@ -95,5 +146,13 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn legacy_stack_reconstruction_remains_available() {
+        let mut trace = Machine::run_match("f3-stack-legacy", 5000);
+        trace.bus_transactions.clear();
+        let events = derive_stack_datapath(&trace);
+        assert!(!events.is_empty());
     }
 }
