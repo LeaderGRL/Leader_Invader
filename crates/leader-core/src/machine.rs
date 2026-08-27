@@ -3,7 +3,10 @@ use crate::isa::{Bus, Cpu, MicroCycleKind, MicroPhase, StepOutcome};
 use crate::microcode::MicroAddressTransition;
 use crate::program::{build_game_rom, command, DEVICE_CMD, DEVICE_STATUS, INPUT_PORT, RAM_BASE};
 use crate::rng::{hash_seed, DeterministicRng};
-use crate::trace::{FrameState, KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PhaseKind};
+use crate::trace::{
+    BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind, FrameState, KillEvent,
+    MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PhaseKind,
+};
 
 const ROM_LIMIT: usize = 0x2000;
 const VRAM: usize = 0x8000;
@@ -128,6 +131,15 @@ impl Machine {
         self.input = self.bot.decide(&self.game, &mut self.rng);
         let encoded = encode_input(self.input);
         self.mem[INPUT_PORT as usize] = encoded;
+        self.record_bus_transaction(
+            pc,
+            Some(INPUT_PORT),
+            Some(encoded),
+            BusAddressSource::None,
+            BusDataSource::Device,
+            BusTransactionKind::Input,
+            "AUTOPILOT_INPUT",
+        );
         self.sample(pc, PhaseKind::Input, Some(INPUT_PORT), Some(encoded), "AUTOPILOT_INPUT");
     }
 
@@ -249,29 +261,132 @@ impl Machine {
 
     fn render_video_device(&mut self, pc: u16) {
         self.last_vram_checksum = self.render_vram();
-        self.sample(pc, PhaseKind::MemoryWrite, Some(VRAM as u16), Some((self.last_vram_checksum & 0xFF) as u8), "VRAM_RASTER_1536_BYTES");
+        let data = (self.last_vram_checksum & 0xFF) as u8;
+        self.record_bus_transaction(
+            pc,
+            Some(VRAM as u16),
+            Some(data),
+            BusAddressSource::Cpu,
+            BusDataSource::Cpu,
+            BusTransactionKind::Write,
+            "VRAM_RASTER_1536_BYTES",
+        );
+        self.sample(
+            pc,
+            PhaseKind::MemoryWrite,
+            Some(VRAM as u16),
+            Some(data),
+            "VRAM_RASTER_1536_BYTES",
+        );
     }
 
     fn dma_scanout(&mut self, pc: u16) {
-        self.sample(pc, PhaseKind::Dma, Some(VRAM as u16), Some((self.last_vram_checksum & 0xFF) as u8), "DMA_BURST_1536_BYTES");
-        self.sample(pc, PhaseKind::Scanout, Some(VRAM as u16), None, "SCANOUT_128x96_1BPP");
+        let data = (self.last_vram_checksum & 0xFF) as u8;
+        self.record_bus_transaction(
+            pc,
+            Some(VRAM as u16),
+            Some(data),
+            BusAddressSource::Dma,
+            BusDataSource::Vram,
+            BusTransactionKind::Dma,
+            "DMA_BURST_1536_BYTES",
+        );
+        self.sample(
+            pc,
+            PhaseKind::Dma,
+            Some(VRAM as u16),
+            Some(data),
+            "DMA_BURST_1536_BYTES",
+        );
+        self.record_bus_transaction(
+            pc,
+            Some(VRAM as u16),
+            None,
+            BusAddressSource::Dma,
+            BusDataSource::Vram,
+            BusTransactionKind::Scanout,
+            "SCANOUT_128x96_1BPP",
+        );
+        self.sample(
+            pc,
+            PhaseKind::Scanout,
+            Some(VRAM as u16),
+            None,
+            "SCANOUT_128x96_1BPP",
+        );
     }
 
     fn check_clear(&mut self, pc: u16) {
         let status = u8::from(self.game.is_clear());
         self.mem[DEVICE_STATUS as usize] = status;
-        self.sample(pc, PhaseKind::MemoryWrite, Some(DEVICE_STATUS), Some(status), "GAME_CLEAR_STATUS");
+        self.record_bus_transaction(
+            pc,
+            Some(DEVICE_STATUS),
+            Some(status),
+            BusAddressSource::Cpu,
+            BusDataSource::Cpu,
+            BusTransactionKind::Write,
+            "GAME_CLEAR_STATUS",
+        );
+        self.sample(
+            pc,
+            PhaseKind::MemoryWrite,
+            Some(DEVICE_STATUS),
+            Some(status),
+            "GAME_CLEAR_STATUS",
+        );
     }
 
     fn traced_read(&mut self, pc: u16, address: u16, control: &'static str) -> u8 {
         let value = self.mem[address as usize];
+        self.record_bus_transaction(
+            pc,
+            Some(address),
+            Some(value),
+            BusAddressSource::Cpu,
+            bus_data_source(address),
+            BusTransactionKind::Read,
+            control,
+        );
         self.sample(pc, PhaseKind::MemoryRead, Some(address), Some(value), control);
         value
     }
 
     fn traced_write(&mut self, pc: u16, address: u16, value: u8, control: &'static str) {
         self.mem[address as usize] = value;
+        self.record_bus_transaction(
+            pc,
+            Some(address),
+            Some(value),
+            BusAddressSource::Cpu,
+            BusDataSource::Cpu,
+            BusTransactionKind::Write,
+            control,
+        );
         self.sample(pc, PhaseKind::MemoryWrite, Some(address), Some(value), control);
+    }
+
+    fn record_bus_transaction(
+        &mut self,
+        pc: u16,
+        address: Option<u16>,
+        data: Option<u8>,
+        address_source: BusAddressSource,
+        data_source: BusDataSource,
+        kind: BusTransactionKind,
+        control: &'static str,
+    ) {
+        self.trace.bus_transactions.push(BusTransactionEvent {
+            frame: self.game.frame,
+            ordinal: self.ordinal,
+            pc,
+            address,
+            data,
+            address_source,
+            data_source,
+            kind,
+            control,
+        });
     }
 
     fn write16(&mut self, pc: u16, address: u16, value: u16, control: &'static str) {
@@ -331,6 +446,15 @@ impl Machine {
 impl Bus for Machine {
     fn fetch8(&mut self, pc: u16) -> u8 {
         let value = self.mem[pc as usize];
+        self.record_bus_transaction(
+            pc,
+            Some(pc),
+            Some(value),
+            BusAddressSource::ProgramCounter,
+            BusDataSource::Rom,
+            BusTransactionKind::Fetch,
+            "ROM_FETCH",
+        );
         self.sample(pc, PhaseKind::Fetch, Some(pc), Some(value), "ROM_FETCH");
         value
     }
@@ -408,6 +532,16 @@ impl Bus for Machine {
     }
 }
 
+fn bus_data_source(address: u16) -> BusDataSource {
+    match address {
+        0x0000..=0x1fff => BusDataSource::Rom,
+        0x2000..=0x7fff => BusDataSource::Ram,
+        0x8000..=0x87ff => BusDataSource::Vram,
+        0xa000..=0xa1ff => BusDataSource::Device,
+        _ => BusDataSource::None,
+    }
+}
+
 fn encode_input(input: InputState) -> u8 {
     let horizontal = if input.horizontal < 0 { 1 } else if input.horizontal > 0 { 2 } else { 0 };
     horizontal | if input.fire { 4 } else { 0 }
@@ -463,6 +597,21 @@ mod tests {
         assert!(trace.micro_samples.iter().any(|s| s.control == "WAIT_VBLANK"));
         assert!(!trace.micro_cycles.is_empty());
         assert!(!trace.micro_addresses.is_empty());
+        assert!(!trace.bus_transactions.is_empty());
+        assert!(trace.bus_transactions.iter().any(|event| {
+            event.kind == BusTransactionKind::Fetch
+                && event.address_source == BusAddressSource::ProgramCounter
+                && event.data_source == BusDataSource::Rom
+        }));
+        assert!(trace.bus_transactions.iter().any(|event| {
+            event.kind == BusTransactionKind::Dma
+                && event.address_source == BusAddressSource::Dma
+                && event.data_source == BusDataSource::Vram
+        }));
+        assert!(trace.bus_transactions.iter().any(|event| {
+            event.kind == BusTransactionKind::Input
+                && event.data_source == BusDataSource::Device
+        }));
         assert!(trace.micro_addresses.iter().any(|event| event.address == crate::microcode::uaddr::FETCH_T0));
         assert!(trace.micro_addresses.iter().any(|event| event.address >= crate::microcode::uaddr::EXEC_BASE));
         assert!(trace.micro_addresses.iter().any(|event| event.source == crate::microcode::MicroAddressSource::Dispatch));
