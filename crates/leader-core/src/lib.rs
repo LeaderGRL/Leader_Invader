@@ -11,7 +11,10 @@ pub mod rng;
 pub mod topology;
 pub mod trace;
 
-pub use datapath::{bit16, bit8, derive_datapath, DatapathEvent, DatapathState};
+pub use datapath::{
+    bit16, bit8, derive_alu_datapath, derive_datapath, AluDatapathEvent, DatapathEvent,
+    DatapathState,
+};
 pub use isa::{Cpu, Flags, Reg, StepOutcome};
 pub use logic::{logic_trace, ripple_add, ripple_sub, AluOp, AluTrace};
 pub use machine::Machine;
