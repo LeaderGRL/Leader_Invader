@@ -16,7 +16,7 @@ pub use isa::{Cpu, Flags, Reg, StepOutcome};
 pub use logic::{logic_trace, ripple_add, ripple_sub, AluOp, AluTrace};
 pub use machine::Machine;
 pub use topology::{Group, Link, Node, Rect, SignalKind, Topology};
-pub use trace::{AluSnapshot, FrameState, KillEvent, MatchTrace, MicroSample, PhaseKind, ProjectileSnapshot};
+pub use trace::{FrameState, KillEvent, MatchTrace, MicroSample, PhaseKind, ProjectileSnapshot};
 
 #[must_use]
 pub fn build_topology() -> Topology {
