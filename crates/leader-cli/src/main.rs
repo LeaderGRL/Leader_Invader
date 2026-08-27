@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod director;
+mod microcode_overlay;
 mod pc_overlay;
 
 use std::{
@@ -92,6 +93,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let svg = render(&topology, &trace, config);
     let svg = director::apply_camera(svg, &topology, &trace, config);
     let svg = pc_overlay::apply(svg, &topology, &trace, config);
+    let svg = microcode_overlay::apply(svg, &topology, &trace, config);
     write(&options.output, svg.as_bytes())?;
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
