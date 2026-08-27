@@ -1,6 +1,7 @@
 use std::fmt::Write;
 
 use crate::game::{GameState, Projectile, ALIEN_ROWS};
+use crate::logic::AluTrace;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhaseKind {
@@ -32,6 +33,29 @@ impl PhaseKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AluSnapshot {
+    pub op: &'static str,
+    pub lhs: u8,
+    pub rhs: u8,
+    pub rhs_effective: u8,
+    pub result: u8,
+    pub carry_chain: u16,
+}
+
+impl From<AluTrace> for AluSnapshot {
+    fn from(value: AluTrace) -> Self {
+        Self {
+            op: value.op.as_str(),
+            lhs: value.lhs,
+            rhs: value.rhs,
+            rhs_effective: value.rhs_effective,
+            result: value.result,
+            carry_chain: value.carry_chain,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MicroSample {
     pub frame: u32,
@@ -41,6 +65,7 @@ pub struct MicroSample {
     pub address: Option<u16>,
     pub data: Option<u8>,
     pub control: String,
+    pub alu: Option<AluSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,16 +220,31 @@ impl MatchTrace {
             let data = sample
                 .data
                 .map_or_else(|| "null".to_owned(), |value| value.to_string());
+            let alu = sample.alu.map_or_else(
+                || "null".to_owned(),
+                |value| {
+                    format!(
+                        "{{\"op\":\"{}\",\"lhs\":{},\"rhs\":{},\"rhs_effective\":{},\"result\":{},\"carry_chain\":{}}}",
+                        value.op,
+                        value.lhs,
+                        value.rhs,
+                        value.rhs_effective,
+                        value.result,
+                        value.carry_chain
+                    )
+                },
+            );
             let _ = write!(
                 out,
-                "\n    {{\"frame\":{},\"ordinal\":{},\"phase\":\"{}\",\"pc\":{},\"address\":{},\"data\":{},\"control\":\"{}\"}}",
+                "\n    {{\"frame\":{},\"ordinal\":{},\"phase\":\"{}\",\"pc\":{},\"address\":{},\"data\":{},\"control\":\"{}\",\"alu\":{}}}",
                 sample.frame,
                 sample.ordinal,
                 sample.phase.as_str(),
                 sample.pc,
                 address,
                 data,
-                json_escape(&sample.control)
+                json_escape(&sample.control),
+                alu
             );
         }
         out.push_str("\n  ]\n}\n");
