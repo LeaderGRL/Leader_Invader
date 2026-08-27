@@ -1,8 +1,8 @@
 use crate::game::{Bot, GameState, InputState, Projectile, ALIEN_COLS, ALIEN_H, ALIEN_ROWS, ALIEN_W, PLAYER_Y, SCREEN_H, SCREEN_W};
-use crate::isa::{Bus, Cpu, StepOutcome};
+use crate::isa::{Bus, Cpu, MicroCycleKind, MicroPhase, StepOutcome};
 use crate::program::{build_game_rom, command, DEVICE_CMD, DEVICE_STATUS, INPUT_PORT, RAM_BASE};
 use crate::rng::{hash_seed, DeterministicRng};
-use crate::trace::{FrameState, KillEvent, MatchTrace, MicroSample, PhaseKind};
+use crate::trace::{FrameState, KillEvent, MatchTrace, MicroCycleEvent, MicroSample, PhaseKind};
 
 const ROM_LIMIT: usize = 0x2000;
 const VRAM: usize = 0x8000;
@@ -356,6 +356,35 @@ impl Bus for Machine {
     fn trace_control(&mut self, pc: u16, control: &'static str) {
         self.sample(pc, PhaseKind::Decode, Some(pc), None, control);
     }
+
+    fn trace_microcycle(
+        &mut self,
+        phase: MicroPhase,
+        kind: MicroCycleKind,
+        pc: u16,
+        mar: u16,
+        mdr: u8,
+        ir: u8,
+        control: &'static str,
+    ) {
+        self.trace.micro_cycles.push(MicroCycleEvent {
+            frame: self.game.frame,
+            ordinal: self.ordinal,
+            phase,
+            kind,
+            pc,
+            mar,
+            mdr,
+            ir,
+            control,
+        });
+        let timing = match phase {
+            MicroPhase::T0 => "µT0",
+            MicroPhase::T1 => "µT1",
+            MicroPhase::T2 => "µT2",
+        };
+        self.sample(pc, PhaseKind::Decode, Some(mar), Some(mdr), timing);
+    }
 }
 
 fn encode_input(input: InputState) -> u8 {
@@ -411,6 +440,13 @@ mod tests {
         assert!(trace.micro_samples.iter().any(|s| s.control == "CALL"));
         assert!(trace.micro_samples.iter().any(|s| s.control == "RET"));
         assert!(trace.micro_samples.iter().any(|s| s.control == "WAIT_VBLANK"));
+        assert!(!trace.micro_cycles.is_empty());
+        assert!(trace.micro_cycles.iter().any(|event| {
+            event.phase == MicroPhase::T0 && event.kind == MicroCycleKind::FetchAddress
+        }));
+        assert!(trace.micro_cycles.iter().any(|event| {
+            event.phase == MicroPhase::T2 && event.kind == MicroCycleKind::DecodeLatch
+        }));
     }
 
     #[test]
