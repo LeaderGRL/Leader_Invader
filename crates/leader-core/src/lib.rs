@@ -10,6 +10,7 @@ pub mod microcode;
 pub mod pc_datapath;
 pub mod program;
 pub mod rng;
+pub mod stack_datapath;
 pub mod topology;
 pub mod trace;
 
@@ -21,11 +22,13 @@ pub use datapath::{
 };
 pub use isa::{Cpu, Flags, PcSource, Reg, StepOutcome};
 pub use logic::{
-    logic_trace, ripple_add, ripple_increment16, ripple_sub, AluOp, AluTrace, PcIncrementTrace,
+    logic_trace, ripple_add, ripple_decrement16, ripple_increment16, ripple_sub, AluOp, AluTrace,
+    Decrement16Trace, PcIncrementTrace,
 };
 pub use machine::Machine;
-pub use microcode::{control_word, ControlWord};
+pub use microcode::{control_word, decode as decode_microcode, ControlWord, MicroInstruction, MicroOp};
 pub use pc_datapath::{derive_pc_datapath, PcDatapathEvent, PcDatapathKind};
+pub use stack_datapath::{derive_stack_datapath, StackDatapathEvent, StackDatapathKind};
 pub use topology::{Group, Link, Node, Rect, SignalKind, Topology};
 pub use trace::{
     AluEvent, FrameState, KillEvent, MatchTrace, MicroSample, PcEvent, PcEventKind, PhaseKind,
