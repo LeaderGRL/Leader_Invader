@@ -1,4 +1,4 @@
-use crate::topology::{Rect, Topology};
+use crate::topology::{Link, Node, Rect, SignalKind, Topology};
 
 const INNER_PAD: f32 = 28.0;
 
@@ -8,6 +8,7 @@ pub fn apply_visual_layout(topology: &mut Topology) {
     pack_program_counter(topology);
     pack_decode(topology);
     align_register_file(topology);
+    inject_decoder_lines(topology);
 }
 
 fn pack_program_counter(topology: &mut Topology) {
@@ -106,6 +107,38 @@ fn align_register_file(topology: &mut Topology) {
     }
 }
 
+/// Adds the physical one-hot decoder outputs that were implicit in the original
+/// block-level diagram. They are presentation nodes, but their activation is driven
+/// by the exact opcode nibble selected by `derive_decoder_datapath`.
+fn inject_decoder_lines(topology: &mut Topology) {
+    if topology.node("decA0").is_some() {
+        return;
+    }
+
+    for bank in ['A', 'B'] {
+        let base_y = if bank == 'A' { 520.0 } else { 650.0 };
+        for line in 0..16 {
+            let col = (line % 8) as f32;
+            let row = (line / 8) as f32;
+            let id = format!("dec{bank}{line}");
+            topology.nodes.push(Node {
+                id: id.clone(),
+                title: format!("{bank}:{line:X}"),
+                kind: "1-HOT".to_owned(),
+                group: "decode".to_owned(),
+                bounds: Rect::new(1260.0 + col * 80.0, base_y + row * 48.0, 58.0, 34.0),
+            });
+            topology.links.push(Link {
+                id: format!("decode-{bank}-{line}"),
+                from: format!("dec{bank}"),
+                to: id,
+                signal: SignalKind::Control,
+                label: format!("D{line:X}"),
+            });
+        }
+    }
+}
+
 fn set(topology: &mut Topology, id: &str, x: f32, y: f32) {
     if let Some(node) = topology.nodes.iter_mut().find(|node| node.id == id) {
         node.bounds.x = x;
@@ -175,6 +208,17 @@ mod tests {
                     topology.node(&format!("reg{name}{bit}")).is_some(),
                     "missing register bit {name}{bit}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn decoder_exposes_all_one_hot_lines() {
+        let mut topology = crate::topology::build_topology();
+        apply_visual_layout(&mut topology);
+        for bank in ['A', 'B'] {
+            for line in 0..16 {
+                assert!(topology.node(&format!("dec{bank}{line}")).is_some());
             }
         }
     }
