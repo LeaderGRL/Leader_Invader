@@ -368,7 +368,9 @@ impl Bus for Machine {
         self.trace.micro_addresses.push(MicroAddressEvent {
             frame: self.game.frame,
             ordinal: self.ordinal,
+            before: transition.before,
             address: transition.after,
+            source: transition.source,
             opcode,
             control_bits,
             label,
@@ -463,6 +465,9 @@ mod tests {
         assert!(!trace.micro_addresses.is_empty());
         assert!(trace.micro_addresses.iter().any(|event| event.address == crate::microcode::uaddr::FETCH_T0));
         assert!(trace.micro_addresses.iter().any(|event| event.address >= crate::microcode::uaddr::EXEC_BASE));
+        assert!(trace.micro_addresses.iter().any(|event| event.source == crate::microcode::MicroAddressSource::Dispatch));
+        assert!(trace.micro_addresses.iter().any(|event| event.source == crate::microcode::MicroAddressSource::RoutineCall));
+        assert!(trace.micro_addresses.iter().any(|event| event.source == crate::microcode::MicroAddressSource::RoutineReturn));
     }
 
     #[test]
