@@ -19,77 +19,81 @@ pub struct PcDatapathEvent {
     pub kind: PcDatapathKind,
 }
 
-/// Builds the physical PC timeline from the real execution stream.
+#[derive(Debug, Clone, Copy)]
+struct PendingLoad {
+    frame: u32,
+    ordinal: u16,
+    sequential: u16,
+    source: PcSource,
+    conditional: bool,
+}
+
+/// Builds the physical PC timeline from the real execution stream in O(n).
 ///
-/// Every fetch is guaranteed to have been advanced by `Cpu::next8` through
-/// `ripple_increment16`. Non-sequential mux selections are detected at instruction
-/// boundaries by comparing the sequential PC after operand fetches with the next
-/// instruction fetch address.
+/// Every fetch is guaranteed to have been advanced semantically by `Cpu::next8`
+/// through `ripple_increment16`. When a PC-control micro-op is encountered, the
+/// next fetch resolves whether the input mux selected a non-sequential source.
 #[must_use]
 pub fn derive_pc_datapath(trace: &MatchTrace) -> Vec<PcDatapathEvent> {
-    let samples = &trace.micro_samples;
     let mut events = Vec::new();
+    let mut last_fetch = None::<u16>;
+    let mut pending = None::<PendingLoad>;
 
-    for sample in samples.iter().filter(|sample| sample.phase == PhaseKind::Fetch) {
-        events.push(PcDatapathEvent {
-            frame: sample.frame,
-            ordinal: sample.ordinal,
-            kind: PcDatapathKind::Increment(ripple_increment16(sample.pc)),
-        });
-    }
-
-    for (index, sample) in samples.iter().enumerate() {
-        if sample.phase != PhaseKind::Decode || !is_pc_control(sample.control.as_str()) {
-            continue;
-        }
-
-        let Some(next_fetch) = samples[index + 1..]
-            .iter()
-            .find(|candidate| candidate.phase == PhaseKind::Fetch)
-        else {
-            continue;
-        };
-
-        let instruction_start = sample.pc;
-        let mut last_fetch = instruction_start;
-        for candidate in samples[..index].iter().rev() {
-            if candidate.phase == PhaseKind::Fetch {
-                last_fetch = candidate.pc;
-                if candidate.pc == instruction_start {
-                    break;
+    for sample in &trace.micro_samples {
+        if sample.phase == PhaseKind::Fetch {
+            if let Some(load) = pending.take() {
+                if !load.conditional || sample.pc != load.sequential {
+                    events.push(PcDatapathEvent {
+                        frame: load.frame,
+                        ordinal: load.ordinal,
+                        kind: PcDatapathKind::Load {
+                            before: load.sequential,
+                            after: sample.pc,
+                            source: load.source,
+                        },
+                    });
                 }
             }
-        }
-        let sequential = ripple_increment16(last_fetch).after;
-        let source = match sample.control.as_str() {
-            "JMP" => Some(PcSource::Jump),
-            "CALL" => Some(PcSource::Call),
-            "RET" => Some(PcSource::Return),
-            "JZ" | "JNZ" | "JLT" | "JGE" | "JC" if next_fetch.pc != sequential => {
-                Some(PcSource::Branch)
-            }
-            _ => None,
-        };
 
-        if let Some(source) = source {
+            let increment = ripple_increment16(sample.pc);
             events.push(PcDatapathEvent {
                 frame: sample.frame,
-                ordinal: sample.ordinal.saturating_add(1),
-                kind: PcDatapathKind::Load {
-                    before: sequential,
-                    after: next_fetch.pc,
-                    source,
-                },
+                ordinal: sample.ordinal,
+                kind: PcDatapathKind::Increment(increment),
             });
+            last_fetch = Some(sample.pc);
+            continue;
         }
+
+        if sample.phase != PhaseKind::Decode {
+            continue;
+        }
+
+        let Some((source, conditional)) = pc_control(sample.control.as_str()) else {
+            continue;
+        };
+        let sequential = ripple_increment16(last_fetch.unwrap_or(sample.pc)).after;
+        pending = Some(PendingLoad {
+            frame: sample.frame,
+            ordinal: sample.ordinal.saturating_add(1),
+            sequential,
+            source,
+            conditional,
+        });
     }
 
     events.sort_by_key(|event| (event.frame, event.ordinal));
     events
 }
 
-fn is_pc_control(control: &str) -> bool {
-    matches!(control, "JMP" | "JZ" | "JNZ" | "JLT" | "JGE" | "JC" | "CALL" | "RET")
+fn pc_control(control: &str) -> Option<(PcSource, bool)> {
+    match control {
+        "JMP" => Some((PcSource::Jump, false)),
+        "CALL" => Some((PcSource::Call, false)),
+        "RET" => Some((PcSource::Return, false)),
+        "JZ" | "JNZ" | "JLT" | "JGE" | "JC" => Some((PcSource::Branch, true)),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
