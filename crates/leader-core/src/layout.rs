@@ -7,6 +7,7 @@ const INNER_PAD: f32 = 28.0;
 /// from the visual packing so F3 can evolve without turning coordinates into API.
 pub fn apply_visual_layout(topology: &mut Topology) {
     pack_program_counter(topology);
+    pack_decode(topology);
 }
 
 fn pack_program_counter(topology: &mut Topology) {
@@ -34,6 +35,21 @@ fn pack_program_counter(topology: &mut Topology) {
     if let Some(group) = topology.groups.iter_mut().find(|group| group.id == "pc") {
         group.bounds = Rect::new(520.0, 80.0, 650.0, 700.0);
     }
+}
+
+fn pack_decode(topology: &mut Topology) {
+    // Keep the first MDR/IR cells clear of the left dashed border and pull the
+    // microcode pair back from the right edge. The bank spacing itself stays intact.
+    for bit in 0..8 {
+        if let Some(node) = topology.nodes.iter_mut().find(|node| node.id == format!("mdrBit{bit}")) {
+            node.bounds.x += 16.0;
+        }
+        if let Some(node) = topology.nodes.iter_mut().find(|node| node.id == format!("irBit{bit}")) {
+            node.bounds.x += 16.0;
+        }
+    }
+    set(topology, "microAddr", 1782.0, 220.0);
+    set(topology, "microRom", 1782.0, 340.0);
 }
 
 fn set(topology: &mut Topology, id: &str, x: f32, y: f32) {
