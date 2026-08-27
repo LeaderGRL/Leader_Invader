@@ -1,7 +1,6 @@
 use std::fmt::Write;
 
 use crate::game::{GameState, Projectile, ALIEN_ROWS};
-use crate::logic::AluTrace;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhaseKind {
@@ -33,29 +32,6 @@ impl PhaseKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AluSnapshot {
-    pub op: &'static str,
-    pub lhs: u8,
-    pub rhs: u8,
-    pub rhs_effective: u8,
-    pub result: u8,
-    pub carry_chain: u16,
-}
-
-impl From<AluTrace> for AluSnapshot {
-    fn from(value: AluTrace) -> Self {
-        Self {
-            op: value.op.as_str(),
-            lhs: value.lhs,
-            rhs: value.rhs,
-            rhs_effective: value.rhs_effective,
-            result: value.result,
-            carry_chain: value.carry_chain,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct MicroSample {
     pub frame: u32,
@@ -65,7 +41,6 @@ pub struct MicroSample {
     pub address: Option<u16>,
     pub data: Option<u8>,
     pub control: String,
-    pub alu: Option<AluSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,10 +51,7 @@ pub struct ProjectileSnapshot {
 
 impl From<Projectile> for ProjectileSnapshot {
     fn from(value: Projectile) -> Self {
-        Self {
-            x: value.x,
-            y: value.y,
-        }
+        Self { x: value.x, y: value.y }
     }
 }
 
@@ -169,83 +141,23 @@ impl MatchTrace {
             self.final_score,
             self.final_lives
         );
-
         for (index, kill) in self.kills.iter().enumerate() {
-            if index > 0 {
-                out.push(',');
-            }
-            let _ = write!(
-                out,
-                "\n    {{\"frame\":{},\"row\":{},\"col\":{},\"score_after\":{}}}",
-                kill.frame, kill.row, kill.col, kill.score_after
-            );
+            if index > 0 { out.push(','); }
+            let _ = write!(out, "\n    {{\"frame\":{},\"row\":{},\"col\":{},\"score_after\":{}}}", kill.frame, kill.row, kill.col, kill.score_after);
         }
-
         out.push_str("\n  ],\n  \"frames\": [");
         for (index, frame) in self.frames.iter().enumerate() {
-            if index > 0 {
-                out.push(',');
-            }
+            if index > 0 { out.push(','); }
             let player_shot = projectile_json(frame.player_shot);
             let enemy_shot = projectile_json(frame.enemy_shot);
-            let _ = write!(
-                out,
-                "\n    {{\"frame\":{},\"player_x\":{},\"fleet_x\":{},\"fleet_y\":{},\"fleet_dir\":{},\"player_shot\":{},\"enemy_shot\":{},\"alive_rows\":[{},{},{},{}],\"score\":{},\"lives\":{},\"pc\":{},\"vram_checksum\":{}}}",
-                frame.frame,
-                frame.player_x,
-                frame.fleet_x,
-                frame.fleet_y,
-                frame.fleet_dir,
-                player_shot,
-                enemy_shot,
-                frame.alive_rows[0],
-                frame.alive_rows[1],
-                frame.alive_rows[2],
-                frame.alive_rows[3],
-                frame.score,
-                frame.lives,
-                frame.pc,
-                frame.vram_checksum
-            );
+            let _ = write!(out, "\n    {{\"frame\":{},\"player_x\":{},\"fleet_x\":{},\"fleet_y\":{},\"fleet_dir\":{},\"player_shot\":{},\"enemy_shot\":{},\"alive_rows\":[{},{},{},{}],\"score\":{},\"lives\":{},\"pc\":{},\"vram_checksum\":{}}}", frame.frame, frame.player_x, frame.fleet_x, frame.fleet_y, frame.fleet_dir, player_shot, enemy_shot, frame.alive_rows[0], frame.alive_rows[1], frame.alive_rows[2], frame.alive_rows[3], frame.score, frame.lives, frame.pc, frame.vram_checksum);
         }
-
         out.push_str("\n  ],\n  \"micro_samples\": [");
         for (index, sample) in self.micro_samples.iter().enumerate() {
-            if index > 0 {
-                out.push(',');
-            }
-            let address = sample
-                .address
-                .map_or_else(|| "null".to_owned(), |value| value.to_string());
-            let data = sample
-                .data
-                .map_or_else(|| "null".to_owned(), |value| value.to_string());
-            let alu = sample.alu.map_or_else(
-                || "null".to_owned(),
-                |value| {
-                    format!(
-                        "{{\"op\":\"{}\",\"lhs\":{},\"rhs\":{},\"rhs_effective\":{},\"result\":{},\"carry_chain\":{}}}",
-                        value.op,
-                        value.lhs,
-                        value.rhs,
-                        value.rhs_effective,
-                        value.result,
-                        value.carry_chain
-                    )
-                },
-            );
-            let _ = write!(
-                out,
-                "\n    {{\"frame\":{},\"ordinal\":{},\"phase\":\"{}\",\"pc\":{},\"address\":{},\"data\":{},\"control\":\"{}\",\"alu\":{}}}",
-                sample.frame,
-                sample.ordinal,
-                sample.phase.as_str(),
-                sample.pc,
-                address,
-                data,
-                json_escape(&sample.control),
-                alu
-            );
+            if index > 0 { out.push(','); }
+            let address = sample.address.map_or_else(|| "null".to_owned(), |value| value.to_string());
+            let data = sample.data.map_or_else(|| "null".to_owned(), |value| value.to_string());
+            let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"phase\":\"{}\",\"pc\":{},\"address\":{},\"data\":{},\"control\":\"{}\"}}", sample.frame, sample.ordinal, sample.phase.as_str(), sample.pc, address, data, json_escape(&sample.control));
         }
         out.push_str("\n  ]\n}\n");
         out
@@ -253,15 +165,9 @@ impl MatchTrace {
 }
 
 fn projectile_json(projectile: Option<ProjectileSnapshot>) -> String {
-    projectile.map_or_else(
-        || "null".to_owned(),
-        |value| format!("{{\"x\":{},\"y\":{}}}", value.x, value.y),
-    )
+    projectile.map_or_else(|| "null".to_owned(), |value| format!("{{\"x\":{},\"y\":{}}}", value.x, value.y))
 }
 
 fn json_escape(input: &str) -> String {
-    input
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
+    input.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
 }
