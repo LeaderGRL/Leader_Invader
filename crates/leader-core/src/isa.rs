@@ -1,4 +1,6 @@
-use crate::logic::{logic_trace, ripple_add, ripple_sub, AluOp, AluTrace};
+use crate::logic::{
+    logic_trace, ripple_add, ripple_increment16, ripple_sub, AluOp, AluTrace, PcIncrementTrace,
+};
 use crate::trace::PhaseKind;
 
 pub mod op {
@@ -96,6 +98,27 @@ pub enum StepOutcome {
     Fault { pc: u16, opcode: u8 },
 }
 
+/// Physical source selected by the program-counter input mux.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PcSource {
+    Jump,
+    Branch,
+    Call,
+    Return,
+}
+
+impl PcSource {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Jump => "jump",
+            Self::Branch => "branch",
+            Self::Call => "call",
+            Self::Return => "return",
+        }
+    }
+}
+
 pub trait Bus {
     fn fetch8(&mut self, pc: u16) -> u8;
     fn read8(&mut self, pc: u16, address: u16) -> u8;
@@ -114,6 +137,20 @@ pub trait Bus {
         _reg: Reg,
         _before: u8,
         _after: u8,
+        _control: &'static str,
+    ) {
+    }
+
+    /// Called for every sequential byte fetch. The CPU state is already computed
+    /// by this exact ripple trace; implementations may record it for diagnostics.
+    fn trace_pc_increment(&mut self, _trace: PcIncrementTrace) {}
+
+    /// Called only when the PC input mux selects a non-sequential source.
+    fn trace_pc_load(
+        &mut self,
+        _before: u16,
+        _after: u16,
+        _source: PcSource,
         _control: &'static str,
     ) {
     }
@@ -267,7 +304,8 @@ impl Cpu {
                 StepOutcome::Continue
             }
             op::JMP => {
-                self.pc = self.next16(bus);
+                let target = self.next16(bus);
+                self.load_pc(bus, target, PcSource::Jump, "JMP");
                 bus.trace_control(pc, "JMP");
                 StepOutcome::Continue
             }
@@ -281,14 +319,15 @@ impl Cpu {
                 let ret = self.pc;
                 self.push(bus, pc, (ret >> 8) as u8);
                 self.push(bus, pc, ret as u8);
-                self.pc = target;
+                self.load_pc(bus, target, PcSource::Call, "CALL");
                 bus.trace_control(pc, "CALL");
                 StepOutcome::Continue
             }
             op::RET => {
                 let lo = self.pop(bus, pc);
                 let hi = self.pop(bus, pc);
-                self.pc = u16::from_le_bytes([lo, hi]);
+                let target = u16::from_le_bytes([lo, hi]);
+                self.load_pc(bus, target, PcSource::Return, "RET");
                 bus.trace_control(pc, "RET");
                 StepOutcome::Continue
             }
@@ -305,9 +344,14 @@ impl Cpu {
         }
     }
 
+    /// Fetches one byte and advances the semantic PC through the same sixteen-bit
+    /// ripple incrementer represented by INC LO / CARRY / INC HI in the SVG.
     fn next8<B: Bus>(&mut self, bus: &mut B) -> u8 {
-        let value = bus.fetch8(self.pc);
-        self.pc = self.pc.wrapping_add(1);
+        let before = self.pc;
+        let value = bus.fetch8(before);
+        let increment = ripple_increment16(before);
+        self.pc = increment.after;
+        bus.trace_pc_increment(increment);
         value
     }
 
@@ -319,6 +363,18 @@ impl Cpu {
 
     fn next_reg<B: Bus>(&mut self, bus: &mut B) -> Option<Reg> {
         Reg::from_code(self.next8(bus))
+    }
+
+    fn load_pc<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        target: u16,
+        source: PcSource,
+        control: &'static str,
+    ) {
+        let before = self.pc;
+        self.pc = target;
+        bus.trace_pc_load(before, target, source, control);
     }
 
     fn write_reg<B: Bus>(
@@ -448,7 +504,7 @@ impl Cpu {
     ) -> StepOutcome {
         let target = self.next16(bus);
         if condition {
-            self.pc = target;
+            self.load_pc(bus, target, PcSource::Branch, control);
         }
         bus.trace_control(pc, control);
         StepOutcome::Continue
@@ -530,14 +586,18 @@ mod tests {
         memory: Vec<u8>,
         exact_alu: Vec<AluTrace>,
         writes: Vec<(Reg, u8, u8)>,
+        pc_increments: Vec<PcIncrementTrace>,
+        pc_loads: Vec<(u16, u16, PcSource, &'static str)>,
     }
 
     impl Default for TestBus {
         fn default() -> Self {
             Self {
-                memory: vec![0; 256],
+                memory: vec![0; 65_536],
                 exact_alu: Vec::new(),
                 writes: Vec::new(),
+                pc_increments: Vec::new(),
+                pc_loads: Vec::new(),
             }
         }
     }
@@ -546,18 +606,23 @@ mod tests {
         fn fetch8(&mut self, pc: u16) -> u8 {
             self.memory[pc as usize]
         }
+
         fn read8(&mut self, _pc: u16, address: u16) -> u8 {
             self.memory[address as usize]
         }
+
         fn write8(&mut self, _pc: u16, address: u16, value: u8) {
             self.memory[address as usize] = value;
         }
+
         fn trace_decode(&mut self, _pc: u16, _opcode: u8, _mnemonic: &'static str) {}
         fn trace_alu(&mut self, _pc: u16, _value: u8, _control: &'static str) {}
         fn trace_control(&mut self, _pc: u16, _control: &'static str) {}
+
         fn trace_alu_exact(&mut self, _pc: u16, trace: AluTrace, _control: &'static str) {
             self.exact_alu.push(trace);
         }
+
         fn trace_register_write(
             &mut self,
             _pc: u16,
@@ -567,6 +632,20 @@ mod tests {
             _control: &'static str,
         ) {
             self.writes.push((reg, before, after));
+        }
+
+        fn trace_pc_increment(&mut self, trace: PcIncrementTrace) {
+            self.pc_increments.push(trace);
+        }
+
+        fn trace_pc_load(
+            &mut self,
+            before: u16,
+            after: u16,
+            source: PcSource,
+            control: &'static str,
+        ) {
+            self.pc_loads.push((before, after, source, control));
         }
     }
 
@@ -595,5 +674,47 @@ mod tests {
         assert_eq!(bus.exact_alu[1].result, 10);
         assert_eq!(bus.exact_alu[1].op, AluOp::Add);
         assert!(bus.writes.contains(&(Reg::A, 4, 10)));
+        assert!(!bus.pc_increments.is_empty());
+    }
+
+    #[test]
+    fn fetch_pc_advance_is_the_exact_ripple_incrementer() {
+        let mut bus = TestBus::default();
+        bus.memory[0x00FF] = op::NOP;
+        let mut cpu = Cpu::default();
+        cpu.pc = 0x00FF;
+        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
+        let increment = bus.pc_increments.last().copied().expect("pc increment");
+        assert_eq!(increment.before, 0x00FF);
+        assert_eq!(increment.after, 0x0100);
+        assert!(increment.low_byte_carry());
+        assert_eq!(cpu.pc(), increment.after);
+    }
+
+    #[test]
+    fn jump_and_branch_select_nonsequential_pc_mux_sources() {
+        let mut bus = TestBus::default();
+        let program = [
+            op::JMP,
+            0x04,
+            0x00,
+            op::HALT,
+            op::JZ,
+            0x09,
+            0x00,
+            op::HALT,
+            op::HALT,
+            op::HALT,
+        ];
+        bus.memory[..program.len()].copy_from_slice(&program);
+        let mut cpu = Cpu::default();
+        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
+        assert_eq!(cpu.pc(), 4);
+        assert_eq!(bus.pc_loads[0].2, PcSource::Jump);
+
+        cpu.flags.zero = true;
+        assert_eq!(cpu.step(&mut bus), StepOutcome::Continue);
+        assert_eq!(cpu.pc(), 9);
+        assert_eq!(bus.pc_loads[1].2, PcSource::Branch);
     }
 }
