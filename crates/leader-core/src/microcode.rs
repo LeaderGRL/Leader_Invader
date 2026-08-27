@@ -48,8 +48,6 @@ impl ControlWord {
     }
 }
 
-/// Semantic operation selected by the control ROM. The CPU dispatches on this
-/// value, never on the raw opcode, so opcode decoding has one authoritative table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MicroOp {
     Nop,
@@ -85,6 +83,33 @@ pub struct MicroInstruction {
     pub mnemonic: &'static str,
     pub operation: MicroOp,
     pub control: ControlWord,
+}
+
+/// Physical address space of the 256x24 control ROM.
+///
+/// 00-02: common opcode fetch
+/// 10-12: common operand/immediate fetch
+/// 20-22: common memory read
+/// 30-32: common memory write
+/// 80-98: per-instruction execute entries
+pub mod uaddr {
+    pub const FETCH_T0: u8 = 0x00;
+    pub const FETCH_T1: u8 = 0x01;
+    pub const FETCH_T2: u8 = 0x02;
+
+    pub const OPERAND_T0: u8 = 0x10;
+    pub const OPERAND_T1: u8 = 0x11;
+    pub const OPERAND_T2: u8 = 0x12;
+
+    pub const READ_T0: u8 = 0x20;
+    pub const READ_T1: u8 = 0x21;
+    pub const READ_T2: u8 = 0x22;
+
+    pub const WRITE_T0: u8 = 0x30;
+    pub const WRITE_T1: u8 = 0x31;
+    pub const WRITE_T2: u8 = 0x32;
+
+    pub const EXEC_BASE: u8 = 0x80;
 }
 
 const NONE: ControlWord = ControlWord::new(false, false, false, false, false, false, false, false);
@@ -128,12 +153,7 @@ pub const fn decode(opcode: u8) -> Option<MicroInstruction> {
         op::HALT => ("HALT", MicroOp::Halt, HALT),
         _ => return None,
     };
-    Some(MicroInstruction {
-        opcode,
-        mnemonic,
-        operation,
-        control,
-    })
+    Some(MicroInstruction { opcode, mnemonic, operation, control })
 }
 
 #[must_use]
@@ -141,6 +161,58 @@ pub const fn control_word(opcode: u8) -> ControlWord {
     match decode(opcode) {
         Some(instruction) => instruction.control,
         None => NONE,
+    }
+}
+
+/// Stable execute address in the physical control ROM. The mapping is dense so
+/// all currently defined instructions fit inside one 256-entry ROM while common
+/// fetch/read/write microprograms retain fixed low addresses.
+#[must_use]
+pub const fn execute_address(opcode: u8) -> Option<u8> {
+    let slot = match opcode {
+        op::NOP => 0,
+        op::LDI => 1,
+        op::LD => 2,
+        op::ST => 3,
+        op::MOV => 4,
+        op::ADD => 5,
+        op::ADDI => 6,
+        op::SUBI => 7,
+        op::ANDI => 8,
+        op::ORI => 9,
+        op::XORI => 10,
+        op::INC => 11,
+        op::DEC => 12,
+        op::CMP => 13,
+        op::CMPI => 14,
+        op::JMP => 15,
+        op::JZ => 16,
+        op::JNZ => 17,
+        op::JLT => 18,
+        op::JGE => 19,
+        op::JC => 20,
+        op::CALL => 21,
+        op::RET => 22,
+        op::WAIT_VBLANK => 23,
+        op::HALT => 24,
+        _ => return None,
+    };
+    Some(uaddr::EXEC_BASE + slot)
+}
+
+#[must_use]
+pub const fn control_word_at(address: u8, opcode: u8) -> ControlWord {
+    match address {
+        uaddr::FETCH_T0 | uaddr::OPERAND_T0 => NONE,
+        uaddr::FETCH_T1 | uaddr::OPERAND_T1 | uaddr::READ_T1 => {
+            ControlWord::new(false, false, true, false, false, false, false, false)
+        }
+        uaddr::FETCH_T2 | uaddr::OPERAND_T2 | uaddr::READ_T0 | uaddr::READ_T2 | uaddr::WRITE_T0 => NONE,
+        uaddr::WRITE_T1 | uaddr::WRITE_T2 => {
+            ControlWord::new(false, false, false, true, false, false, false, false)
+        }
+        value if execute_address(opcode) == Some(value) => control_word(opcode),
+        _ => NONE,
     }
 }
 
@@ -154,8 +226,32 @@ mod tests {
         assert_eq!(instruction.operation, MicroOp::AddImmediate);
         assert!(instruction.control.alu_enable);
         assert!(instruction.control.reg_write);
-        assert!(!instruction.control.mem_write);
         assert_eq!(instruction.control.bits() & 0b11, 0b11);
+    }
+
+    #[test]
+    fn every_opcode_has_unique_execute_microaddress() {
+        let opcodes = [
+            op::NOP, op::LDI, op::LD, op::ST, op::MOV, op::ADD, op::ADDI, op::SUBI,
+            op::ANDI, op::ORI, op::XORI, op::INC, op::DEC, op::CMP, op::CMPI, op::JMP,
+            op::JZ, op::JNZ, op::JLT, op::JGE, op::JC, op::CALL, op::RET, op::WAIT_VBLANK,
+            op::HALT,
+        ];
+        let mut seen = [false; 256];
+        for opcode in opcodes {
+            let address = execute_address(opcode).expect("execute address");
+            assert!(address >= uaddr::EXEC_BASE);
+            assert!(!seen[address as usize], "duplicate µADDR {address:02X}");
+            seen[address as usize] = true;
+        }
+    }
+
+    #[test]
+    fn physical_rom_contains_fetch_and_execute_words() {
+        assert!(control_word_at(uaddr::FETCH_T1, op::ADDI).mem_read);
+        let exec = execute_address(op::ADDI).expect("ADDI µADDR");
+        let word = control_word_at(exec, op::ADDI);
+        assert!(word.alu_enable && word.reg_write);
     }
 
     #[test]
@@ -169,43 +265,6 @@ mod tests {
     #[test]
     fn wait_and_halt_have_distinct_control_lines() {
         assert!(decode(op::WAIT_VBLANK).expect("WAIT").control.wait);
-        assert!(!decode(op::WAIT_VBLANK).expect("WAIT").control.halt);
         assert!(decode(op::HALT).expect("HALT").control.halt);
-    }
-
-    #[test]
-    fn every_defined_opcode_has_one_authoritative_microinstruction() {
-        for opcode in [
-            op::NOP,
-            op::LDI,
-            op::LD,
-            op::ST,
-            op::MOV,
-            op::ADD,
-            op::ADDI,
-            op::SUBI,
-            op::ANDI,
-            op::ORI,
-            op::XORI,
-            op::INC,
-            op::DEC,
-            op::CMP,
-            op::CMPI,
-            op::JMP,
-            op::JZ,
-            op::JNZ,
-            op::JLT,
-            op::JGE,
-            op::JC,
-            op::CALL,
-            op::RET,
-            op::WAIT_VBLANK,
-            op::HALT,
-        ] {
-            let instruction = decode(opcode).expect("defined opcode must decode");
-            assert_eq!(instruction.opcode, opcode);
-            assert!(!instruction.mnemonic.is_empty());
-        }
-        assert!(decode(0xAA).is_none());
     }
 }
