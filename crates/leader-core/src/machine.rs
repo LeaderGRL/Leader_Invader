@@ -1,13 +1,13 @@
 use crate::game::{Bot, GameState, InputState, Projectile, ALIEN_COLS, ALIEN_H, ALIEN_ROWS, ALIEN_W, PLAYER_Y, SCREEN_H, SCREEN_W};
-use crate::isa::{Bus, Cpu, MicroCycleKind, MicroPhase, PcSource, Reg, StepOutcome};
+use crate::isa::{Bus, Cpu, Flags, MicroCycleKind, MicroPhase, PcSource, Reg, StepOutcome};
 use crate::logic::{AluTrace, PcIncrementTrace};
 use crate::microcode::MicroAddressTransition;
 use crate::program::{build_game_rom, command, DEVICE_CMD, DEVICE_STATUS, INPUT_PORT, RAM_BASE};
 use crate::rng::{hash_seed, DeterministicRng};
 use crate::trace::{
-    AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind, FrameState,
-    KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent, PcEventKind,
-    PhaseKind, RegisterWriteEvent,
+    AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind, FlagEvent,
+    FrameState, KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent,
+    PcEventKind, PhaseKind, RegisterWriteEvent,
 };
 
 const ROM_LIMIT: usize = 0x2000;
@@ -491,6 +491,18 @@ impl Bus for Machine {
         self.sample(pc, PhaseKind::Alu, None, Some(trace.result), control);
     }
 
+    fn trace_flags(&mut self, pc: u16, flags: Flags, control: &'static str) {
+        self.trace.flag_events.push(FlagEvent {
+            frame: self.game.frame,
+            ordinal: self.ordinal,
+            pc,
+            zero: flags.zero,
+            carry: flags.carry,
+            less: flags.less,
+            control,
+        });
+    }
+
     fn trace_register_write(
         &mut self,
         pc: u16,
@@ -658,9 +670,11 @@ mod tests {
         assert!(!trace.micro_addresses.is_empty());
         assert!(!trace.bus_transactions.is_empty());
         assert!(!trace.alu_events.is_empty());
+        assert!(!trace.flag_events.is_empty());
         assert!(!trace.register_writes.is_empty());
         assert!(!trace.pc_events.is_empty());
         assert!(trace.alu_events.iter().any(|event| event.control == "CMPI"));
+        assert!(trace.flag_events.iter().any(|event| event.control == "CMPI"));
         assert!(trace.register_writes.iter().any(|event| event.control == "LDI"));
         assert!(trace.pc_events.iter().any(|event| matches!(event.kind, PcEventKind::Load { .. })));
         assert!(trace.micro_addresses.iter().any(|event| event.control_bits > u32::from(u8::MAX)));
