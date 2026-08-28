@@ -23,7 +23,7 @@ impl MemoryRegion {
 
     #[must_use]
     pub const fn len(self) -> usize {
-        usize::from(self.end) - usize::from(self.start) + 1
+        self.end as usize - self.start as usize + 1
     }
 
     #[must_use]
