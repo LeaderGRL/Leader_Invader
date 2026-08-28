@@ -5,7 +5,7 @@ use std::fmt::Write;
 
 use leader_core::game::{ALIEN_COLS, ALIEN_ROWS, PLAYER_Y};
 use leader_core::rng::hash_seed;
-use leader_core::{FrameState, MatchTrace, PhaseKind, Rect, Topology};
+use leader_core::{FrameState, MatchTrace, PhaseKind, ProjectileSnapshot, Rect, Topology, ENEMY_SHOT_SLOTS};
 
 #[derive(Debug, Clone, Copy)]
 pub struct RenderConfig {
@@ -356,8 +356,10 @@ fn render_game(out: &mut String, trace: &MatchTrace, config: RenderConfig, total
         r##"<g color="#b7ff72"><animateTransform attributeName="transform" type="translate" values="{player_values}" keyTimes="{player_keys}" dur="{total:.3}s" repeatCount="indefinite" calcMode="linear"/><use href="#player" width="11" height="6"/></g><rect y="93" width="128" height="1" fill="#17382c"/>"##
     );
 
-    render_projectiles(out, trace, config, total, true);
-    render_projectiles(out, trace, config, total, false);
+    render_projectile_track(out, trace, config, total, true, 0);
+    for slot in 0..ENEMY_SHOT_SLOTS {
+        render_projectile_track(out, trace, config, total, false, slot);
+    }
 
     let clear = config.game_end();
     let _ = write!(
@@ -369,44 +371,41 @@ fn render_game(out: &mut String, trace: &MatchTrace, config: RenderConfig, total
     );
 }
 
-fn render_projectiles(
+fn render_projectile_track(
     out: &mut String,
     trace: &MatchTrace,
     config: RenderConfig,
     total: f32,
     player: bool,
+    slot: usize,
 ) {
+    let projectile_at = |frame: &FrameState| -> Option<ProjectileSnapshot> {
+        if player {
+            frame.player_shot
+        } else {
+            frame.enemy_shots[slot]
+        }
+    };
+
     let mut start: Option<(usize, i16, i16)> = None;
     for (index, frame) in trace.frames.iter().enumerate() {
-        let projectile = if player { frame.player_shot } else { frame.enemy_shot };
+        let projectile = projectile_at(frame);
         match (start, projectile) {
-            (None, Some(p)) => start = Some((index, p.x, p.y)),
+            (None, Some(projectile)) => start = Some((index, projectile.x, projectile.y)),
             (Some((start_index, start_x, start_y)), None) => {
                 let end_index = index.saturating_sub(1);
-                let end = if player {
-                    trace.frames[end_index].player_shot
-                } else {
-                    trace.frames[end_index].enemy_shot
-                };
-                if let Some(end) = end {
-                    let t1 = trace_time(trace.frames[start_index].frame, trace.total_frames, config);
-                    let t2 = trace_time(trace.frames[end_index].frame, trace.total_frames, config)
-                        .max(t1 + 0.04);
-                    let class = if player { "#e8e677" } else { "#ff8065" };
-                    let _ = write!(
+                if let Some(end) = projectile_at(&trace.frames[end_index]) {
+                    render_projectile_segment(
                         out,
-                        r##"<rect fill="{class}" width="1" height="{}" opacity="0"><animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;{:.6};{:.6};{:.6};{:.6};1" dur="{total:.3}s" repeatCount="indefinite"/><animateTransform attributeName="transform" type="translate" values="{start_x} {start_y};{start_x} {start_y};{} {};{} {}" keyTimes="0;{:.6};{:.6};1" dur="{total:.3}s" repeatCount="indefinite"/></rect>"##,
-                        if player { 4 } else { 3 },
-                        norm(t1, total),
-                        norm(t1 + 0.02, total),
-                        norm(t2, total),
-                        norm(t2 + 0.02, total),
-                        end.x,
-                        end.y,
-                        end.x,
-                        end.y,
-                        norm(t1, total),
-                        norm(t2, total)
+                        trace,
+                        config,
+                        total,
+                        player,
+                        start_index,
+                        end_index,
+                        start_x,
+                        start_y,
+                        end,
                     );
                 }
                 start = None;
@@ -414,6 +413,57 @@ fn render_projectiles(
             _ => {}
         }
     }
+
+    if let Some((start_index, start_x, start_y)) = start {
+        let end_index = trace.frames.len().saturating_sub(1);
+        if let Some(end) = projectile_at(&trace.frames[end_index]) {
+            render_projectile_segment(
+                out,
+                trace,
+                config,
+                total,
+                player,
+                start_index,
+                end_index,
+                start_x,
+                start_y,
+                end,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_projectile_segment(
+    out: &mut String,
+    trace: &MatchTrace,
+    config: RenderConfig,
+    total: f32,
+    player: bool,
+    start_index: usize,
+    end_index: usize,
+    start_x: i16,
+    start_y: i16,
+    end: ProjectileSnapshot,
+) {
+    let t1 = trace_time(trace.frames[start_index].frame, trace.total_frames, config);
+    let t2 = trace_time(trace.frames[end_index].frame, trace.total_frames, config).max(t1 + 0.04);
+    let class = if player { "#e8e677" } else { "#ff8065" };
+    let _ = write!(
+        out,
+        r##"<rect fill="{class}" width="1" height="{}" opacity="0"><animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;{:.6};{:.6};{:.6};{:.6};1" dur="{total:.3}s" repeatCount="indefinite"/><animateTransform attributeName="transform" type="translate" values="{start_x} {start_y};{start_x} {start_y};{} {};{} {}" keyTimes="0;{:.6};{:.6};1" dur="{total:.3}s" repeatCount="indefinite"/></rect>"##,
+        if player { 4 } else { 3 },
+        norm(t1, total),
+        norm(t1 + 0.02, total),
+        norm(t2, total),
+        norm(t2 + 0.02, total),
+        end.x,
+        end.y,
+        end.x,
+        end.y,
+        norm(t1, total),
+        norm(t2, total)
+    );
 }
 
 fn render_camera(out: &mut String, topology: &Topology, config: RenderConfig) {
@@ -647,5 +697,17 @@ mod tests {
         assert!(svg.contains("GAME CLEAR"));
         assert!(!svg.contains("<script"));
         assert!(!svg.contains("javascript:"));
+    }
+
+    #[test]
+    fn renderer_replays_all_enemy_projectile_slots() {
+        let topology = build_topology();
+        let trace = Machine::run_match("svg-multi-shot", 5_000);
+        assert!(trace
+            .frames
+            .iter()
+            .any(|frame| frame.enemy_shots.iter().flatten().count() >= 2));
+        let svg = render(&topology, &trace, RenderConfig::default());
+        assert!(svg.matches("fill=\"#ff8065\"").count() >= 2);
     }
 }
