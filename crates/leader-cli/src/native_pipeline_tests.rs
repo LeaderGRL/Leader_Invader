@@ -3,8 +3,8 @@ use leader_svg::{render, RenderConfig};
 
 use crate::{
     alu_overlay, bus_overlay, control_state_overlay, control_word_overlay, decoder_overlay,
-    director, microcode_overlay, pc_overlay, register_overlay, render_native_base, stack_overlay,
-    timing_overlay,
+    director, microcode_overlay, microcycle_overlay, pc_overlay, register_overlay,
+    render_native_base, stack_overlay, timing_overlay,
 };
 
 fn apply_f3_pipeline(
@@ -19,6 +19,7 @@ fn apply_f3_pipeline(
     let svg = microcode_overlay::apply(svg, topology, trace, config);
     let svg = control_word_overlay::apply(svg, topology, trace, config);
     let svg = control_state_overlay::apply(svg, topology, trace, config);
+    let svg = microcycle_overlay::apply(svg, topology, trace, config);
     let svg = alu_overlay::apply(svg, topology, trace, config);
     let svg = register_overlay::apply(svg, topology, trace, config);
     let svg = bus_overlay::apply(svg, topology, trace, config);
