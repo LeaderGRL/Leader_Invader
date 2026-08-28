@@ -22,11 +22,14 @@ const REQUIRED_GROUPS: [&str; 12] = [
     "f3-timing",
 ];
 
-const REQUIRED_METADATA: [&str; 12] = [
+const REQUIRED_METADATA: [&str; 15] = [
     "data-pc-before=",
     "data-opcode=",
     "data-ucontrol=",
     "data-control-state=",
+    "data-control-value=",
+    "data-control-valid=",
+    "data-control-owner=",
     "data-micro-mar=",
     "data-alu-carry-chain=",
     "data-flags-packed=",
