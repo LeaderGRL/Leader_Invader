@@ -6,6 +6,7 @@ mod control_state_overlay;
 mod control_word_overlay;
 mod decoder_overlay;
 mod director;
+mod enemy_shot_overlay;
 mod flags_overlay;
 mod formation_cadence_overlay;
 mod microcode_overlay;
@@ -25,8 +26,8 @@ use std::{
 };
 
 use leader_core::{
-    build_topology, validate_call_stack_contract, validate_final_topology,
-    validate_formation_cadence_contract, validate_native_control_authority,
+    build_topology, validate_call_stack_contract, validate_enemy_shot_bank_contract,
+    validate_final_topology, validate_formation_cadence_contract, validate_native_control_authority,
     validate_shift_register_contract, validate_sp_event_stream, MatchTrace, MicroCycleKind, Machine,
     Topology,
 };
@@ -119,6 +120,7 @@ fn validate_native_trace(
         usize,
         leader_core::ShiftRegisterValidation,
         leader_core::FormationCadenceValidation,
+        leader_core::EnemyShotValidation,
     ),
     String,
 > {
@@ -132,7 +134,9 @@ fn validate_native_trace(
         .map_err(|error| format!("native M3 shift-register trace invalid: {error}"))?;
     let cadence = validate_formation_cadence_contract(trace)
         .map_err(|error| format!("native M3 formation cadence trace invalid: {error}"))?;
-    Ok((native, call_stack, sp_events, shift, cadence))
+    let enemy_shots = validate_enemy_shot_bank_contract(trace)
+        .map_err(|error| format!("native M3 enemy-shot bank invalid: {error}"))?;
+    Ok((native, call_stack, sp_events, shift, cadence, enemy_shots))
 }
 
 fn render_cmd(options: Options) -> Result<(), String> {
@@ -146,7 +150,8 @@ fn render_cmd(options: Options) -> Result<(), String> {
             options.max_frames
         ));
     }
-    let (validation, call_stack, sp_events, shift, cadence) = validate_native_trace(&trace)?;
+    let (validation, call_stack, sp_events, shift, cadence, enemy_shots) =
+        validate_native_trace(&trace)?;
     let config = RenderConfig::default();
     let svg = render_native_base(&topology, &trace, config);
     let svg = director::apply_camera(svg, &topology, &trace, config);
@@ -163,6 +168,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let svg = stack_overlay::apply(svg, &topology, &trace, config);
     let svg = formation_cadence_overlay::apply(svg, &topology, &trace, config);
     let svg = shift_register_overlay::apply(svg, &topology, &trace, config);
+    let svg = enemy_shot_overlay::apply(svg, &topology, &trace, config);
     let svg = timing_overlay::apply(svg, &topology, &trace, config);
     let svg_validation = render_contract::validate_native_svg_contract(&svg)
         .map_err(|error| format!("native SVG contract invalid: {error}"))?;
@@ -170,7 +176,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
     println!(
-        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} shift events / {} cadence clocks / {} cadence ticks / {} native overlays / {} bytes -> {}",
+        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} shift events / {} cadence clocks / {} cadence ticks / {} enemy-shot writes / {} max concurrent shots / {} native overlays / {} bytes -> {}",
         topology_validation.nodes,
         topology_validation.links,
         trace.total_frames,
@@ -184,6 +190,8 @@ fn render_cmd(options: Options) -> Result<(), String> {
         shift.data_writes + shift.offset_writes + shift.reads,
         cadence.clocks,
         cadence.ticks,
+        enemy_shots.ram_writes,
+        enemy_shots.max_active,
         svg_validation.overlay_groups,
         svg_validation.bytes,
         options.output.display()
@@ -196,10 +204,10 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
         options.output = PathBuf::from("generated/trace.json");
     }
     let trace = run_native_trace(&options.seed, options.max_frames);
-    let (_, _, _, shift, cadence) = validate_native_trace(&trace)?;
+    let (_, _, _, shift, cadence, enemy_shots) = validate_native_trace(&trace)?;
     write(&options.output, trace.to_json().as_bytes())?;
     println!(
-        "frames={} kills={} flag_events={} control_latch_events={} sp_events={} shift_events={} cadence_clocks={} cadence_ticks={} clear={}",
+        "frames={} kills={} flag_events={} control_latch_events={} sp_events={} shift_events={} cadence_clocks={} cadence_ticks={} enemy_shot_spawns={} enemy_shot_moves={} enemy_shot_clears={} max_enemy_shots={} clear={}",
         trace.total_frames,
         trace.kills.len(),
         trace.flag_events.len(),
@@ -208,6 +216,10 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
         shift.data_writes + shift.offset_writes + shift.reads,
         cadence.clocks,
         cadence.ticks,
+        enemy_shots.spawns,
+        enemy_shots.moves,
+        enemy_shots.clears,
+        enemy_shots.max_active,
         trace.finished
     );
     if trace.finished {
@@ -222,7 +234,8 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     let topology_validation = validate_final_topology(&topology)
         .map_err(|error| format!("final topology invalid: {error}"))?;
     let trace = run_native_trace(&options.seed, options.max_frames);
-    let (validation, call_stack, sp_events, shift, cadence) = validate_native_trace(&trace)?;
+    let (validation, call_stack, sp_events, shift, cadence, enemy_shots) =
+        validate_native_trace(&trace)?;
     let decode_latches = trace
         .micro_cycles
         .iter()
@@ -245,47 +258,17 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     println!("trace.pc_events={}", trace.pc_events.len());
     println!("trace.sp_events={}", trace.sp_events.len());
     println!("trace.native_verified_micro_words={}", validation.micro_words);
-    println!(
-        "trace.native_verified_decode_latches={}",
-        validation.decode_latches
-    );
-    println!(
-        "trace.native_verified_alu_events={}",
-        validation.alu_events
-    );
-    println!(
-        "trace.native_verified_flag_events={}",
-        validation.flag_events
-    );
-    println!(
-        "trace.native_verified_control_latches={}",
-        validation.control_latches
-    );
-    println!(
-        "trace.native_verified_register_writes={}",
-        validation.register_writes
-    );
-    println!(
-        "trace.native_verified_pc_increments={}",
-        validation.pc_increments
-    );
-    println!(
-        "trace.native_verified_pc_loads={}",
-        validation.pc_loads
-    );
-    println!(
-        "trace.native_verified_sp_events={}",
-        validation.sp_events
-    );
-    println!(
-        "trace.native_verified_rom_fetches={}",
-        validation.rom_fetches
-    );
+    println!("trace.native_verified_decode_latches={}", validation.decode_latches);
+    println!("trace.native_verified_alu_events={}", validation.alu_events);
+    println!("trace.native_verified_flag_events={}", validation.flag_events);
+    println!("trace.native_verified_control_latches={}", validation.control_latches);
+    println!("trace.native_verified_register_writes={}", validation.register_writes);
+    println!("trace.native_verified_pc_increments={}", validation.pc_increments);
+    println!("trace.native_verified_pc_loads={}", validation.pc_loads);
+    println!("trace.native_verified_sp_events={}", validation.sp_events);
+    println!("trace.native_verified_rom_fetches={}", validation.rom_fetches);
     println!("trace.native_verified_cpu_reads={}", validation.cpu_reads);
-    println!(
-        "trace.native_verified_cpu_writes={}",
-        validation.cpu_writes
-    );
+    println!("trace.native_verified_cpu_writes={}", validation.cpu_writes);
     println!("trace.native_verified_sp_bus_contract={sp_events}");
     println!("trace.shift_data_writes={}", shift.data_writes);
     println!("trace.shift_offset_writes={}", shift.offset_writes);
@@ -295,10 +278,14 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     println!("trace.cadence_divisor3={}", cadence.divisor3);
     println!("trace.cadence_divisor2={}", cadence.divisor2);
     println!("trace.cadence_divisor1={}", cadence.divisor1);
-    println!(
-        "trace.cadence_movement_transactions={}",
-        cadence.movement_transactions
-    );
+    println!("trace.cadence_movement_transactions={}", cadence.movement_transactions);
+    println!("trace.enemy_shot_transitions={}", enemy_shots.transitions);
+    println!("trace.enemy_shot_ram_writes={}", enemy_shots.ram_writes);
+    println!("trace.enemy_shot_spawns={}", enemy_shots.spawns);
+    println!("trace.enemy_shot_moves={}", enemy_shots.moves);
+    println!("trace.enemy_shot_clears={}", enemy_shots.clears);
+    println!("trace.enemy_shot_max_active={}", enemy_shots.max_active);
+    println!("trace.enemy_shot_slots_used={}", enemy_shots.slots_used);
     println!("trace.call_pairs={}", call_stack.call_pairs);
     println!("trace.return_pairs={}", call_stack.return_pairs);
     println!("trace.call_stack_bytes={}", call_stack.stack_bytes);
