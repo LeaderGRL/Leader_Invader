@@ -69,6 +69,14 @@ pub fn validate_final_topology(topology: &Topology) -> Result<TopologyValidation
         "regSelectLatch",
         "returnDataMux",
         "stackRam",
+        "dmaAddr",
+        "dmaData",
+        "xCounter",
+        "yCounter",
+        "pixelMux",
+        "scanShift",
+        "hsync",
+        "vsync",
         "display",
         "shiftHi",
         "shiftLo",
@@ -137,5 +145,13 @@ mod tests {
         topology.nodes.retain(|node| node.id != "shieldRam3");
         let error = validate_final_topology(&topology).expect_err("missing M3 hardware must fail");
         assert!(error.contains("shieldRam3") || error.contains("missing target"));
+    }
+
+    #[test]
+    fn missing_video_pipeline_hardware_is_detected() {
+        let mut topology = build_topology();
+        topology.nodes.retain(|node| node.id != "scanShift");
+        let error = validate_final_topology(&topology).expect_err("missing video hardware must fail");
+        assert!(error.contains("scanShift") || error.contains("missing target"));
     }
 }
