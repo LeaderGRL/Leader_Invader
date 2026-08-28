@@ -26,7 +26,7 @@ const REQUIRED_GROUPS: [&str; 16] = [
     "f3-timing",
 ];
 
-const REQUIRED_METADATA: [&str; 35] = [
+const REQUIRED_METADATA: [&str; 36] = [
     "data-pc-before=",
     "data-opcode=",
     "data-ucontrol=",
@@ -40,6 +40,7 @@ const REQUIRED_METADATA: [&str; 35] = [
     "data-flag-z=",
     "data-reg-before=",
     "data-bus-address-source=",
+    "data-bus-memory-owner=",
     "data-sp-before=",
     "data-sp-chain=",
     "data-cadence-alive=",
