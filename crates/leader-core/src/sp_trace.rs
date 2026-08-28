@@ -1,9 +1,8 @@
 use crate::{
-    ripple_decrement16, ripple_increment16, BusTransactionKind, MatchTrace, SpEvent, SpEventKind,
+    memory_map::STACK_REGION, ripple_decrement16, ripple_increment16, BusTransactionKind,
+    MatchTrace, SpEvent, SpEventKind,
 };
 
-const STACK_WINDOW_START: u16 = 0x7F00;
-const STACK_WINDOW_END: u16 = 0x7FFF;
 const MAX_NATIVE_SP_BUS_GAP: u16 = 4;
 
 /// Compatibility fallback for historical traces that predate CPU-native `SpEvent`s.
@@ -24,7 +23,7 @@ pub fn materialize_sp_events(trace: &mut MatchTrace) {
         let Some(data) = transaction.data else {
             continue;
         };
-        if !(STACK_WINDOW_START..=STACK_WINDOW_END).contains(&address) {
+        if !STACK_REGION.contains(address) {
             continue;
         }
 
@@ -62,8 +61,7 @@ pub fn validate_sp_event_stream(trace: &MatchTrace) -> Result<usize, String> {
         .bus_transactions
         .iter()
         .filter(|event| {
-            event.address
-                .is_some_and(|address| (STACK_WINDOW_START..=STACK_WINDOW_END).contains(&address))
+            event.address.is_some_and(|address| STACK_REGION.contains(address))
                 && matches!(event.kind, BusTransactionKind::Read | BusTransactionKind::Write)
         })
         .collect::<Vec<_>>();
@@ -94,10 +92,6 @@ pub fn validate_sp_event_stream(trace: &MatchTrace) -> Result<usize, String> {
             ));
         }
 
-        // CPU-native SP events are emitted after the shared READ/WRITE micro-routine
-        // returns to the STACK execute row. They must therefore follow their exact
-        // bus transaction locally, rather than share its ordinal as the historical
-        // materialized stream did.
         if sp.ordinal < bus.ordinal || sp.ordinal - bus.ordinal > MAX_NATIVE_SP_BUS_GAP {
             return Err(format!(
                 "SP event is not locally ordered after stack transaction at frame={} bus_ordinal={} sp_ordinal={}",
@@ -132,6 +126,12 @@ pub fn validate_sp_event_stream(trace: &MatchTrace) -> Result<usize, String> {
 mod tests {
     use super::*;
     use crate::Machine;
+
+    #[test]
+    fn stack_window_is_canonical_memory_map_region() {
+        assert_eq!(STACK_REGION.start, crate::memory_map::STACK_BASE);
+        assert_eq!(STACK_REGION.end, crate::memory_map::STACK_END);
+    }
 
     #[test]
     fn cpu_emits_balanced_bit_accurate_sp_stream_directly() {
