@@ -17,7 +17,7 @@ fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> Stri
     let events = derive_stack_datapath(trace);
     let stride = (events.len() / 100).max(1);
     let total = config.total();
-    let mut out = String::with_capacity(140_000);
+    let mut out = String::with_capacity(150_000);
     out.push_str("<g id=\"f3-stack\">\n");
 
     for event in events.iter().step_by(stride) {
@@ -43,12 +43,19 @@ fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> Stri
 
                 match event.kind {
                     StackDatapathKind::Push(step) => {
+                        // CALL sources its return byte combinationally from the stable PC.
+                        glow_node(out, topology, "returnDataMux", "#ff9b71");
+                        glow_node(out, topology, "pcMuxLo", "#ff9b71");
+                        glow_node(out, topology, "pcMuxHi", "#ff9b71");
                         glow_node(out, topology, "spDec", color);
                         if step.low_byte_borrow() {
                             glow_node(out, topology, "spBorrow", "#ffe16a");
                         }
                     }
                     StackDatapathKind::Pop(step) => {
+                        // RET routes the popped byte back through the address latches.
+                        glow_node(out, topology, "addrLoLatch", "#67d9b3");
+                        glow_node(out, topology, "addrHiLatch", "#67d9b3");
                         glow_node(out, topology, "spInc", color);
                         if step.low_byte_carry() {
                             glow_node(out, topology, "spBorrow", "#ffe16a");
@@ -125,6 +132,7 @@ mod tests {
         assert!(rendered.contains("data-sp-before=\""));
         assert!(rendered.contains("data-sp-after=\""));
         assert!(rendered.contains("data-stack-address=\""));
+        assert!(topology.node("returnDataMux").is_some());
         assert!(rendered.len() > 500);
     }
 
