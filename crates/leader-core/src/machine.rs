@@ -1,6 +1,6 @@
 use crate::game::{Bot, GameState, InputState, Projectile, ALIEN_COLS, ALIEN_H, ALIEN_ROWS, ALIEN_W, PLAYER_Y, SCREEN_H, SCREEN_W};
 use crate::isa::{Bus, Cpu, Flags, MicroCycleKind, MicroPhase, PcSource, Reg, StepOutcome};
-use crate::logic::{AluTrace, PcIncrementTrace};
+use crate::logic::{AluTrace, Decrement16Trace, PcIncrementTrace};
 use crate::microcode::MicroAddressTransition;
 use crate::program::{build_game_rom, command, DEVICE_CMD, DEVICE_STATUS, INPUT_PORT, RAM_BASE};
 use crate::rng::{hash_seed, DeterministicRng};
@@ -8,7 +8,7 @@ use crate::trace::{
     AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind,
     ControlLatchEvent, ControlLatchKind, FlagEvent, FrameState, KillEvent, MatchTrace,
     MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent, PcEventKind, PhaseKind,
-    RegisterWriteEvent,
+    RegisterWriteEvent, SpEvent, SpEventKind,
 };
 
 const ROM_LIMIT: usize = 0x2000;
@@ -523,6 +523,44 @@ impl Bus for Machine {
         });
     }
 
+    fn trace_sp_push(
+        &mut self,
+        pc: u16,
+        step: Decrement16Trace,
+        address: u16,
+        data: u8,
+        control: &'static str,
+    ) {
+        self.trace.sp_events.push(SpEvent {
+            frame: self.game.frame,
+            ordinal: self.ordinal,
+            pc,
+            address,
+            data,
+            kind: SpEventKind::Push(step),
+            control,
+        });
+    }
+
+    fn trace_sp_pop(
+        &mut self,
+        pc: u16,
+        step: PcIncrementTrace,
+        address: u16,
+        data: u8,
+        control: &'static str,
+    ) {
+        self.trace.sp_events.push(SpEvent {
+            frame: self.game.frame,
+            ordinal: self.ordinal,
+            pc,
+            address,
+            data,
+            kind: SpEventKind::Pop(step),
+            control,
+        });
+    }
+
     fn trace_register_write(
         &mut self,
         pc: u16,
@@ -694,6 +732,9 @@ mod tests {
         assert!(!trace.control_latch_events.is_empty());
         assert!(!trace.register_writes.is_empty());
         assert!(!trace.pc_events.is_empty());
+        assert!(!trace.sp_events.is_empty());
+        assert!(trace.sp_events.iter().any(|event| matches!(event.kind, SpEventKind::Push(_))));
+        assert!(trace.sp_events.iter().any(|event| matches!(event.kind, SpEventKind::Pop(_))));
         for kind in [
             ControlLatchKind::AddressLo,
             ControlLatchKind::AddressHi,
