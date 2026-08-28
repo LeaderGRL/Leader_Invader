@@ -8,7 +8,7 @@ pub struct NativeSvgValidation {
 
 pub const MAX_NATIVE_SVG_BYTES: usize = 5_000_000;
 
-const REQUIRED_GROUPS: [&str; 16] = [
+const REQUIRED_GROUPS: [&str; 17] = [
     "f3-pc",
     "f3-native-decoder",
     "f3-microcode",
@@ -19,6 +19,7 @@ const REQUIRED_GROUPS: [&str; 16] = [
     "f3-native-flags",
     "f3-native-registers",
     "f3-native-bus",
+    "m3-video-pipeline",
     "f3-stack",
     "m3-formation-cadence",
     "m3-shift-register",
@@ -27,7 +28,7 @@ const REQUIRED_GROUPS: [&str; 16] = [
     "f3-timing",
 ];
 
-const REQUIRED_METADATA: [&str; 38] = [
+const REQUIRED_METADATA: [&str; 45] = [
     "data-pc-before=",
     "data-opcode=",
     "data-ucontrol=",
@@ -44,6 +45,13 @@ const REQUIRED_METADATA: [&str; 38] = [
     "data-bus-memory-owner=",
     "data-bus-mmio-port=",
     "data-bus-mmio-access=",
+    "data-video-stage=",
+    "data-video-frame=",
+    "data-video-address=",
+    "data-video-checksum=",
+    "data-video-uaddr=",
+    "data-video-wait-bit=",
+    "data-video-control-word=",
     "data-sp-before=",
     "data-sp-chain=",
     "data-cadence-alive=",
@@ -68,7 +76,7 @@ const REQUIRED_METADATA: [&str; 38] = [
     "data-shield-source=",
 ];
 
-const REQUIRED_BUS_COVERAGE: [&str; 29] = [
+const REQUIRED_BUS_COVERAGE: [&str; 33] = [
     "data-bus-memory-owner=\"rom\"",
     "data-bus-memory-owner=\"ram\"",
     "data-bus-memory-owner=\"vram\"",
@@ -98,6 +106,10 @@ const REQUIRED_BUS_COVERAGE: [&str; 29] = [
     "data-bus-mmio-access=\"read_only\"",
     "data-bus-mmio-access=\"write_only\"",
     "data-bus-mmio-access=\"read_write\"",
+    "data-video-stage=\"raster\"",
+    "data-video-stage=\"dma\"",
+    "data-video-stage=\"scanout\"",
+    "data-video-stage=\"wait\"",
 ];
 
 pub fn validate_native_svg_contract(svg: &str) -> Result<NativeSvgValidation, String> {
