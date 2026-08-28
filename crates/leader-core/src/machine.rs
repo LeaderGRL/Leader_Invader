@@ -11,9 +11,9 @@ use crate::rng::{hash_seed, DeterministicRng};
 use crate::shift_register::{ShiftRegister16, ShiftRegisterEventKind};
 use crate::trace::{
     AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind,
-    ControlLatchEvent, ControlLatchKind, FlagEvent, FrameState, KillEvent, MatchTrace,
-    MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent, PcEventKind, PhaseKind,
-    RegisterWriteEvent, ShiftRegisterEvent, SpEvent, SpEventKind,
+    ControlLatchEvent, ControlLatchKind, FlagEvent, FormationCadenceTraceEvent, FrameState,
+    KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent, PcEventKind,
+    PhaseKind, RegisterWriteEvent, ShiftRegisterEvent, SpEvent, SpEventKind,
 };
 
 const ROM_LIMIT: usize = 0x2000;
@@ -167,6 +167,14 @@ impl Machine {
     fn move_fleet(&mut self, pc: u16) {
         let alive = self.game.alive_count().min(u32::from(u8::MAX)) as u8;
         let cadence = self.formation_cadence.clock(alive);
+        self.trace
+            .formation_cadence_events
+            .push(FormationCadenceTraceEvent {
+                frame: self.game.frame,
+                ordinal: self.ordinal,
+                pc,
+                event: cadence,
+            });
         if !cadence.tick {
             return;
         }
@@ -797,10 +805,16 @@ mod tests {
         assert!(!trace.alu_events.is_empty());
         assert!(!trace.flag_events.is_empty());
         assert!(!trace.control_latch_events.is_empty());
+        assert!(!trace.formation_cadence_events.is_empty());
         assert!(!trace.shift_register_events.is_empty());
         assert!(!trace.register_writes.is_empty());
         assert!(!trace.pc_events.is_empty());
         assert!(!trace.sp_events.is_empty());
+        assert!(trace.formation_cadence_events.iter().any(|event| event.event.tick));
+        assert!(trace.formation_cadence_events.iter().any(|event| !event.event.tick));
+        assert!(trace.formation_cadence_events.iter().any(|event| event.event.divisor == 3));
+        assert!(trace.formation_cadence_events.iter().any(|event| event.event.divisor == 2));
+        assert!(trace.formation_cadence_events.iter().any(|event| event.event.divisor == 1));
         assert!(trace.sp_events.iter().any(|event| matches!(event.kind, SpEventKind::Push(_))));
         assert!(trace.sp_events.iter().any(|event| matches!(event.kind, SpEventKind::Pop(_))));
         assert!(matches!(
