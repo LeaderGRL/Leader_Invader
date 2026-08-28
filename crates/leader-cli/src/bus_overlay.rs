@@ -1,8 +1,12 @@
+use std::collections::BTreeSet;
+
 use leader_core::{
     memory_owner, BusAddressSource, BusDataSource, BusTransactionKind, MatchTrace, MemoryOwner,
     Topology,
 };
 use leader_svg::RenderConfig;
+
+const MAX_BUS_EVENTS: usize = 150;
 
 #[must_use]
 pub fn apply(
@@ -26,12 +30,13 @@ pub fn apply(
 }
 
 fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
-    let stride = (trace.bus_transactions.len() / 150).max(1);
+    let indices = sampled_indices(trace);
     let total = config.total();
     let mut out = String::with_capacity(235_000);
     out.push_str("<g id=\"f3-native-bus\">\n");
 
-    for event in trace.bus_transactions.iter().step_by(stride) {
+    for index in indices {
+        let event = &trace.bus_transactions[index];
         let moment = trace_moment(event.frame, event.ordinal, trace, config) + 0.016;
         let k1 = norm(moment, total);
         let k2 = norm(moment + 0.022, total);
@@ -39,7 +44,9 @@ fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> Stri
         let address = event
             .address
             .map_or_else(|| "none".to_owned(), |value| format!("{value:04X}"));
-        let memory_owner = event.address.map_or("none", |address| owner_name(memory_owner(address)));
+        let memory_owner = event
+            .address
+            .map_or("none", |address| owner_name(memory_owner(address)));
         let data = event
             .data
             .map_or_else(|| "none".to_owned(), |value| format!("{value:02X}"));
@@ -99,7 +106,10 @@ fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> Stri
         if !matches!(event.kind, BusTransactionKind::Input) {
             glow_node(&mut out, topology, "ctrlBuf", "#ef7caf");
         }
-        if matches!(event.kind, BusTransactionKind::Dma | BusTransactionKind::Scanout) {
+        if matches!(
+            event.kind,
+            BusTransactionKind::Dma | BusTransactionKind::Scanout
+        ) {
             glow_node(&mut out, topology, "arb", "#e8e677");
         }
         if event.kind == BusTransactionKind::Scanout {
@@ -112,6 +122,58 @@ fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> Stri
 
     out.push_str("</g>\n");
     out
+}
+
+fn sampled_indices(trace: &MatchTrace) -> Vec<usize> {
+    let events = &trace.bus_transactions;
+    if events.len() <= MAX_BUS_EVENTS {
+        return (0..events.len()).collect();
+    }
+
+    let mut selected = BTreeSet::new();
+    selected.insert(0usize);
+    selected.insert(events.len() - 1);
+
+    for owner in [
+        MemoryOwner::Rom,
+        MemoryOwner::Ram,
+        MemoryOwner::Vram,
+        MemoryOwner::Mmio,
+    ] {
+        if let Some(index) = events.iter().position(|event| {
+            event
+                .address
+                .is_some_and(|address| memory_owner(address) == owner)
+        }) {
+            selected.insert(index);
+        }
+    }
+
+    for kind in [
+        BusTransactionKind::Fetch,
+        BusTransactionKind::Read,
+        BusTransactionKind::Write,
+        BusTransactionKind::Input,
+        BusTransactionKind::Dma,
+        BusTransactionKind::Scanout,
+    ] {
+        if let Some(index) = events.iter().position(|event| event.kind == kind) {
+            selected.insert(index);
+        }
+    }
+
+    let remaining = MAX_BUS_EVENTS.saturating_sub(selected.len());
+    if remaining > 0 {
+        let stride = events.len().div_ceil(remaining).max(1);
+        for index in (0..events.len()).step_by(stride) {
+            if selected.len() >= MAX_BUS_EVENTS {
+                break;
+            }
+            selected.insert(index);
+        }
+    }
+
+    selected.into_iter().take(MAX_BUS_EVENTS).collect()
 }
 
 const fn owner_name(owner: MemoryOwner) -> &'static str {
@@ -175,5 +237,46 @@ mod tests {
 
         trace.micro_samples.clear();
         assert_eq!(render(&topology, &trace, config), baseline);
+    }
+
+    #[test]
+    fn bus_sampling_is_bounded_and_preserves_owners_and_kinds() {
+        let trace = Machine::run_match("m3-bus-owner-sampling", 5000);
+        let selected = sampled_indices(&trace);
+        assert!(selected.len() <= MAX_BUS_EVENTS);
+
+        for owner in [
+            MemoryOwner::Rom,
+            MemoryOwner::Ram,
+            MemoryOwner::Vram,
+            MemoryOwner::Mmio,
+        ] {
+            if trace.bus_transactions.iter().any(|event| {
+                event
+                    .address
+                    .is_some_and(|address| memory_owner(address) == owner)
+            }) {
+                assert!(selected.iter().any(|index| {
+                    trace.bus_transactions[*index]
+                        .address
+                        .is_some_and(|address| memory_owner(address) == owner)
+                }));
+            }
+        }
+
+        for kind in [
+            BusTransactionKind::Fetch,
+            BusTransactionKind::Read,
+            BusTransactionKind::Write,
+            BusTransactionKind::Input,
+            BusTransactionKind::Dma,
+            BusTransactionKind::Scanout,
+        ] {
+            if trace.bus_transactions.iter().any(|event| event.kind == kind) {
+                assert!(selected
+                    .iter()
+                    .any(|index| trace.bus_transactions[*index].kind == kind));
+            }
+        }
     }
 }
