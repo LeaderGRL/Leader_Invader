@@ -24,8 +24,8 @@ use std::{
 
 use leader_core::{
     build_topology, validate_call_stack_contract, validate_final_topology,
-    validate_native_control_authority, validate_sp_event_stream, MatchTrace, MicroCycleKind, Machine,
-    Topology,
+    validate_native_control_authority, validate_shift_register_contract, validate_sp_event_stream,
+    MatchTrace, MicroCycleKind, Machine, Topology,
 };
 use leader_svg::{render, RenderConfig};
 
@@ -107,13 +107,14 @@ fn render_native_base(topology: &Topology, trace: &MatchTrace, config: RenderCon
     render(topology, &native_base, config)
 }
 
-fn validate_f3_trace(
+fn validate_native_trace(
     trace: &MatchTrace,
 ) -> Result<
     (
         leader_core::NativeTraceValidation,
         leader_core::CallStackValidation,
         usize,
+        leader_core::ShiftRegisterValidation,
     ),
     String,
 > {
@@ -123,7 +124,9 @@ fn validate_f3_trace(
         .map_err(|error| format!("native SP trace invalid: {error}"))?;
     let call_stack = validate_call_stack_contract(trace)
         .map_err(|error| format!("CALL/RET stack contract invalid: {error}"))?;
-    Ok((native, call_stack, sp_events))
+    let shift = validate_shift_register_contract(trace)
+        .map_err(|error| format!("native M3 shift-register trace invalid: {error}"))?;
+    Ok((native, call_stack, sp_events, shift))
 }
 
 fn render_cmd(options: Options) -> Result<(), String> {
@@ -137,7 +140,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
             options.max_frames
         ));
     }
-    let (validation, call_stack, sp_events) = validate_f3_trace(&trace)?;
+    let (validation, call_stack, sp_events, shift) = validate_native_trace(&trace)?;
     let config = RenderConfig::default();
     let svg = render_native_base(&topology, &trace, config);
     let svg = director::apply_camera(svg, &topology, &trace, config);
@@ -159,7 +162,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
     println!(
-        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} native overlays / {} bytes -> {}",
+        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} shift events / {} native overlays / {} bytes -> {}",
         topology_validation.nodes,
         topology_validation.links,
         trace.total_frames,
@@ -170,6 +173,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
         validation.control_latches,
         sp_events,
         call_stack.call_pairs,
+        shift.data_writes + shift.offset_writes + shift.reads,
         svg_validation.overlay_groups,
         svg_validation.bytes,
         options.output.display()
@@ -182,15 +186,16 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
         options.output = PathBuf::from("generated/trace.json");
     }
     let trace = run_native_trace(&options.seed, options.max_frames);
-    validate_f3_trace(&trace)?;
+    let (_, _, _, shift) = validate_native_trace(&trace)?;
     write(&options.output, trace.to_json().as_bytes())?;
     println!(
-        "frames={} kills={} flag_events={} control_latch_events={} sp_events={} clear={}",
+        "frames={} kills={} flag_events={} control_latch_events={} sp_events={} shift_events={} clear={}",
         trace.total_frames,
         trace.kills.len(),
         trace.flag_events.len(),
         trace.control_latch_events.len(),
         trace.sp_events.len(),
+        shift.data_writes + shift.offset_writes + shift.reads,
         trace.finished
     );
     if trace.finished {
@@ -205,7 +210,7 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     let topology_validation = validate_final_topology(&topology)
         .map_err(|error| format!("final F3 topology invalid: {error}"))?;
     let trace = run_native_trace(&options.seed, options.max_frames);
-    let (validation, call_stack, sp_events) = validate_f3_trace(&trace)?;
+    let (validation, call_stack, sp_events, shift) = validate_native_trace(&trace)?;
     let decode_latches = trace
         .micro_cycles
         .iter()
@@ -222,6 +227,7 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     println!("trace.alu_events={}", trace.alu_events.len());
     println!("trace.flag_events={}", trace.flag_events.len());
     println!("trace.control_latch_events={}", trace.control_latch_events.len());
+    println!("trace.shift_register_events={}", trace.shift_register_events.len());
     println!("trace.register_writes={}", trace.register_writes.len());
     println!("trace.pc_events={}", trace.pc_events.len());
     println!("trace.sp_events={}", trace.sp_events.len());
@@ -268,6 +274,9 @@ fn stats_cmd(options: Options) -> Result<(), String> {
         validation.cpu_writes
     );
     println!("trace.native_verified_sp_bus_contract={sp_events}");
+    println!("trace.shift_data_writes={}", shift.data_writes);
+    println!("trace.shift_offset_writes={}", shift.offset_writes);
+    println!("trace.shift_reads={}", shift.reads);
     println!("trace.call_pairs={}", call_stack.call_pairs);
     println!("trace.return_pairs={}", call_stack.return_pairs);
     println!("trace.call_stack_bytes={}", call_stack.stack_bytes);
