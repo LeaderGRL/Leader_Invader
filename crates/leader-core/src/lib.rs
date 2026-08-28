@@ -17,6 +17,7 @@ pub mod layout;
 pub mod logic;
 pub mod machine;
 pub mod memory_map;
+pub mod memory_map_contract;
 pub mod microcode;
 pub mod pc_datapath;
 pub mod program;
@@ -67,6 +68,7 @@ pub use memory_map::{
     ROM_END, ROM_REGION, SHIFT_DATA, SHIFT_OFFSET, SHIFT_RESULT, SHIELD_RAM_BASE,
     SHIELD_RAM_REGION, STACK_BASE, STACK_END, STACK_REGION, VRAM_BASE, VRAM_END, VRAM_REGION,
 };
+pub use memory_map_contract::{validate_memory_map_contract, MemoryMapValidation};
 pub use microcode::{
     control_word, control_word_at, decode as decode_microcode, execute_address,
     execute_control_step, execute_row_kind, execute_step_address, opcode_slot, uaddr, ControlWord,
