@@ -6,6 +6,7 @@ mod control_state_overlay;
 mod control_word_overlay;
 mod decoder_overlay;
 mod director;
+mod flags_overlay;
 mod microcode_overlay;
 mod microcycle_overlay;
 #[cfg(test)]
@@ -149,6 +150,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let svg = control_state_overlay::apply(svg, &topology, &trace, config);
     let svg = microcycle_overlay::apply(svg, &topology, &trace, config);
     let svg = alu_overlay::apply(svg, &topology, &trace, config);
+    let svg = flags_overlay::apply(svg, &topology, &trace, config);
     let svg = register_overlay::apply(svg, &topology, &trace, config);
     let svg = bus_overlay::apply(svg, &topology, &trace, config);
     let svg = stack_overlay::apply(svg, &topology, &trace, config);
@@ -159,12 +161,13 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
     println!(
-        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} SP events / {} CALL pairs / {} native overlays / {} bytes -> {}",
+        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} flag latches / {} SP events / {} CALL pairs / {} native overlays / {} bytes -> {}",
         topology_validation.nodes,
         topology_validation.links,
         trace.total_frames,
         trace.kills.len(),
         validation.micro_words,
+        validation.flag_events,
         sp_events,
         call_stack.call_pairs,
         svg_validation.overlay_groups,
@@ -182,9 +185,10 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
     validate_f3_trace(&trace)?;
     write(&options.output, trace.to_json().as_bytes())?;
     println!(
-        "frames={} kills={} sp_events={} clear={}",
+        "frames={} kills={} flag_events={} sp_events={} clear={}",
         trace.total_frames,
         trace.kills.len(),
+        trace.flag_events.len(),
         trace.sp_events.len(),
         trace.finished
     );
@@ -215,6 +219,7 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     println!("trace.micro_addresses={}", trace.micro_addresses.len());
     println!("trace.bus_transactions={}", trace.bus_transactions.len());
     println!("trace.alu_events={}", trace.alu_events.len());
+    println!("trace.flag_events={}", trace.flag_events.len());
     println!("trace.register_writes={}", trace.register_writes.len());
     println!("trace.pc_events={}", trace.pc_events.len());
     println!("trace.sp_events={}", trace.sp_events.len());
@@ -226,6 +231,10 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     println!(
         "trace.native_verified_alu_events={}",
         validation.alu_events
+    );
+    println!(
+        "trace.native_verified_flag_events={}",
+        validation.flag_events
     );
     println!(
         "trace.native_verified_register_writes={}",
