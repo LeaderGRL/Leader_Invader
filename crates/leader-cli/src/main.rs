@@ -15,7 +15,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use leader_core::{build_topology, validate_native_control_authority, MicroCycleKind, Machine};
+use leader_core::{
+    build_topology, validate_native_control_authority, MatchTrace, MicroCycleKind, Machine, Topology,
+};
 use leader_svg::{render, RenderConfig};
 
 fn main() {
@@ -63,6 +65,19 @@ impl Options {
     }
 }
 
+fn render_native_base(
+    topology: &Topology,
+    trace: &MatchTrace,
+    config: RenderConfig,
+) -> String {
+    // `leader-svg` still contains the historical coarse MicroSample activity
+    // renderer for backward-compatible library callers. Production F3 rendering
+    // deliberately suppresses only that layer, then adds native overlays below.
+    let mut native_base = trace.clone();
+    native_base.micro_samples.clear();
+    render(topology, &native_base, config)
+}
+
 fn render_cmd(options: Options) -> Result<(), String> {
     let topology = build_topology();
     let trace = Machine::run_match(&options.seed, options.max_frames);
@@ -72,7 +87,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let validation = validate_native_control_authority(&trace)
         .map_err(|error| format!("native F3 trace invalid: {error}"))?;
     let config = RenderConfig::default();
-    let svg = render(&topology, &trace, config);
+    let svg = render_native_base(&topology, &trace, config);
     let svg = director::apply_camera(svg, &topology, &trace, config);
     let svg = pc_overlay::apply(svg, &topology, &trace, config);
     let svg = decoder_overlay::apply(svg, &topology, &trace, config);
