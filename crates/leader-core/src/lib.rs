@@ -6,6 +6,7 @@ pub mod control_layout;
 pub mod datapath;
 pub mod decoder_datapath;
 pub mod formation_cadence;
+pub mod formation_cadence_contract;
 pub mod game;
 pub mod isa;
 pub mod layout;
@@ -38,6 +39,9 @@ pub use datapath::{
 };
 pub use decoder_datapath::{derive_decoder_datapath, DecoderDatapathEvent};
 pub use formation_cadence::{FormationCadence, FormationCadenceEvent};
+pub use formation_cadence_contract::{
+    validate_formation_cadence_contract, FormationCadenceValidation,
+};
 pub use isa::{Cpu, Flags, MicroCycleKind, MicroPhase, PcSource, Reg, StepOutcome};
 pub use logic::{
     logic_trace, ripple_add, ripple_decrement16, ripple_increment16, ripple_sub, AluOp, AluTrace,
