@@ -2,7 +2,7 @@
 
 A deterministic Rust machine that compiles its own execution into a long-form animated SVG for GitHub READMEs.
 
-The README asset is **not a prerecorded GIF and not JavaScript hidden in an SVG**. The pipeline assembles a ROM program, executes it on a deterministic CPU, records native machine events, and compiles that execution into declarative SVG animation that GitHub can safely render as an image.
+The README asset is **not a prerecorded GIF and not JavaScript hidden in an SVG**. The pipeline assembles a ROM program, executes it on a deterministic CPU, records native machine events, validates the physical control path, and compiles that execution into declarative SVG animation that GitHub can safely render as an image.
 
 <p align="center">
   <img src="generated/Leader.svg" width="100%" alt="Leader visual CPU assembling itself and running an autonomous Space Invaders match">
@@ -12,19 +12,19 @@ The README asset is **not a prerecorded GIF and not JavaScript hidden in an SVG*
 
 ## Design contract
 
-1. **No decorative activity.** A critical node may glow only because recorded machine state or a native machine event drove it.
+1. **No decorative activity.** A critical node may glow only because recorded native machine state drove it.
 2. **Deterministic replay.** Same source + same seed = equivalent simulation semantics.
 3. **GitHub-safe output.** No JavaScript, no event handlers, no remote runtime dependency.
 4. **One engine, two views.** The README is the cinematic replay; a later WASM frontend can expose pan/zoom/inspection over the same core.
-5. **Progressive but explicit fidelity.** F2 ISA execution is complete. F3 is actively converting the visible datapath from descriptive replay to same-tick control authority.
+5. **Physical control authority.** Visible F3 control paths must authorize the real architectural mutation, not merely describe it afterward.
 
 ## Repository layout
 
 ```text
 crates/
-  leader-core/   ROM, CPU, µROM, machine, game, topology and native trace streams
+  leader-core/   ROM, CPU, µROM, machine, game, topology, contracts and native trace streams
   leader-svg/    base declarative SVG compiler and gameplay replay
-  leader-cli/    reproducible build boundary + native F3 overlays
+  leader-cli/    reproducible build boundary + native F3 overlays and render validation
 docs/
   ARCHITECTURE.md
   ROADMAP.md
@@ -46,23 +46,25 @@ cargo run -p leader-cli -- render --seed dev --output generated/Leader.svg
 python scripts/validate_svg.py generated/Leader.svg
 ```
 
-The CLI owns the deterministic build boundary. There is intentionally no runtime dependency between GitHub and the simulation.
+The CLI owns the deterministic production boundary. There is intentionally no runtime dependency between GitHub and the simulation.
 
 ## Current fidelity
 
 ### F2 — byte-addressed ISA: complete
 
-The autonomous game loop lives in assembled ROM bytecode. The CPU owns semantic PC, SP, registers and flags; fetch/decode, conditional branches, CALL/RET, memory access, WAIT_VBLANK and HALT are real instruction behavior. Corrupting the ROM breaks the match causally.
+The autonomous game loop lives in assembled ROM bytecode. The CPU owns PC, SP, registers and flags; fetch/decode, conditional branches, CALL/RET, memory access, WAIT_VBLANK and HALT are real instruction behavior. Corrupting the ROM breaks the match causally.
 
 The game state is mirrored through work RAM and rendered into a real 128×96 one-bit VRAM buffer. Input, game-device commands and scanout are memory-mapped hardware interfaces controlled by the ROM program.
 
-### F3 — physical datapath authority: active
+### F3 — physical datapath authority: advanced
 
-The machine now includes a real microsequencer, native T0/T1/T2 cycles and a physical 256×24 control-ROM representation.
+The machine includes a real microsequencer, native T0/T1/T2 cycles and a physical `256 × 24` control-ROM representation.
 
-The 24-bit word contains the visible external controls plus sixteen internal enables for MAR/MDR/IR, PC increment, ALU operand/op/flag latches, address and condition latches, PC selection, register selection, bus enables and architectural commit.
+The complete 24-bit word is materialized as **24 distinct visible output lines**: eight external controls plus sixteen internal enables for MAR/MDR/IR, PC increment, operand/op/flag latches, target-address and condition state, PC/register selection, bus enables and architectural commit. Each output is wired to a physical consumer in the topology.
 
-Critical paths already made causal include:
+Visible state now includes dedicated `ADDR LO`, `ADDR HI`, `COND`, `PC SEL`, `REG SEL` latches and a combinational `RETURN BYTE` mux for CALL/RET.
+
+Critical causal paths include:
 
 - fetch and shared operand/read/write routines;
 - ripple-carry ALU and exact carry chains;
@@ -71,38 +73,71 @@ Critical paths already made causal include:
 - register source selection and write-back destination;
 - LD/ST address latches;
 - branch condition and PC input selection;
-- CALL/RET stack behavior and return PC restoration;
+- CALL return bytes routed combinationally from the stable PC into the stack;
+- RET bytes restored from the stack through the address latches into the PC;
 - compact LDI/ADDI execution through the same physical latch discipline.
 
-Tests intentionally select incorrect microcode rows and prove forbidden latches or architectural commits do not mutate.
+Tests intentionally select incorrect microcode rows or corrupt native trace data and prove forbidden latches, commits or return paths cannot silently succeed.
 
 ## Native replay streams
 
-`MatchTrace` no longer relies on one semantic event list as universal truth. High-fidelity rendering consumes native streams for:
+`MatchTrace` records dedicated native streams for:
 
 - CPU microcycles and IR decode latches;
 - µPC transitions with the complete 24-bit control word;
 - bus ownership and transactions;
-- exact ALU operations;
+- exact ALU operations and carry chains;
 - register writes;
-- PC increments and loads.
+- PC increments and loads;
+- deterministic frame/game state.
 
-The PC, decoder, microcode, stack and timing overlays are native-driven. The F3 director uses native-first datapath derivations for fetch state, decoder lines, ALU slices, registers and bus ownership.
+The production SVG adds inspectable metadata directly to native overlays:
 
-CI contains invariants that delete `micro_samples` and require native F3 render paths to remain unchanged. `MicroSample` is retained for historical compatibility and for the older coarse base activity layer while that layer is gradually retired.
+- PC before/after/source/carry;
+- opcode and one-hot decode selection;
+- full packed 24-bit control word;
+- control-state latch activity;
+- T-state plus PC/MAR/MDR/IR snapshots;
+- ALU operands/result/carry chain;
+- register write before/after values;
+- bus owner/address/data/control;
+- SP before/after plus stack address/value.
+
+`MicroSample` remains in the trace format only for historical compatibility. **Production rendering clears `micro_samples` before the base SVG is generated**, so the old coarse semantic activity layer is not present in `generated/Leader.svg`.
+
+The complete F3 overlay pipeline is tested byte-for-byte with and without `micro_samples` and must remain identical.
+
+## Production contracts
+
+Before `Leader.svg` can be written, the CLI validates:
+
+- final topology closure, unique node/link IDs and group containment;
+- all 24 µROM outputs and their physical wiring;
+- every traced µROM word against `control_word_at(µADDR, opcode).bits24()`;
+- native decode/ALU/register/PC/bus mutations against the required control enables;
+- CPU fetch/read/write transactions against their shared micro-routine rows;
+- CALL/RET stack bytes against the real PC return stream;
+- presence of all required native SVG overlays and metadata families;
+- absence of legacy `class="hot …"` production activity;
+- declarative-only SVG safety;
+- a production SVG size budget of **5,000,000 bytes**.
+
+The current replay remains below that budget while retaining the detailed inspectable hardware paths.
 
 ## Determinism and validation
 
 Every semantic source of nondeterminism derives from the explicit seed. There is no wall clock or OS RNG in `leader-core`.
 
-Every change is validated with:
+Every code change is validated with:
 
 ```text
 Rust workspace tests
 Clippy
-smoke artifact generation
+full deterministic smoke render
+native trace / topology / CALL stack contracts
+native SVG contract
 SVG safety/XML validation
-full deterministic match completion
+full match completion
 ```
 
-See [Architecture](docs/ARCHITECTURE.md) for the causal model and [Roadmap](docs/ROADMAP.md) for the remaining F3 work.
+See [Architecture](docs/ARCHITECTURE.md) for the causal model and [Roadmap](docs/ROADMAP.md) for the remaining work.
