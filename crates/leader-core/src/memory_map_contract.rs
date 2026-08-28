@@ -1,5 +1,8 @@
 use crate::{
-    memory_map::{owner, MemoryOwner, INPUT_PORT, SHIFT_DATA, SHIFT_OFFSET, SHIFT_RESULT},
+    memory_map::{
+        mmio_port, owner, MemoryOwner, MmioAccess, DEVICE_CMD, MMIO_BASE, SHIFT_DATA,
+        SHIFT_OFFSET, SHIFT_RESULT,
+    },
     BusAddressSource, BusDataSource, BusTransactionKind, MatchTrace,
 };
 
@@ -13,6 +16,24 @@ pub struct MemoryMapValidation {
     pub shift_data_writes: usize,
     pub shift_offset_writes: usize,
     pub shift_result_reads: usize,
+}
+
+fn require_mmio_access(address: u16, kind: BusTransactionKind) -> Result<(), String> {
+    let port = mmio_port(address)
+        .ok_or_else(|| format!("native bus transaction targets undeclared MMIO port {address:04X}"))?;
+    let allowed = match kind {
+        BusTransactionKind::Read => port.access.allows_read(),
+        BusTransactionKind::Write => port.access.allows_write(),
+        BusTransactionKind::Input => port.access.allows_input(),
+        BusTransactionKind::Fetch | BusTransactionKind::Dma | BusTransactionKind::Scanout => false,
+    };
+    if !allowed {
+        return Err(format!(
+            "MMIO access direction is invalid for {} at {address:04X}: policy={:?} kind={:?}",
+            port.name, port.access, kind
+        ));
+    }
+    Ok(())
 }
 
 pub fn validate_memory_map_contract(trace: &MatchTrace) -> Result<MemoryMapValidation, String> {
@@ -72,10 +93,8 @@ pub fn validate_memory_map_contract(trace: &MatchTrace) -> Result<MemoryMapValid
                         event.data_source
                     ));
                 }
-                if matches!(address, SHIFT_DATA | SHIFT_OFFSET) {
-                    return Err(format!(
-                        "write-only shift-register port was read at {address:04X}"
-                    ));
+                if region == MemoryOwner::Mmio {
+                    require_mmio_access(address, event.kind)?;
                 }
                 if address == SHIFT_RESULT {
                     validation.shift_result_reads += 1;
@@ -97,10 +116,8 @@ pub fn validate_memory_map_contract(trace: &MatchTrace) -> Result<MemoryMapValid
                 if region == MemoryOwner::Rom {
                     return Err(format!("write targets read-only ROM at {address:04X}"));
                 }
-                if address == SHIFT_RESULT {
-                    return Err(format!(
-                        "read-only shift-register result port was written at {address:04X}"
-                    ));
+                if region == MemoryOwner::Mmio {
+                    require_mmio_access(address, event.kind)?;
                 }
                 if address == SHIFT_DATA {
                     validation.shift_data_writes += 1;
@@ -109,8 +126,7 @@ pub fn validate_memory_map_contract(trace: &MatchTrace) -> Result<MemoryMapValid
                 }
             }
             BusTransactionKind::Input => {
-                if address != INPUT_PORT
-                    || region != MemoryOwner::Mmio
+                if region != MemoryOwner::Mmio
                     || event.address_source != BusAddressSource::None
                     || event.data_source != BusDataSource::Device
                 {
@@ -119,6 +135,7 @@ pub fn validate_memory_map_contract(trace: &MatchTrace) -> Result<MemoryMapValid
                         event.address_source, event.data_source
                     ));
                 }
+                require_mmio_access(address, event.kind)?;
             }
             BusTransactionKind::Dma | BusTransactionKind::Scanout => {
                 if region != MemoryOwner::Vram
@@ -193,6 +210,21 @@ mod tests {
     }
 
     #[test]
+    fn undeclared_mmio_port_is_rejected() {
+        let mut trace = Machine::run_match("m3-memory-map-undeclared-mmio", 5000);
+        let event = trace
+            .bus_transactions
+            .iter_mut()
+            .find(|event| event.kind == BusTransactionKind::Read)
+            .expect("read event");
+        event.address = Some(MMIO_BASE + 1);
+        event.address_source = BusAddressSource::Cpu;
+        event.data_source = BusDataSource::Device;
+        let error = validate_memory_map_contract(&trace).expect_err("undeclared MMIO must fail");
+        assert!(error.contains("undeclared MMIO port"));
+    }
+
+    #[test]
     fn wrong_region_data_source_is_rejected() {
         let mut trace = Machine::run_match("m3-memory-map-source", 5000);
         let event = trace
@@ -251,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn shift_result_write_is_rejected() {
+    fn shift_result_write_is_rejected_by_port_policy() {
         let mut trace = Machine::run_match("m3-memory-map-shift-result-write", 5000);
         let event = trace
             .bus_transactions
@@ -263,11 +295,12 @@ mod tests {
         event.data_source = BusDataSource::Cpu;
         let error =
             validate_memory_map_contract(&trace).expect_err("SHIFT_RESULT write must fail");
-        assert!(error.contains("read-only shift-register result"));
+        assert!(error.contains("MMIO access direction is invalid"));
+        assert!(error.contains("shift_result"));
     }
 
     #[test]
-    fn shift_data_read_is_rejected() {
+    fn shift_data_read_is_rejected_by_port_policy() {
         let mut trace = Machine::run_match("m3-memory-map-shift-data-read", 5000);
         let event = trace
             .bus_transactions
@@ -278,11 +311,28 @@ mod tests {
         event.address_source = BusAddressSource::Cpu;
         event.data_source = BusDataSource::Device;
         let error = validate_memory_map_contract(&trace).expect_err("SHIFT_DATA read must fail");
-        assert!(error.contains("write-only shift-register port"));
+        assert!(error.contains("MMIO access direction is invalid"));
+        assert!(error.contains("shift_data"));
     }
 
     #[test]
-    fn input_event_on_wrong_mmio_port_is_rejected() {
+    fn device_command_read_is_rejected_by_port_policy() {
+        let mut trace = Machine::run_match("m3-memory-map-device-cmd-read", 5000);
+        let event = trace
+            .bus_transactions
+            .iter_mut()
+            .find(|event| event.kind == BusTransactionKind::Read)
+            .expect("read event");
+        event.address = Some(DEVICE_CMD);
+        event.address_source = BusAddressSource::Cpu;
+        event.data_source = BusDataSource::Device;
+        let error = validate_memory_map_contract(&trace).expect_err("DEVICE_CMD read must fail");
+        assert!(error.contains("MMIO access direction is invalid"));
+        assert!(error.contains("device_cmd"));
+    }
+
+    #[test]
+    fn input_event_on_non_input_port_is_rejected() {
         let mut trace = Machine::run_match("m3-memory-map-input-port", 5000);
         let event = trace
             .bus_transactions
@@ -291,6 +341,14 @@ mod tests {
             .expect("input event");
         event.address = Some(SHIFT_RESULT);
         let error = validate_memory_map_contract(&trace).expect_err("wrong input port must fail");
-        assert!(error.contains("input authority is invalid"));
+        assert!(error.contains("MMIO access direction is invalid"));
+        assert!(error.contains("shift_result"));
+    }
+
+    #[test]
+    fn declared_mmio_policies_match_expected_core_ports() {
+        assert_eq!(mmio_port(SHIFT_DATA).unwrap().access, MmioAccess::WriteOnly);
+        assert_eq!(mmio_port(SHIFT_RESULT).unwrap().access, MmioAccess::ReadOnly);
+        assert_eq!(mmio_port(DEVICE_CMD).unwrap().access, MmioAccess::WriteOnly);
     }
 }
