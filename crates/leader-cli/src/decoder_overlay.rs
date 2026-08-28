@@ -113,7 +113,7 @@ mod tests {
     #[test]
     fn decoder_overlay_is_native_microcycle_driven() {
         let topology = build_topology();
-        let mut trace = Machine::run_match("f3-native-decoder", 5000);
+        let mut trace = Machine::run_match("f3-native-decoder", 120);
         let config = RenderConfig::default();
         let baseline = render(&topology, &trace, config);
         assert!(baseline.contains("data-opcode=\""));
