@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use leader_core::{build_topology, Machine};
+use leader_core::{build_topology, MicroCycleKind, Machine};
 use leader_svg::{render, RenderConfig};
 
 fn main() {
@@ -95,10 +95,22 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
 fn stats_cmd(options: Options) -> Result<(), String> {
     let topology = build_topology();
     let trace = Machine::run_match(&options.seed, options.max_frames);
+    let decode_latches = trace
+        .micro_cycles
+        .iter()
+        .filter(|event| event.kind == MicroCycleKind::DecodeLatch)
+        .count();
     println!("topology.nodes={}", topology.nodes.len());
     println!("topology.links={}", topology.links.len());
     println!("trace.frames={}", trace.frames.len());
     println!("trace.micro_samples={}", trace.micro_samples.len());
+    println!("trace.micro_cycles={}", trace.micro_cycles.len());
+    println!("trace.decode_latches={decode_latches}");
+    println!("trace.micro_addresses={}", trace.micro_addresses.len());
+    println!("trace.bus_transactions={}", trace.bus_transactions.len());
+    println!("trace.alu_events={}", trace.alu_events.len());
+    println!("trace.register_writes={}", trace.register_writes.len());
+    println!("trace.pc_events={}", trace.pc_events.len());
     println!("trace.kills={}", trace.kills.len());
     println!("trace.finished={}", trace.finished);
     println!("trace.final_score={}", trace.final_score);
