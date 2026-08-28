@@ -124,12 +124,11 @@ fn derive_legacy_stack_datapath(trace: &MatchTrace) -> Vec<StackDatapathEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{materialize_sp_events, Machine};
+    use crate::Machine;
 
     #[test]
     fn real_match_contains_balanced_call_return_stack_activity() {
-        let mut trace = Machine::run_match("f3-stack", 5000);
-        materialize_sp_events(&mut trace);
+        let trace = Machine::run_match("f3-stack", 5000);
         let events = derive_stack_datapath(&trace);
         let pushes = events
             .iter()
@@ -146,7 +145,6 @@ mod tests {
     #[test]
     fn first_class_sp_stream_is_independent_from_bus_and_semantic_samples() {
         let mut trace = Machine::run_match("f3-stack-sp-native", 5000);
-        materialize_sp_events(&mut trace);
         let expected = derive_stack_datapath(&trace);
         assert!(!expected.is_empty());
 
@@ -157,8 +155,7 @@ mod tests {
 
     #[test]
     fn push_and_pop_steps_are_bit_accurate() {
-        let mut trace = Machine::run_match("f3-stack-bits", 5000);
-        materialize_sp_events(&mut trace);
+        let trace = Machine::run_match("f3-stack-bits", 5000);
         let events = derive_stack_datapath(&trace);
         for event in events {
             match event.kind {
@@ -176,15 +173,31 @@ mod tests {
 
     #[test]
     fn bus_stack_reconstruction_remains_available_for_old_native_traces() {
-        let trace = Machine::run_match("f3-stack-bus-fallback", 5000);
-        assert!(trace.sp_events.is_empty());
-        let events = derive_stack_datapath(&trace);
-        assert!(!events.is_empty());
+        let mut trace = Machine::run_match("f3-stack-bus-fallback", 5000);
+        let native = derive_stack_datapath(&trace);
+        assert!(!native.is_empty());
+
+        trace.sp_events.clear();
+        let fallback = derive_stack_datapath(&trace);
+        assert!(!fallback.is_empty());
+        assert_eq!(fallback.len(), native.len());
+        for (legacy, current) in fallback.iter().zip(native) {
+            assert_eq!(legacy.frame, current.frame);
+            assert_eq!(legacy.pc, current.pc);
+            assert_eq!(legacy.address, current.address);
+            assert_eq!(legacy.data, current.data);
+            assert!(matches!(
+                (legacy.kind, current.kind),
+                (StackDatapathKind::Push(_), StackDatapathKind::Push(_))
+                    | (StackDatapathKind::Pop(_), StackDatapathKind::Pop(_))
+            ));
+        }
     }
 
     #[test]
     fn semantic_stack_reconstruction_remains_available_for_historical_traces() {
         let mut trace = Machine::run_match("f3-stack-legacy", 5000);
+        trace.sp_events.clear();
         trace.bus_transactions.clear();
         let events = derive_stack_datapath(&trace);
         assert!(!events.is_empty());
