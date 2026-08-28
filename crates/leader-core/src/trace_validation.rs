@@ -119,10 +119,13 @@ pub fn validate_native_control_authority(
     for event in &trace.pc_events {
         match event.kind {
             PcEventKind::Increment(_) => {
+                // ROM fetch sampling increments the trace ordinal before the
+                // controlled PC ripple increment is emitted. The physical
+                // FETCH_T1/OPERAND_T1 word is therefore exactly one ordinal back.
                 require_shared_micro_row(
                     &micro_index,
                     event.frame,
-                    event.ordinal,
+                    event.ordinal.saturating_sub(1),
                     &[uaddr::FETCH_T1, uaddr::OPERAND_T1],
                     |bits| internal_on(bits, internal::PC_INC),
                     "PC_INC authority for native PcEvent::Increment",
@@ -421,9 +424,10 @@ mod tests {
             .find(|event| matches!(event.kind, PcEventKind::Increment(_)))
             .copied()
             .expect("PC increment");
+        let control_ordinal = pc.ordinal.saturating_sub(1);
         for event in trace.micro_addresses.iter_mut().filter(|event| {
             event.frame == pc.frame
-                && event.ordinal == pc.ordinal
+                && event.ordinal == control_ordinal
                 && matches!(event.address, uaddr::FETCH_T1 | uaddr::OPERAND_T1)
         }) {
             event.control_bits &= !((internal::PC_INC as u32) << 8);
