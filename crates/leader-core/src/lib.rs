@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 pub mod assembler;
+pub mod control_layout;
 pub mod datapath;
 pub mod decoder_datapath;
 pub mod game;
@@ -16,6 +17,7 @@ pub mod topology;
 pub mod trace;
 pub mod trace_validation;
 
+pub use control_layout::INTERNAL_CONTROL_NODES;
 pub use datapath::{
     bit16, bit8, derive_alu_datapath, derive_bus_datapath, derive_datapath,
     derive_register_datapath, AluDatapathEvent, BusAddressOwner, BusCycle, BusDataOwner,
@@ -48,5 +50,6 @@ pub use trace_validation::{validate_native_control_authority, NativeTraceValidat
 pub fn build_topology() -> Topology {
     let mut topology = topology::build_topology();
     layout::apply_visual_layout(&mut topology);
+    control_layout::inject_internal_control_lines(&mut topology);
     topology
 }
