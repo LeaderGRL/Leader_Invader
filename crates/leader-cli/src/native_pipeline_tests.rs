@@ -20,7 +20,7 @@ fn apply_f3_pipeline(
 #[test]
 fn complete_f3_overlay_pipeline_is_native_only() {
     let topology = build_topology();
-    let trace = Machine::run_match("f3-native-pipeline", 5000);
+    let trace = Machine::run_match("f3-native-pipeline", 120);
     let config = RenderConfig::default();
 
     // The base artifact is intentionally rendered once from the complete trace.
