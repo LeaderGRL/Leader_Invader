@@ -11,6 +11,7 @@ const ALU_BIT: u32 = 1 << 1;
 const MEMR_BIT: u32 = 1 << 2;
 const MEMW_BIT: u32 = 1 << 3;
 const PCLD_BIT: u32 = 1 << 4;
+const STACK_BIT: u32 = 1 << 5;
 
 type MicroIndex<'a> = HashMap<(u32, u16), Vec<&'a MicroAddressEvent>>;
 
@@ -22,7 +23,9 @@ pub struct NativeTraceValidation {
     pub flag_events: usize,
     pub control_latches: usize,
     pub register_writes: usize,
+    pub pc_increments: usize,
     pub pc_loads: usize,
+    pub sp_events: usize,
     pub rom_fetches: usize,
     pub cpu_reads: usize,
     pub cpu_writes: usize,
@@ -114,19 +117,44 @@ pub fn validate_native_control_authority(
     }
 
     for event in &trace.pc_events {
-        let PcEventKind::Load { control, .. } = event.kind else {
-            continue;
-        };
+        match event.kind {
+            PcEventKind::Increment(_) => {
+                require_shared_micro_row(
+                    &micro_index,
+                    event.frame,
+                    event.ordinal,
+                    &[uaddr::FETCH_T1, uaddr::OPERAND_T1],
+                    |bits| internal_on(bits, internal::PC_INC),
+                    "PC_INC authority for native PcEvent::Increment",
+                )?;
+                validated.pc_increments += 1;
+            }
+            PcEventKind::Load { control, .. } => {
+                require_micro_authority(
+                    &micro_index,
+                    event.frame,
+                    event.ordinal,
+                    0,
+                    Some(control),
+                    |bits| bits & PCLD_BIT != 0 && internal_on(bits, internal::ARCH_COMMIT),
+                    "PCLD + ARCH_COMMIT for native PcEvent::Load",
+                )?;
+                validated.pc_loads += 1;
+            }
+        }
+    }
+
+    for event in &trace.sp_events {
         require_micro_authority(
             &micro_index,
             event.frame,
             event.ordinal,
             0,
-            Some(control),
-            |bits| bits & PCLD_BIT != 0 && internal_on(bits, internal::ARCH_COMMIT),
-            "PCLD + ARCH_COMMIT for native PcEvent::Load",
+            None,
+            |bits| bits & STACK_BIT != 0,
+            "STACK enable for native SpEvent",
         )?;
-        validated.pc_loads += 1;
+        validated.sp_events += 1;
     }
 
     for event in &trace.bus_transactions {
@@ -216,8 +244,14 @@ pub fn validate_native_control_authority(
     if validated.register_writes == 0 {
         return Err("native trace contains no validated register writes".to_owned());
     }
+    if validated.pc_increments == 0 {
+        return Err("native trace contains no validated PC increments".to_owned());
+    }
     if validated.pc_loads == 0 {
         return Err("native trace contains no validated PC loads".to_owned());
+    }
+    if validated.sp_events == 0 {
+        return Err("native trace contains no validated SP events".to_owned());
     }
     if validated.rom_fetches == 0 {
         return Err("native trace contains no validated ROM fetches".to_owned());
@@ -353,7 +387,9 @@ mod tests {
         assert!(validation.flag_events > 0);
         assert!(validation.control_latches > 0);
         assert!(validation.register_writes > 0);
+        assert!(validation.pc_increments > 0);
         assert!(validation.pc_loads > 0);
+        assert!(validation.sp_events > 0);
         assert!(validation.rom_fetches > 0);
         assert!(validation.cpu_reads > 0);
         assert!(validation.cpu_writes > 0);
@@ -374,6 +410,41 @@ mod tests {
         }
         let error = validate_native_control_authority(&trace).expect_err("authority corruption must fail");
         assert!(error.contains("REGW + ARCH_COMMIT"));
+    }
+
+    #[test]
+    fn removing_pc_increment_authority_is_detected() {
+        let mut trace = Machine::run_match("f3-pc-inc-authority-negative", 120);
+        let pc = trace
+            .pc_events
+            .iter()
+            .find(|event| matches!(event.kind, PcEventKind::Increment(_)))
+            .copied()
+            .expect("PC increment");
+        for event in trace.micro_addresses.iter_mut().filter(|event| {
+            event.frame == pc.frame
+                && event.ordinal == pc.ordinal
+                && matches!(event.address, uaddr::FETCH_T1 | uaddr::OPERAND_T1)
+        }) {
+            event.control_bits &= !((internal::PC_INC as u32) << 8);
+        }
+        let error = validate_native_control_authority(&trace)
+            .expect_err("PC_INC authority corruption must fail");
+        assert!(error.contains("PC_INC authority for native PcEvent::Increment"));
+    }
+
+    #[test]
+    fn removing_stack_authority_is_detected() {
+        let mut trace = Machine::run_match("f3-stack-authority-negative", 120);
+        let sp = *trace.sp_events.first().expect("SP event");
+        for event in trace.micro_addresses.iter_mut().filter(|event| {
+            event.frame == sp.frame && event.ordinal == sp.ordinal
+        }) {
+            event.control_bits &= !STACK_BIT;
+        }
+        let error = validate_native_control_authority(&trace)
+            .expect_err("STACK authority corruption must fail");
+        assert!(error.contains("STACK enable for native SpEvent"));
     }
 
     #[test]
