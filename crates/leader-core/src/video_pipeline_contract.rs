@@ -1,6 +1,6 @@
 use crate::{
-    isa::op, memory_map::VRAM_BASE, BusAddressSource, BusDataSource, BusTransactionKind,
-    MatchTrace,
+    isa::op, memory_map::VRAM_BASE, microcode::execute_address, BusAddressSource,
+    BusDataSource, BusTransactionKind, MatchTrace,
 };
 
 const WAIT_BIT: u32 = 1 << 6;
@@ -52,9 +52,7 @@ pub fn validate_video_pipeline_contract(
         ));
     }
 
-    for ((raster_stage, dma_stage), scan_stage) in
-        raster.iter().zip(&dma).zip(&scanout)
-    {
+    for ((raster_stage, dma_stage), scan_stage) in raster.iter().zip(&dma).zip(&scanout) {
         let (raster_index, raster_event) = *raster_stage;
         let (dma_index, dma_event) = *dma_stage;
         let (scan_index, scan_event) = *scan_stage;
@@ -115,26 +113,25 @@ pub fn validate_video_pipeline_contract(
         }
     }
 
+    let wait_uaddr = execute_address(op::WAIT_VBLANK)
+        .ok_or_else(|| "WAIT_VBLANK has no physical execute address".to_owned())?;
     let waits = trace
         .micro_addresses
         .iter()
-        .filter(|event| event.opcode == op::WAIT_VBLANK)
+        .filter(|event| event.opcode == op::WAIT_VBLANK && event.address == wait_uaddr)
         .collect::<Vec<_>>();
     if waits.is_empty() {
-        return Err("native trace contains no WAIT_VBLANK µword".to_owned());
+        return Err("native trace contains no WAIT_VBLANK execute µword".to_owned());
     }
 
     for wait in &waits {
         if wait.control_bits & WAIT_BIT == 0 {
             return Err(format!(
-                "WAIT_VBLANK µword lacks physical WAIT bit at frame={} uaddr={:02X}",
+                "WAIT_VBLANK execute µword lacks physical WAIT bit at frame={} uaddr={:02X}",
                 wait.frame, wait.address
             ));
         }
-        if !scanout
-            .iter()
-            .any(|(_, event)| event.frame == wait.frame)
-        {
+        if !scanout.iter().any(|(_, event)| event.frame == wait.frame) {
             return Err(format!(
                 "WAIT_VBLANK at frame {} has no native scanout in that frame",
                 wait.frame
@@ -198,11 +195,12 @@ mod tests {
     #[test]
     fn wait_without_physical_wait_bit_is_detected() {
         let mut trace = Machine::run_match("video-pipeline-wait-bit", 5000);
+        let wait_uaddr = execute_address(op::WAIT_VBLANK).expect("WAIT execute address");
         let event = trace
             .micro_addresses
             .iter_mut()
-            .find(|event| event.opcode == op::WAIT_VBLANK && event.control_bits & WAIT_BIT != 0)
-            .expect("WAIT_VBLANK µword");
+            .find(|event| event.opcode == op::WAIT_VBLANK && event.address == wait_uaddr)
+            .expect("WAIT_VBLANK execute µword");
         event.control_bits &= !WAIT_BIT;
         let error = validate_video_pipeline_contract(&trace)
             .expect_err("missing WAIT bit must fail");
