@@ -4,10 +4,10 @@ use leader_svg::{render, RenderConfig};
 use crate::{
     alu_overlay, bus_overlay, control_state_overlay, control_word_overlay, decoder_overlay,
     director, flags_overlay, microcode_overlay, microcycle_overlay, pc_overlay, register_overlay,
-    render_native_base, stack_overlay, timing_overlay,
+    render_native_base, shift_register_overlay, stack_overlay, timing_overlay,
 };
 
-fn apply_f3_pipeline(
+fn apply_native_pipeline(
     svg: String,
     topology: &leader_core::Topology,
     trace: &leader_core::MatchTrace,
@@ -25,6 +25,7 @@ fn apply_f3_pipeline(
     let svg = register_overlay::apply(svg, topology, trace, config);
     let svg = bus_overlay::apply(svg, topology, trace, config);
     let svg = stack_overlay::apply(svg, topology, trace, config);
+    let svg = shift_register_overlay::apply(svg, topology, trace, config);
     timing_overlay::apply(svg, topology, trace, config)
 }
 
@@ -47,7 +48,7 @@ fn production_base_suppresses_only_legacy_semantic_activity() {
 }
 
 #[test]
-fn complete_f3_overlay_pipeline_is_native_only_without_materialization() {
+fn complete_native_overlay_pipeline_is_native_only_without_materialization() {
     let topology = build_topology();
     let trace = Machine::run_match("f3-native-pipeline", 120);
     let config = RenderConfig::default();
@@ -61,13 +62,16 @@ fn complete_f3_overlay_pipeline_is_native_only_without_materialization() {
     assert!(!trace.register_writes.is_empty());
     assert!(!trace.pc_events.is_empty());
     assert!(!trace.sp_events.is_empty());
+    assert!(!trace.shift_register_events.is_empty());
 
     let base = render_native_base(&topology, &trace, config);
-    let baseline = apply_f3_pipeline(base.clone(), &topology, &trace, config);
+    let baseline = apply_native_pipeline(base.clone(), &topology, &trace, config);
 
     let mut native_only = trace.clone();
     native_only.micro_samples.clear();
-    let without_semantic_samples = apply_f3_pipeline(base, &topology, &native_only, config);
+    let without_semantic_samples = apply_native_pipeline(base, &topology, &native_only, config);
 
     assert_eq!(without_semantic_samples, baseline);
+    assert!(baseline.contains("id=\"m3-shift-register\""));
+    assert!(baseline.contains("data-shift-result=\"A0\""));
 }
