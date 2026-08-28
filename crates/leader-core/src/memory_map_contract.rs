@@ -1,6 +1,6 @@
 use crate::{
     memory_map::{owner, MemoryOwner},
-    BusDataSource, BusTransactionKind, MatchTrace,
+    BusAddressSource, BusDataSource, BusTransactionKind, MatchTrace,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -46,14 +46,23 @@ pub fn validate_memory_map_contract(trace: &MatchTrace) -> Result<MemoryMapValid
 
         match event.kind {
             BusTransactionKind::Fetch => {
-                if region != MemoryOwner::Rom || event.data_source != BusDataSource::Rom {
+                if region != MemoryOwner::Rom
+                    || event.data_source != BusDataSource::Rom
+                    || event.address_source != BusAddressSource::ProgramCounter
+                {
                     return Err(format!(
-                        "fetch does not belong to ROM at {address:04X}: owner={region:?} data={:?}",
-                        event.data_source
+                        "fetch authority is invalid at {address:04X}: owner={region:?} address={:?} data={:?}",
+                        event.address_source, event.data_source
                     ));
                 }
             }
             BusTransactionKind::Read => {
+                if event.address_source != BusAddressSource::Cpu {
+                    return Err(format!(
+                        "read address driver disagrees at {address:04X}: expected=Cpu actual={:?}",
+                        event.address_source
+                    ));
+                }
                 if event.data_source != expected_read_source {
                     return Err(format!(
                         "read source disagrees with memory map at {address:04X}: owner={region:?} expected={expected_read_source:?} actual={:?}",
@@ -62,6 +71,12 @@ pub fn validate_memory_map_contract(trace: &MatchTrace) -> Result<MemoryMapValid
                 }
             }
             BusTransactionKind::Write => {
+                if event.address_source != BusAddressSource::Cpu {
+                    return Err(format!(
+                        "write address driver disagrees at {address:04X}: expected=Cpu actual={:?}",
+                        event.address_source
+                    ));
+                }
                 if event.data_source != BusDataSource::Cpu {
                     return Err(format!(
                         "write at {address:04X} is not CPU-driven: owner={region:?} source={:?}",
@@ -70,17 +85,24 @@ pub fn validate_memory_map_contract(trace: &MatchTrace) -> Result<MemoryMapValid
                 }
             }
             BusTransactionKind::Input => {
-                if region != MemoryOwner::Mmio || event.data_source != BusDataSource::Device {
+                if region != MemoryOwner::Mmio
+                    || event.address_source != BusAddressSource::None
+                    || event.data_source != BusDataSource::Device
+                {
                     return Err(format!(
-                        "input transaction is outside MMIO/device ownership at {address:04X}"
+                        "input authority is invalid at {address:04X}: owner={region:?} address={:?} data={:?}",
+                        event.address_source, event.data_source
                     ));
                 }
             }
             BusTransactionKind::Dma | BusTransactionKind::Scanout => {
-                if region != MemoryOwner::Vram || event.data_source != BusDataSource::Vram {
+                if region != MemoryOwner::Vram
+                    || event.address_source != BusAddressSource::Dma
+                    || event.data_source != BusDataSource::Vram
+                {
                     return Err(format!(
-                        "DMA/scanout is outside VRAM ownership at {address:04X}: owner={region:?} source={:?}",
-                        event.data_source
+                        "DMA/scanout authority is invalid at {address:04X}: owner={region:?} address={:?} data={:?}",
+                        event.address_source, event.data_source
                     ));
                 }
             }
@@ -104,7 +126,7 @@ pub fn validate_memory_map_contract(trace: &MatchTrace) -> Result<MemoryMapValid
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BusAddressSource, Machine};
+    use crate::Machine;
 
     #[test]
     fn complete_match_obeys_canonical_memory_ownership() {
@@ -148,6 +170,20 @@ mod tests {
     }
 
     #[test]
+    fn wrong_address_driver_is_rejected() {
+        let mut trace = Machine::run_match("m3-memory-map-address-driver", 5000);
+        let event = trace
+            .bus_transactions
+            .iter_mut()
+            .find(|event| event.kind == BusTransactionKind::Read)
+            .expect("read event");
+        event.address_source = BusAddressSource::Dma;
+        let error =
+            validate_memory_map_contract(&trace).expect_err("wrong read address driver must fail");
+        assert!(error.contains("read address driver disagrees"));
+    }
+
+    #[test]
     fn fetch_outside_rom_is_rejected() {
         let mut trace = Machine::run_match("m3-memory-map-fetch", 5000);
         let event = trace
@@ -157,6 +193,6 @@ mod tests {
             .expect("fetch event");
         event.address = Some(crate::memory_map::RAM_BASE);
         let error = validate_memory_map_contract(&trace).expect_err("RAM fetch must fail");
-        assert!(error.contains("fetch does not belong to ROM"));
+        assert!(error.contains("fetch authority is invalid"));
     }
 }
