@@ -16,15 +16,15 @@ The README asset is **not a prerecorded GIF and not JavaScript hidden in an SVG*
 2. **Deterministic replay.** Same source + same seed = equivalent simulation semantics.
 3. **GitHub-safe output.** No JavaScript, no event handlers, no remote runtime dependency.
 4. **One engine, two views.** The README is the cinematic replay; a later WASM frontend can expose pan/zoom/inspection over the same core.
-5. **Physical control authority.** Visible F3 control paths authorize the real architectural mutation, rather than describing it afterward.
+5. **Physical control authority.** Visible CPU and peripheral paths authorize or expose real machine state, rather than describing it afterward.
 
 ## Repository layout
 
 ```text
 crates/
-  leader-core/   ROM, CPU, µROM, machine, game, topology, contracts and native trace streams
+  leader-core/   ROM, CPU, µROM, machine, arcade hardware, topology, contracts and native traces
   leader-svg/    base declarative SVG compiler and gameplay replay
-  leader-cli/    reproducible build boundary + native F3 overlays and render validation
+  leader-cli/    reproducible build boundary + native overlays and render validation
 docs/
   ARCHITECTURE.md
   ROADMAP.md
@@ -79,6 +79,26 @@ Critical causal paths include:
 
 Tests intentionally select incorrect microcode rows, remove physical enables, corrupt native values and break return bytes. Forbidden latches, commits, PC/SP mutations or return paths must fail validation instead of being represented as plausible activity.
 
+### M3 — richer arcade hardware: in progress
+
+Three arcade-specific hardware slices are now production-authoritative and visible.
+
+#### 16-bit shift-register peripheral ✅
+
+A dedicated MMIO shift register implements the classic two-byte load / 3-bit offset / 8-bit window behavior using original project code and no proprietary ROM. The assembled game ROM performs a boot self-test (`0x12`, `0x34`, offset `3` → `0xA0`). Its native event stream is replayed against the actual CPU bus, and the physical `SHIFT HI / LO / OFFSET / WINDOW / OUT` path is visible in the SVG.
+
+#### Hardware formation cadence ✅
+
+Fleet movement no longer depends on a high-level `frame % 3` gate. A persistent counter/divider produces the real movement tick. The divisor accelerates from `3 → 2 → 1` as the invader population shrinks. Every clock is traced, the validator replays the counter, and fleet RAM mutation is forbidden unless the matching hardware tick is asserted.
+
+#### Three-slot enemy projectile bank ✅
+
+The old singleton enemy projectile has been removed. A physical bank owns three independent `X / Y / ACTIVE` slots plus round-robin allocation and cooldown state. Bot avoidance, collision, work RAM, VRAM rasterization, frame snapshots and SVG gameplay trajectories all consume those three slots.
+
+`validate_enemy_shot_bank_contract()` replays every slot's exact `X/Y/ACTIVE` RAM writes across native frame-snapshot intervals and requires the result to equal the following hardware snapshot. The complete match must exercise all three slots, spawn/move/clear lifecycle transitions and at least two concurrent enemy projectiles. The SVG exposes all three physical banks and keeps concurrency/lifecycle scenes under a strict presentation sampling budget.
+
+The next M3 slice is **destructible shields backed by explicit bitmaps/memory**, following the same rule: real state first, causal contract second, presentation last.
+
 ## Native replay streams
 
 `MatchTrace` records dedicated first-class streams for:
@@ -92,24 +112,15 @@ Tests intentionally select incorrect microcode rows, remove physical enables, co
 - register writes;
 - PC increments and loads;
 - SP PUSH/POP mutations with the exact 16-bit ripple chain;
-- deterministic frame/game state.
+- formation-cadence clocks/ticks;
+- shift-register mutations/readback;
+- deterministic frame snapshots including all three enemy projectile slots.
 
-The production SVG adds inspectable metadata directly to native overlays:
+The production SVG adds inspectable metadata directly to native overlays for CPU state plus the M3 peripherals: shift state/offset/result, formation alive-count/divisor/counter/tick, and each enemy-shot slot's active/X/Y state and concurrent projectile count.
 
-- PC before/after/source/carry;
-- opcode and one-hot decode selection;
-- full packed 24-bit control word;
-- control-state latch kind/value/validity;
-- T-state plus PC/MAR/MDR/IR snapshots;
-- ALU operands/result/carry chain;
-- exact Z/C/L flag state;
-- register write before/after values;
-- bus owner/address/data/control;
-- SP before/after, ripple chain, stack address and value.
+`MicroSample` and bus-derived stack reconstruction remain available only as historical library fallbacks for old traces. **Production `render`, `trace` and `stats` do not invoke those fallbacks.**
 
-`MicroSample` and bus-derived stack reconstruction remain available only as historical library fallbacks for old traces. **Production `render`, `trace` and `stats` do not invoke those fallbacks.** `Machine::run_match()` already returns every first-class stream required by the F3 pipeline.
-
-The base SVG suppresses the historical `MicroSample` activity layer, and the complete F3 overlay pipeline is tested byte-for-byte after `trace.micro_samples.clear()`.
+The base SVG suppresses the historical `MicroSample` activity layer, and the complete native overlay pipeline is tested byte-for-byte after `trace.micro_samples.clear()`.
 
 ## Production contracts
 
@@ -118,19 +129,17 @@ Before `Leader.svg` can be written, the CLI validates:
 - final topology closure, unique node/link IDs and group containment;
 - all 24 µROM outputs and their physical wiring;
 - every traced µROM word against `control_word_at(µADDR, opcode).bits24()`;
-- native decode against `IR_LOAD`;
-- native ALU/flags/control-latch/register mutations against their physical enables;
-- every ripple PC increment against `PC_INC`;
-- every selected PC load against `PCLD + ARCH_COMMIT`;
-- every native SP PUSH/POP against `STACK` and its exact stack bus transaction;
-- CPU fetch/read/write transactions against their shared micro-routine rows;
+- native decode, ALU, flags, control latches, register writes, PC and SP against their physical enables;
 - CALL/RET stack bytes against the real PC return stream;
+- shift-register state against same-tick MMIO bus activity;
+- formation-counter replay and fleet movement gating;
+- the three enemy-shot slots against their authoritative `X/Y/ACTIVE` RAM writes;
 - presence of all required native SVG overlays and metadata families;
 - absence of legacy `class="hot …"` production activity;
 - declarative-only SVG safety;
 - a production SVG size budget of **5,000,000 bytes**.
 
-The current replay is roughly **3.3 MB**, leaving substantial headroom while retaining detailed inspectable hardware paths.
+The current replay is exactly **3,767,395 bytes**, leaving roughly **1.23 MB** of headroom for the remaining M3 hardware while retaining detailed inspectable paths.
 
 ## Determinism and validation
 
@@ -142,7 +151,10 @@ Every code change is validated with:
 Rust workspace tests
 Clippy
 full deterministic smoke render
-native control / SP / topology / CALL stack contracts
+native CPU + SP + CALL/RET contracts
+M3 shift / cadence / multi-shot contracts
+final topology contract
+native-only renderer invariant
 native SVG contract
 SVG safety/XML validation
 full match completion
