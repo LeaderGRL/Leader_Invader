@@ -2,7 +2,10 @@
 pub struct NativeSvgValidation {
     pub overlay_groups: usize,
     pub metadata_families: usize,
+    pub bytes: usize,
 }
+
+pub const MAX_NATIVE_SVG_BYTES: usize = 5_000_000;
 
 const REQUIRED_GROUPS: [&str; 11] = [
     "f3-pc",
@@ -32,11 +35,21 @@ const REQUIRED_METADATA: [&str; 10] = [
 ];
 
 pub fn validate_native_svg_contract(svg: &str) -> Result<NativeSvgValidation, String> {
+    if svg.len() > MAX_NATIVE_SVG_BYTES {
+        return Err(format!(
+            "production SVG exceeds {} byte budget: {} bytes",
+            MAX_NATIVE_SVG_BYTES,
+            svg.len()
+        ));
+    }
     if svg.contains("class=\"hot ") {
         return Err("production SVG still contains legacy semantic hot activity".to_owned());
     }
 
-    let mut validation = NativeSvgValidation::default();
+    let mut validation = NativeSvgValidation {
+        bytes: svg.len(),
+        ..NativeSvgValidation::default()
+    };
     for id in REQUIRED_GROUPS {
         let marker = format!("id=\"{id}\"");
         if !svg.contains(&marker) {
@@ -74,5 +87,12 @@ mod tests {
     fn missing_native_group_is_rejected() {
         let error = validate_native_svg_contract("<svg/>").expect_err("missing overlays must fail");
         assert!(error.contains("missing native overlay group"));
+    }
+
+    #[test]
+    fn oversize_artifact_is_rejected_before_content_checks() {
+        let svg = "x".repeat(MAX_NATIVE_SVG_BYTES + 1);
+        let error = validate_native_svg_contract(&svg).expect_err("oversize SVG must fail");
+        assert!(error.contains("exceeds"));
     }
 }
