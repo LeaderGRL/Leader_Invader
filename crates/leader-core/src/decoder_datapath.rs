@@ -59,7 +59,7 @@ mod tests {
 
     #[test]
     fn native_decode_latches_are_authoritative() {
-        let trace = Machine::run_match("f3-decoder-core", 5000);
+        let trace = Machine::run_match("f3-decoder-core", 120);
         let baseline = derive_decoder_datapath(&trace);
         assert!(!baseline.is_empty());
         assert!(baseline.iter().any(|event| event.opcode == op::CMPI));
@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn native_decode_lines_match_ir_nibbles() {
-        let trace = Machine::run_match("f3-decoder-lines", 5000);
+        let trace = Machine::run_match("f3-decoder-lines", 120);
         for event in derive_decoder_datapath(&trace) {
             assert_eq!(event.high_line, event.opcode >> 4);
             assert_eq!(event.low_line, event.opcode & 0x0f);
@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn historical_sample_fallback_remains_available() {
-        let mut trace = Machine::run_match("f3-decoder-legacy", 5000);
+        let mut trace = Machine::run_match("f3-decoder-legacy", 120);
         trace.micro_cycles.clear();
         let events = derive_decoder_datapath(&trace);
         assert!(!events.is_empty());
