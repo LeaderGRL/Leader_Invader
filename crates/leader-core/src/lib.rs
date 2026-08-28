@@ -60,9 +60,9 @@ pub use topology::{Group, Link, Node, Rect, SignalKind, Topology};
 pub use topology_contract::{validate_final_topology, TopologyValidation};
 pub use trace::{
     AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind,
-    ControlLatchEvent, ControlLatchKind, FlagEvent, FrameState, KillEvent, MatchTrace,
-    MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent, PcEventKind, PhaseKind,
-    ProjectileSnapshot, RegisterWriteEvent, ShiftRegisterEvent, SpEvent, SpEventKind,
+    ControlLatchEvent, ControlLatchKind, FlagEvent, FormationCadenceTraceEvent, FrameState,
+    KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent, PcEventKind,
+    PhaseKind, ProjectileSnapshot, RegisterWriteEvent, ShiftRegisterEvent, SpEvent, SpEventKind,
 };
 pub use trace_validation::{validate_native_control_authority, NativeTraceValidation};
 
