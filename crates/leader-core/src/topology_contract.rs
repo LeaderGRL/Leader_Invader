@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::{control_topology_violations, layout::layout_violations, Topology};
+use crate::{control_topology_violations, Topology};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TopologyValidation {
@@ -9,11 +9,6 @@ pub struct TopologyValidation {
 }
 
 pub fn validate_final_topology(topology: &Topology) -> Result<TopologyValidation, String> {
-    let layout_errors = layout_violations(topology);
-    if !layout_errors.is_empty() {
-        return Err(format!("final topology layout invalid: {}", layout_errors.join(" | ")));
-    }
-
     let control_errors = control_topology_violations(topology);
     if !control_errors.is_empty() {
         return Err(format!(
@@ -26,6 +21,28 @@ pub fn validate_final_topology(topology: &Topology) -> Result<TopologyValidation
     for node in &topology.nodes {
         if !node_ids.insert(node.id.as_str()) {
             return Err(format!("duplicate topology node id {}", node.id));
+        }
+        let Some(group) = topology.group(&node.group) else {
+            return Err(format!("node {} references missing group {}", node.id, node.group));
+        };
+        let inside = node.bounds.x >= group.bounds.x
+            && node.bounds.y >= group.bounds.y
+            && node.bounds.x + node.bounds.w <= group.bounds.x + group.bounds.w
+            && node.bounds.y + node.bounds.h <= group.bounds.y + group.bounds.h;
+        if !inside {
+            return Err(format!(
+                "node {} escapes group {}: node=({:.0},{:.0},{:.0},{:.0}) group=({:.0},{:.0},{:.0},{:.0})",
+                node.id,
+                node.group,
+                node.bounds.x,
+                node.bounds.y,
+                node.bounds.w,
+                node.bounds.h,
+                group.bounds.x,
+                group.bounds.y,
+                group.bounds.w,
+                group.bounds.h
+            ));
         }
     }
 
