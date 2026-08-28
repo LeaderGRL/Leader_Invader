@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod decoder_overlay;
 mod director;
 mod microcode_overlay;
 mod pc_overlay;
@@ -69,6 +70,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let svg = render(&topology, &trace, config);
     let svg = director::apply_camera(svg, &topology, &trace, config);
     let svg = pc_overlay::apply(svg, &topology, &trace, config);
+    let svg = decoder_overlay::apply(svg, &topology, &trace, config);
     let svg = microcode_overlay::apply(svg, &topology, &trace, config);
     let svg = stack_overlay::apply(svg, &topology, &trace, config);
     let svg = timing_overlay::apply(svg, &topology, &trace, config);
