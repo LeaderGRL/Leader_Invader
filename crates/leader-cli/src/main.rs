@@ -23,7 +23,7 @@ use std::{
 };
 
 use leader_core::{
-    build_topology, materialize_sp_events, validate_call_stack_contract, validate_final_topology,
+    build_topology, validate_call_stack_contract, validate_final_topology,
     validate_native_control_authority, validate_sp_event_stream, MatchTrace, MicroCycleKind, Machine,
     Topology,
 };
@@ -97,10 +97,8 @@ impl Options {
     }
 }
 
-fn run_normalized_trace(seed: &str, max_frames: u32) -> MatchTrace {
-    let mut trace = Machine::run_match(seed, max_frames);
-    materialize_sp_events(&mut trace);
-    trace
+fn run_native_trace(seed: &str, max_frames: u32) -> MatchTrace {
+    Machine::run_match(seed, max_frames)
 }
 
 fn render_native_base(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
@@ -132,7 +130,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let topology = build_topology();
     let topology_validation = validate_final_topology(&topology)
         .map_err(|error| format!("final F3 topology invalid: {error}"))?;
-    let trace = run_normalized_trace(&options.seed, options.max_frames);
+    let trace = run_native_trace(&options.seed, options.max_frames);
     if !trace.finished {
         return Err(format!(
             "match did not clear within {} frames",
@@ -161,12 +159,13 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
     println!(
-        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} native overlays / {} bytes -> {}",
+        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} native overlays / {} bytes -> {}",
         topology_validation.nodes,
         topology_validation.links,
         trace.total_frames,
         trace.kills.len(),
         validation.micro_words,
+        validation.pc_increments,
         validation.flag_events,
         validation.control_latches,
         sp_events,
@@ -182,7 +181,7 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
     if options.output == PathBuf::from("generated/Leader.svg") {
         options.output = PathBuf::from("generated/trace.json");
     }
-    let trace = run_normalized_trace(&options.seed, options.max_frames);
+    let trace = run_native_trace(&options.seed, options.max_frames);
     validate_f3_trace(&trace)?;
     write(&options.output, trace.to_json().as_bytes())?;
     println!(
@@ -205,7 +204,7 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     let topology = build_topology();
     let topology_validation = validate_final_topology(&topology)
         .map_err(|error| format!("final F3 topology invalid: {error}"))?;
-    let trace = run_normalized_trace(&options.seed, options.max_frames);
+    let trace = run_native_trace(&options.seed, options.max_frames);
     let (validation, call_stack, sp_events) = validate_f3_trace(&trace)?;
     let decode_latches = trace
         .micro_cycles
@@ -248,8 +247,16 @@ fn stats_cmd(options: Options) -> Result<(), String> {
         validation.register_writes
     );
     println!(
+        "trace.native_verified_pc_increments={}",
+        validation.pc_increments
+    );
+    println!(
         "trace.native_verified_pc_loads={}",
         validation.pc_loads
+    );
+    println!(
+        "trace.native_verified_sp_events={}",
+        validation.sp_events
     );
     println!(
         "trace.native_verified_rom_fetches={}",
@@ -260,7 +267,7 @@ fn stats_cmd(options: Options) -> Result<(), String> {
         "trace.native_verified_cpu_writes={}",
         validation.cpu_writes
     );
-    println!("trace.native_verified_sp_events={sp_events}");
+    println!("trace.native_verified_sp_bus_contract={sp_events}");
     println!("trace.call_pairs={}", call_stack.call_pairs);
     println!("trace.return_pairs={}", call_stack.return_pairs);
     println!("trace.call_stack_bytes={}", call_stack.stack_bytes);
