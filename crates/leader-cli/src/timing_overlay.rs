@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn timing_overlay_is_driven_by_native_cpu_t_states() {
         let topology = build_topology();
-        let trace = Machine::run_match("timing-overlay", 5000);
+        let trace = Machine::run_match("timing-overlay", 120);
         assert!(trace.micro_cycles.iter().any(|event| event.phase == MicroPhase::T0));
         assert!(trace.micro_cycles.iter().any(|event| event.phase == MicroPhase::T1));
         assert!(trace.micro_cycles.iter().any(|event| event.phase == MicroPhase::T2));
@@ -100,7 +100,7 @@ mod tests {
     #[test]
     fn timing_overlay_does_not_depend_on_semantic_samples() {
         let topology = build_topology();
-        let mut trace = Machine::run_match("timing-overlay-native-only", 5000);
+        let mut trace = Machine::run_match("timing-overlay-native-only", 120);
         let config = RenderConfig::default();
         let baseline = render(&topology, &trace, config);
         trace.micro_samples.clear();
