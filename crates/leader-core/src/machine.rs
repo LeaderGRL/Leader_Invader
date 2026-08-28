@@ -5,9 +5,10 @@ use crate::microcode::MicroAddressTransition;
 use crate::program::{build_game_rom, command, DEVICE_CMD, DEVICE_STATUS, INPUT_PORT, RAM_BASE};
 use crate::rng::{hash_seed, DeterministicRng};
 use crate::trace::{
-    AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind, FlagEvent,
-    FrameState, KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent,
-    PcEventKind, PhaseKind, RegisterWriteEvent,
+    AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind,
+    ControlLatchEvent, ControlLatchKind, FlagEvent, FrameState, KillEvent, MatchTrace,
+    MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent, PcEventKind, PhaseKind,
+    RegisterWriteEvent,
 };
 
 const ROM_LIMIT: usize = 0x2000;
@@ -503,6 +504,25 @@ impl Bus for Machine {
         });
     }
 
+    fn trace_control_latch(
+        &mut self,
+        pc: u16,
+        kind: ControlLatchKind,
+        value: u16,
+        valid: bool,
+        control: &'static str,
+    ) {
+        self.trace.control_latch_events.push(ControlLatchEvent {
+            frame: self.game.frame,
+            ordinal: self.ordinal,
+            pc,
+            kind,
+            value,
+            valid,
+            control,
+        });
+    }
+
     fn trace_register_write(
         &mut self,
         pc: u16,
@@ -671,8 +691,18 @@ mod tests {
         assert!(!trace.bus_transactions.is_empty());
         assert!(!trace.alu_events.is_empty());
         assert!(!trace.flag_events.is_empty());
+        assert!(!trace.control_latch_events.is_empty());
         assert!(!trace.register_writes.is_empty());
         assert!(!trace.pc_events.is_empty());
+        for kind in [
+            ControlLatchKind::AddressLo,
+            ControlLatchKind::AddressHi,
+            ControlLatchKind::Condition,
+            ControlLatchKind::PcSelect,
+            ControlLatchKind::RegSelect,
+        ] {
+            assert!(trace.control_latch_events.iter().any(|event| event.kind == kind));
+        }
         assert!(trace.alu_events.iter().any(|event| event.control == "CMPI"));
         assert!(trace.flag_events.iter().any(|event| event.control == "CMPI"));
         assert!(trace.register_writes.iter().any(|event| event.control == "LDI"));
