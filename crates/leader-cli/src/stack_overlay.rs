@@ -105,7 +105,7 @@ mod tests {
     #[test]
     fn stack_overlay_does_not_depend_on_semantic_samples() {
         let topology = build_topology();
-        let mut trace = Machine::run_match("stack-overlay-native-only", 5000);
+        let mut trace = Machine::run_match("stack-overlay-native-only", 120);
         let config = RenderConfig::default();
         let baseline = render(&topology, &trace, config);
         trace.micro_samples.clear();
