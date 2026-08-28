@@ -1,4 +1,6 @@
-use crate::{microcode::internal, MatchTrace, MicroCycleKind, PcEventKind};
+use crate::{
+    control_word_at, microcode::internal, MatchTrace, MicroCycleKind, PcEventKind,
+};
 
 const REGW_BIT: u32 = 1 << 0;
 const ALU_BIT: u32 = 1 << 1;
@@ -6,6 +8,7 @@ const PCLD_BIT: u32 = 1 << 4;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeTraceValidation {
+    pub micro_words: usize,
     pub decode_latches: usize,
     pub alu_events: usize,
     pub register_writes: usize,
@@ -29,9 +32,13 @@ pub fn validate_native_control_authority(
         .iter()
         .filter(|event| event.kind == MicroCycleKind::DecodeLatch)
     {
-        require_micro_word(trace, cycle.frame, cycle.ordinal, |bits| {
-            internal_on(bits, internal::IR_LOAD)
-        }, "IR_LOAD for native DecodeLatch")?;
+        require_micro_word(
+            trace,
+            cycle.frame,
+            cycle.ordinal,
+            |bits| internal_on(bits, internal::IR_LOAD),
+            "IR_LOAD for native DecodeLatch",
+        )?;
         validated.decode_latches += 1;
     }
 
@@ -71,6 +78,25 @@ pub fn validate_native_control_authority(
         validated.pc_loads += 1;
     }
 
+    for event in &trace.micro_addresses {
+        let expected = control_word_at(event.address, event.opcode).bits24();
+        if event.control_bits != expected {
+            return Err(format!(
+                "microcode trace mismatch at frame={} ordinal={} address={:02X} opcode={:02X}: traced={:06X} expected={:06X}",
+                event.frame,
+                event.ordinal,
+                event.address,
+                event.opcode,
+                event.control_bits,
+                expected
+            ));
+        }
+        validated.micro_words += 1;
+    }
+
+    if validated.micro_words == 0 {
+        return Err("native trace contains no validated microcode words".to_owned());
+    }
     if validated.decode_latches == 0 {
         return Err("native trace contains no validated decode latches".to_owned());
     }
@@ -127,9 +153,10 @@ mod tests {
     use crate::Machine;
 
     #[test]
-    fn complete_match_native_events_have_same_tick_microcode_authority() {
-        let trace = Machine::run_match("f3-native-authority", 5000);
+    fn native_events_have_same_tick_microcode_authority() {
+        let trace = Machine::run_match("f3-native-authority", 120);
         let validation = validate_native_control_authority(&trace).expect("valid F3 trace");
+        assert!(validation.micro_words > 0);
         assert!(validation.decode_latches > 0);
         assert!(validation.alu_events > 0);
         assert!(validation.register_writes > 0);
@@ -138,7 +165,7 @@ mod tests {
 
     #[test]
     fn removing_commit_authority_is_detected() {
-        let mut trace = Machine::run_match("f3-authority-negative", 5000);
+        let mut trace = Machine::run_match("f3-authority-negative", 120);
         let register = trace.register_writes.first().expect("register write");
         let event = trace
             .micro_addresses
@@ -149,5 +176,14 @@ mod tests {
         event.control_bits &= !((internal::ARCH_COMMIT as u32) << 8);
         let error = validate_native_control_authority(&trace).expect_err("authority corruption must fail");
         assert!(error.contains("REGW + ARCH_COMMIT"));
+    }
+
+    #[test]
+    fn corrupting_traced_microcode_word_is_detected() {
+        let mut trace = Machine::run_match("f3-micro-word-negative", 120);
+        let event = trace.micro_addresses.first_mut().expect("micro word");
+        event.control_bits ^= 1 << 23;
+        let error = validate_native_control_authority(&trace).expect_err("microcode corruption must fail");
+        assert!(error.contains("microcode trace mismatch"));
     }
 }
