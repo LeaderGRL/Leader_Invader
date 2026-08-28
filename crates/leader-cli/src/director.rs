@@ -1,8 +1,4 @@
-use leader_core::{
-    bit16, bit8, derive_alu_datapath, derive_bus_datapath, derive_datapath,
-    derive_decoder_datapath, derive_register_datapath, AluOp, BusAddressOwner, BusCycle,
-    BusDataOwner, MatchTrace, Rect, Topology,
-};
+use leader_core::{MatchTrace, Rect, Topology};
 use leader_svg::RenderConfig;
 
 const VIEW_W: f32 = 864.0;
@@ -59,300 +55,11 @@ pub fn apply_camera(
         return svg;
     };
     let old_camera_end = old_camera_start + old_camera_end_rel + 2;
-    let f3 = render_f3_datapath(topology, trace, config);
-    svg.replace_range(old_camera_start..old_camera_end, &format!("{f3}</g>"));
+
+    // All F3 datapath activity now comes from dedicated native overlays. The
+    // director owns camera framing only and closes the shared camera world here.
+    svg.replace_range(old_camera_start..old_camera_end, "</g>");
     svg
-}
-
-fn render_f3_datapath(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
-    if trace.total_frames == 0 {
-        return String::new();
-    }
-    let total = config.total();
-    let mut out = String::with_capacity(1_050_000);
-    out.push_str("<g id=\"f3-datapath\">\n");
-
-    render_fetch_bits(&mut out, topology, trace, config, total);
-    render_decoder(&mut out, topology, trace, config, total);
-    render_alu(&mut out, topology, trace, config, total);
-    render_registers(&mut out, topology, trace, config, total);
-    render_bus(&mut out, topology, trace, config, total);
-
-    out.push_str("</g>\n");
-    out
-}
-
-fn render_fetch_bits(
-    out: &mut String,
-    topology: &Topology,
-    trace: &MatchTrace,
-    config: RenderConfig,
-    total: f32,
-) {
-    let events = derive_datapath(trace);
-    let stride = (events.len() / 180).max(1);
-    for event in events.iter().step_by(stride) {
-        if !matches!(
-            event.phase,
-            leader_core::PhaseKind::Fetch | leader_core::PhaseKind::Decode
-        ) {
-            continue;
-        }
-        let moment = trace_moment(event.frame, event.ordinal, trace, config);
-        pulse_group(out, moment, total, |out| {
-            for bit in 0..16 {
-                if bit16(event.state.pc, bit) {
-                    glow_node(out, topology, &format!("pcBit{bit}"), "#67d9b3");
-                }
-                if bit16(event.state.mar, bit) {
-                    glow_node(out, topology, &format!("marBit{bit}"), "#f2ae4f");
-                }
-            }
-            for bit in 0..8 {
-                if bit8(event.state.mdr, bit) {
-                    glow_node(out, topology, &format!("mdrBit{bit}"), "#4bc8f3");
-                }
-                if bit8(event.state.ir, bit) {
-                    glow_node(out, topology, &format!("irBit{bit}"), "#ef7caf");
-                }
-            }
-        });
-    }
-}
-
-fn render_decoder(
-    out: &mut String,
-    topology: &Topology,
-    trace: &MatchTrace,
-    config: RenderConfig,
-    total: f32,
-) {
-    let events = derive_decoder_datapath(trace);
-    let stride = (events.len() / 100).max(1);
-    for event in events.iter().step_by(stride) {
-        let moment = trace_moment(event.frame, event.ordinal, trace, config) + 0.008;
-        pulse_group(out, moment, total, |out| {
-            for id in ["opHi", "opLo", "decA", "decB", "microAddr", "microRom"] {
-                glow_node(out, topology, id, "#ef7caf");
-            }
-            glow_node(
-                out,
-                topology,
-                &format!("decA{}", event.high_line),
-                "#ff9b71",
-            );
-            glow_node(
-                out,
-                topology,
-                &format!("decB{}", event.low_line),
-                "#e8e677",
-            );
-        });
-    }
-}
-
-fn render_alu(
-    out: &mut String,
-    topology: &Topology,
-    trace: &MatchTrace,
-    config: RenderConfig,
-    total: f32,
-) {
-    let events = derive_alu_datapath(trace);
-    let stride = (events.len() / 120).max(1);
-    for event in events.iter().step_by(stride) {
-        let moment = trace_moment(event.frame, event.ordinal, trace, config) + 0.012;
-        pulse_group(out, moment, total, |out| {
-            glow_node(out, topology, "aluSel", "#f7ce62");
-            for bit in 0..8 {
-                let a = bit8(event.trace.lhs, bit);
-                let b = bit8(event.trace.rhs_effective, bit);
-                let carry_in = event.trace.carry_in(bit);
-                let xor_ab = a ^ b;
-                let sum = xor_ab ^ carry_in;
-                let generate = a & b;
-                let propagate = xor_ab & carry_in;
-                let carry_out = event.trace.carry_out(bit);
-
-                if xor_ab {
-                    glow_node(out, topology, &format!("xorA{bit}"), "#f7ce62");
-                }
-                if sum {
-                    glow_node(out, topology, &format!("xorB{bit}"), "#f7ce62");
-                }
-                if generate {
-                    glow_node(out, topology, &format!("andA{bit}"), "#ff9b71");
-                }
-                if propagate {
-                    glow_node(out, topology, &format!("andB{bit}"), "#ff9b71");
-                }
-                if carry_out {
-                    glow_node(out, topology, &format!("orC{bit}"), "#ffe16a");
-                }
-                if bit8(event.trace.result, bit) {
-                    glow_node(out, topology, &format!("muxR{bit}"), "#67d9b3");
-                }
-            }
-            if event.trace.result == 0 {
-                glow_node(out, topology, "flagZ", "#ef7caf");
-            }
-            if event.trace.final_carry() {
-                glow_node(out, topology, "flagC", "#ef7caf");
-            }
-            if matches!(event.trace.op, AluOp::Sub | AluOp::Compare)
-                && !event.trace.final_carry()
-            {
-                glow_node(out, topology, "flagN", "#ef7caf");
-            }
-        });
-    }
-}
-
-fn render_registers(
-    out: &mut String,
-    topology: &Topology,
-    trace: &MatchTrace,
-    config: RenderConfig,
-    total: f32,
-) {
-    let events = derive_register_datapath(trace);
-    let stride = (events.len() / 140).max(1);
-    for event in events.iter().step_by(stride) {
-        let moment = trace_moment(event.frame, event.ordinal, trace, config) + 0.028;
-        pulse_group(out, moment, total, |out| {
-            glow_node(out, topology, "writeDec", "#ef7caf");
-            glow_node(out, topology, "writeBus", "#4bc8f3");
-            for bit in 0..8 {
-                let id = format!("reg{}{bit}", event.reg.name());
-                let before = bit8(event.before, bit);
-                let after = bit8(event.after, bit);
-                if after {
-                    glow_node(out, topology, &id, "#67d9b3");
-                } else if before != after {
-                    glow_node(out, topology, &id, "#ff9b71");
-                }
-            }
-        });
-    }
-}
-
-fn render_bus(
-    out: &mut String,
-    topology: &Topology,
-    trace: &MatchTrace,
-    config: RenderConfig,
-    total: f32,
-) {
-    let events = derive_bus_datapath(trace);
-    let stride = (events.len() / 165).max(1);
-    for event in events.iter().step_by(stride) {
-        let moment = trace_moment(event.frame, event.ordinal, trace, config) + 0.018;
-        pulse_group(out, moment, total, |out| {
-            match event.address_owner {
-                BusAddressOwner::ProgramCounter => {
-                    glow_node(out, topology, "pcMuxLo", "#f2ae4f");
-                    glow_node(out, topology, "pcMuxHi", "#f2ae4f");
-                    glow_node(out, topology, "addrBuf", "#f2ae4f");
-                }
-                BusAddressOwner::Cpu => {
-                    glow_node(out, topology, "addrBuf", "#f2ae4f");
-                }
-                BusAddressOwner::Dma => {
-                    glow_node(out, topology, "arb", "#e8e677");
-                    glow_node(out, topology, "dmaAddr", "#f2ae4f");
-                }
-                BusAddressOwner::None => {}
-            }
-
-            match event.data_owner {
-                BusDataOwner::Rom => {
-                    glow_node(out, topology, "romRowDec", "#ef7caf");
-                    if let Some(address) = event.address {
-                        glow_node(
-                            out,
-                            topology,
-                            &format!("romPage{}", address >> 8),
-                            "#4bc8f3",
-                        );
-                    }
-                    glow_node(out, topology, "dataBuf", "#4bc8f3");
-                }
-                BusDataOwner::Ram => {
-                    glow_node(out, topology, "ramPageDec", "#ef7caf");
-                    if let Some(address) = event.address {
-                        let page = ((address.saturating_sub(0x2000)) >> 8).min(95);
-                        glow_node(out, topology, &format!("ramPage{page}"), "#4bc8f3");
-                    }
-                    glow_node(out, topology, "dataBuf", "#4bc8f3");
-                }
-                BusDataOwner::Vram => {
-                    glow_node(out, topology, "vramPageDec", "#ef7caf");
-                    if let Some(address) = event.address {
-                        let page = ((address.saturating_sub(0x8000)) >> 8).min(7);
-                        glow_node(out, topology, &format!("vramPage{page}"), "#72d4e7");
-                    }
-                    glow_node(out, topology, "dmaData", "#72d4e7");
-                    glow_node(out, topology, "dataBuf", "#4bc8f3");
-                }
-                BusDataOwner::Cpu => {
-                    glow_node(out, topology, "writeBus", "#67d9b3");
-                    glow_node(out, topology, "dataBuf", "#4bc8f3");
-                }
-                BusDataOwner::Device => {
-                    glow_node(out, topology, "inputLatch", "#ef7caf");
-                    glow_node(out, topology, "dataBuf", "#4bc8f3");
-                }
-                BusDataOwner::None => {}
-            }
-
-            if !matches!(event.cycle, BusCycle::Input) {
-                glow_node(out, topology, "ctrlBuf", "#ef7caf");
-            }
-            if matches!(event.cycle, BusCycle::Dma | BusCycle::Scanout) {
-                glow_node(out, topology, "arb", "#e8e677");
-            }
-            if event.cycle == BusCycle::Scanout {
-                glow_node(out, topology, "scanShift", "#72d4e7");
-                glow_node(out, topology, "display", "#72d4e7");
-            }
-        });
-    }
-}
-
-fn pulse_group<F>(out: &mut String, moment: f32, total: f32, render: F)
-where
-    F: FnOnce(&mut String),
-{
-    let k1 = norm(moment, total);
-    let k2 = norm(moment + 0.035, total);
-    let k3 = norm(moment + 0.16, total);
-    out.push_str(&format!(
-        "<g opacity=\"0\"><animate attributeName=\"opacity\" values=\"0;0;1;0;0\" keyTimes=\"0;{k1:.6};{k2:.6};{k3:.6};1\" dur=\"{total:.3}s\" repeatCount=\"indefinite\"/>"
-    ));
-    render(out);
-    out.push_str("</g>\n");
-}
-
-fn trace_moment(frame: u32, ordinal: u16, trace: &MatchTrace, config: RenderConfig) -> f32 {
-    config.game_start()
-        + frame as f32 / trace.total_frames.max(1) as f32 * config.game_seconds
-        + f32::from(ordinal.min(12)) * 0.003
-}
-
-fn glow_node(out: &mut String, topology: &Topology, id: &str, color: &str) {
-    let Some(node) = topology.node(id) else {
-        return;
-    };
-    let b = node.bounds;
-    out.push_str(&format!(
-        "<rect x=\"{:.0}\" y=\"{:.0}\" width=\"{:.0}\" height=\"{:.0}\" rx=\"8\" fill=\"{}\" fill-opacity=\".18\" stroke=\"{}\" stroke-width=\"9\" filter=\"url(#glow)\"/>",
-        b.x - 3.0,
-        b.y - 3.0,
-        b.w + 6.0,
-        b.h + 6.0,
-        color,
-        color
-    ));
 }
 
 fn camera_css(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
@@ -510,9 +217,9 @@ mod tests {
     use leader_core::{build_topology, Machine};
 
     #[test]
-    fn director_replaces_viewbox_animation_with_css_world_camera() {
+    fn director_replaces_viewbox_animation_with_css_world_camera_only() {
         let topology = build_topology();
-        let trace = Machine::run_match("director-test", 5000);
+        let trace = Machine::run_match("director-test", 120);
         let source = format!(
             "<svg><svg class=\"animated\" id=\"camera\" width=\"864\" height=\"484\" viewBox=\"0 0 {} {}\"><rect width=\"100%\" height=\"100%\" fill=\"#07101a\"/><g id=\"content\"/><animate attributeName=\"viewBox\" values=\"0 0 1 1\"/></svg></svg>",
             topology.width, topology.height
@@ -522,7 +229,7 @@ mod tests {
         assert!(output.contains("viewBox=\"0 0 864 484\""));
         assert!(output.contains("@keyframes leaderCamera"));
         assert!(output.contains("id=\"camera-world\""));
-        assert!(output.contains("id=\"f3-datapath\""));
+        assert!(!output.contains("id=\"f3-datapath\""));
     }
 
     #[test]
@@ -540,31 +247,5 @@ mod tests {
         let shot = display_screen(display.bounds);
         assert!(shot.w > 380.0);
         assert!(shot.h > 210.0);
-    }
-
-    #[test]
-    fn f3_render_uses_real_register_file_state() {
-        let topology = build_topology();
-        let trace = Machine::run_match("director-regs", 5000);
-        let writes = derive_register_datapath(&trace);
-        assert!(!writes.is_empty());
-        assert!(topology.node("regA0").is_some());
-        assert!(topology.node("regC0").is_some());
-        let rendered = render_f3_datapath(&topology, &trace, RenderConfig::default());
-        assert!(rendered.len() > 1000);
-    }
-
-    #[test]
-    fn f3_render_has_physical_decoder_lines_and_bus_cycles() {
-        let topology = build_topology();
-        let trace = Machine::run_match("director-bus", 5000);
-        assert!(topology.node("decA2").is_some());
-        assert!(topology.node("decB9").is_some());
-        assert!(derive_decoder_datapath(&trace).iter().any(|event| {
-            event.high_line == 2 && event.low_line == 9
-        }));
-        assert!(derive_bus_datapath(&trace).iter().any(|event| {
-            event.cycle == BusCycle::Dma && event.address_owner == BusAddressOwner::Dma
-        }));
     }
 }
