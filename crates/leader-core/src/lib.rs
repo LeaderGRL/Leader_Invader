@@ -51,9 +51,9 @@ pub use stack_datapath::{derive_stack_datapath, StackDatapathEvent, StackDatapat
 pub use topology::{Group, Link, Node, Rect, SignalKind, Topology};
 pub use topology_contract::{validate_final_topology, TopologyValidation};
 pub use trace::{
-    AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind, FrameState,
-    KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent, PcEventKind,
-    PhaseKind, ProjectileSnapshot, RegisterWriteEvent, SpEvent, SpEventKind,
+    AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind, FlagEvent,
+    FrameState, KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent,
+    PcEventKind, PhaseKind, ProjectileSnapshot, RegisterWriteEvent, SpEvent, SpEventKind,
 };
 pub use trace_validation::{validate_native_control_authority, NativeTraceValidation};
 
