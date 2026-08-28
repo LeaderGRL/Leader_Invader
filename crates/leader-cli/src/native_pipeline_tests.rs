@@ -1,4 +1,4 @@
-use leader_core::{build_topology, Machine};
+use leader_core::{build_topology, validate_video_pipeline_contract, Machine};
 use leader_svg::{render, RenderConfig};
 
 use crate::{
@@ -77,6 +77,12 @@ fn complete_native_overlay_pipeline_is_native_only_without_materialization() {
         "SHIELD_DAMAGE_PLAYER" | "SHIELD_DAMAGE_ENEMY"
     )));
 
+    let video = validate_video_pipeline_contract(&trace).expect("valid native video pipeline");
+    assert!(video.raster_writes > 0);
+    assert_eq!(video.raster_writes, video.dma_bursts);
+    assert_eq!(video.raster_writes, video.scanouts);
+    assert!(video.waits > 0);
+
     let base = render_native_base(&topology, &trace, config);
     let baseline = apply_native_pipeline(base.clone(), &topology, &trace, config);
 
@@ -101,4 +107,7 @@ fn complete_native_overlay_pipeline_is_native_only_without_materialization() {
     assert!(baseline.contains("data-shield-mask=\""));
     assert!(baseline.contains("data-shield-before=\""));
     assert!(baseline.contains("data-shield-after=\""));
+    assert!(baseline.contains("data-bus-control=\"VRAM_RASTER_1536_BYTES\""));
+    assert!(baseline.contains("data-bus-control=\"DMA_BURST_1536_BYTES\""));
+    assert!(baseline.contains("data-bus-control=\"SCANOUT_128x96_1BPP\""));
 }
