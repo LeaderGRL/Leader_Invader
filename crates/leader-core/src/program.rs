@@ -1,15 +1,11 @@
 use crate::assembler::Assembler;
 use crate::isa::Reg;
 
-pub const RAM_BASE: u16 = 0x2000;
-pub const INPUT_PORT: u16 = 0xA000;
-pub const SHIFT_DATA: u16 = 0xA010;
-pub const SHIFT_OFFSET: u16 = 0xA011;
-pub const SHIFT_RESULT: u16 = 0xA012;
-pub const DEVICE_CMD: u16 = 0xA100;
-pub const DEVICE_STATUS: u16 = 0xA101;
-pub const DEVICE_ARG0: u16 = 0xA102;
-pub const DEVICE_ARG1: u16 = 0xA103;
+pub use crate::memory_map::{
+    DEVICE_ARG0, DEVICE_ARG1, DEVICE_CMD, DEVICE_STATUS, INPUT_PORT, RAM_BASE, SHIFT_DATA,
+    SHIFT_OFFSET, SHIFT_RESULT,
+};
+use crate::memory_map::ROM_CAPACITY;
 
 pub mod command {
     pub const POLL_INPUT: u8 = 1;
@@ -61,7 +57,7 @@ pub fn build_game_rom() -> Vec<u8> {
     a.halt();
 
     let rom = a.finish();
-    assert!(rom.len() <= 0x2000, "game ROM exceeds 8 KiB");
+    assert!(rom.len() <= ROM_CAPACITY, "game ROM exceeds 8 KiB");
     rom
 }
 
@@ -90,7 +86,7 @@ mod tests {
     fn rom_fits_first_8k() {
         let rom = build_game_rom();
         assert!(!rom.is_empty());
-        assert!(rom.len() < 0x2000);
+        assert!(rom.len() < ROM_CAPACITY);
     }
 
     #[test]
