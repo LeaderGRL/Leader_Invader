@@ -1,8 +1,8 @@
 # Leader Invader
 
-A deterministic systems simulation that compiles into a long-form animated SVG for GitHub READMEs.
+A deterministic Rust machine that compiles its own execution into a long-form animated SVG for GitHub READMEs.
 
-The README asset is **not a prerecorded GIF and not JavaScript hidden in an SVG**. The pipeline runs a seeded simulation, records a causal execution trace, and compiles that trace into declarative SVG animation that GitHub can render safely as an image.
+The README asset is **not a prerecorded GIF and not JavaScript hidden in an SVG**. The pipeline assembles a ROM program, executes it on a deterministic CPU, records native machine events, and compiles that execution into declarative SVG animation that GitHub can safely render as an image.
 
 <p align="center">
   <img src="generated/Leader.svg" width="100%" alt="Leader visual CPU assembling itself and running an autonomous Space Invaders match">
@@ -12,19 +12,19 @@ The README asset is **not a prerecorded GIF and not JavaScript hidden in an SVG*
 
 ## Design contract
 
-1. **No decorative activity.** A node may glow only because a recorded machine event drove it.
+1. **No decorative activity.** A critical node may glow only because recorded machine state or a native machine event drove it.
 2. **Deterministic replay.** Same source + same seed = equivalent simulation semantics.
 3. **GitHub-safe output.** No JavaScript, no event handlers, no remote runtime dependency.
-4. **One engine, two views.** The README is the cinematic replay; a later WASM frontend will expose pan/zoom/inspection over the same core.
-5. **Progressive fidelity.** The current milestone is causal micro-architecture, with an explicit path to ISA execution and then bit-accurate gates.
+4. **One engine, two views.** The README is the cinematic replay; a later WASM frontend can expose pan/zoom/inspection over the same core.
+5. **Progressive but explicit fidelity.** F2 ISA execution is complete. F3 is actively converting the visible datapath from descriptive replay to same-tick control authority.
 
 ## Repository layout
 
 ```text
 crates/
-  leader-core/   deterministic machine, game, bot, topology, trace
-  leader-svg/    trace -> declarative animated SVG compiler
-  leader-cli/    reproducible build/trace/stats commands
+  leader-core/   ROM, CPU, µROM, machine, game, topology and native trace streams
+  leader-svg/    base declarative SVG compiler and gameplay replay
+  leader-cli/    reproducible build boundary + native F3 overlays
 docs/
   ARCHITECTURE.md
   ROADMAP.md
@@ -50,6 +50,59 @@ The CLI owns the deterministic build boundary. There is intentionally no runtime
 
 ## Current fidelity
 
-The first implementation executes a deterministic micro-architectural game loop through real memory reads/writes, ALU transitions, input, DMA, scanout and VBlank phases. The display is produced from a 128×96 one-bit VRAM buffer. The graph contains the detailed PC/MAR/IR/register/ALU/ROM/RAM/VRAM/GPU topology derived from the visual CPU prototype.
+### F2 — byte-addressed ISA: complete
 
-The renderer samples only causal trace events for activity; it does not add random blinking. The next fidelity milestone moves the semantic routines behind a byte-addressed ISA interpreter, followed by bit-accurate propagation for the visible datapath nodes. See [Architecture](docs/ARCHITECTURE.md) and [Roadmap](docs/ROADMAP.md).
+The autonomous game loop lives in assembled ROM bytecode. The CPU owns semantic PC, SP, registers and flags; fetch/decode, conditional branches, CALL/RET, memory access, WAIT_VBLANK and HALT are real instruction behavior. Corrupting the ROM breaks the match causally.
+
+The game state is mirrored through work RAM and rendered into a real 128×96 one-bit VRAM buffer. Input, game-device commands and scanout are memory-mapped hardware interfaces controlled by the ROM program.
+
+### F3 — physical datapath authority: active
+
+The machine now includes a real microsequencer, native T0/T1/T2 cycles and a physical 256×24 control-ROM representation.
+
+The 24-bit word contains the visible external controls plus sixteen internal enables for MAR/MDR/IR, PC increment, ALU operand/op/flag latches, address and condition latches, PC selection, register selection, bus enables and architectural commit.
+
+Critical paths already made causal include:
+
+- fetch and shared operand/read/write routines;
+- ripple-carry ALU and exact carry chains;
+- 16-bit ripple PC increment and SP increment/decrement;
+- ALU A/B/op and flag latches;
+- register source selection and write-back destination;
+- LD/ST address latches;
+- branch condition and PC input selection;
+- CALL/RET stack behavior and return PC restoration;
+- compact LDI/ADDI execution through the same physical latch discipline.
+
+Tests intentionally select incorrect microcode rows and prove forbidden latches or architectural commits do not mutate.
+
+## Native replay streams
+
+`MatchTrace` no longer relies on one semantic event list as universal truth. High-fidelity rendering consumes native streams for:
+
+- CPU microcycles and IR decode latches;
+- µPC transitions with the complete 24-bit control word;
+- bus ownership and transactions;
+- exact ALU operations;
+- register writes;
+- PC increments and loads.
+
+The PC, decoder, microcode, stack and timing overlays are native-driven. The F3 director uses native-first datapath derivations for fetch state, decoder lines, ALU slices, registers and bus ownership.
+
+CI contains invariants that delete `micro_samples` and require native F3 render paths to remain unchanged. `MicroSample` is retained for historical compatibility and for the older coarse base activity layer while that layer is gradually retired.
+
+## Determinism and validation
+
+Every semantic source of nondeterminism derives from the explicit seed. There is no wall clock or OS RNG in `leader-core`.
+
+Every change is validated with:
+
+```text
+Rust workspace tests
+Clippy
+smoke artifact generation
+SVG safety/XML validation
+full deterministic match completion
+```
+
+See [Architecture](docs/ARCHITECTURE.md) for the causal model and [Roadmap](docs/ROADMAP.md) for the remaining F3 work.
