@@ -1,7 +1,10 @@
+use std::collections::BTreeSet;
+
 use leader_core::{FrameState, MatchTrace, Topology, ENEMY_SHOT_SLOTS};
 use leader_svg::RenderConfig;
 
 const MAX_PRESENTED_FRAMES: usize = 84;
+const MAX_LIFECYCLE_TRANSITIONS: usize = 24;
 
 #[must_use]
 pub fn apply(
@@ -79,45 +82,60 @@ fn sampled_frames(frames: &[FrameState]) -> Vec<&FrameState> {
         return frames.iter().collect();
     }
 
-    let stride = frames.len().div_ceil(MAX_PRESENTED_FRAMES.saturating_sub(12).max(1));
-    let mut out = Vec::with_capacity(MAX_PRESENTED_FRAMES + 12);
-    let mut slot_seen = [false; ENEMY_SHOT_SLOTS];
-    let mut concurrent_seen = false;
-    let mut previous_active = 0usize;
+    let mut selected = BTreeSet::new();
+    selected.insert(0usize);
+    selected.insert(frames.len() - 1);
 
-    for (index, frame) in frames.iter().enumerate() {
-        let active = frame.enemy_shots.iter().flatten().count();
-        let lifecycle_transition = index > 0 && active != previous_active;
-        let first_concurrent = active >= 2 && !concurrent_seen;
-        if first_concurrent {
-            concurrent_seen = true;
-        }
-
-        let mut first_slot = false;
-        for (slot, projectile) in frame.enemy_shots.iter().enumerate() {
-            if projectile.is_some() && !slot_seen[slot] {
-                slot_seen[slot] = true;
-                first_slot = true;
-            }
-        }
-
-        if index == 0
-            || index + 1 == frames.len()
-            || index % stride == 0
-            || lifecycle_transition
-            || first_concurrent
-            || first_slot
+    for slot in 0..ENEMY_SHOT_SLOTS {
+        if let Some(index) = frames
+            .iter()
+            .position(|frame| frame.enemy_shots[slot].is_some())
         {
-            if out
-                .last()
-                .is_none_or(|last: &&FrameState| !std::ptr::eq(*last, frame))
-            {
-                out.push(frame);
-            }
+            selected.insert(index);
         }
-        previous_active = active;
     }
-    out
+    if let Some(index) = frames
+        .iter()
+        .position(|frame| frame.enemy_shots.iter().flatten().count() >= 2)
+    {
+        selected.insert(index);
+    }
+
+    let transitions = (1..frames.len())
+        .filter(|index| {
+            let before = frames[index - 1].enemy_shots.iter().flatten().count();
+            let after = frames[*index].enemy_shots.iter().flatten().count();
+            before != after
+        })
+        .collect::<Vec<_>>();
+    let transition_stride = transitions
+        .len()
+        .div_ceil(MAX_LIFECYCLE_TRANSITIONS.max(1))
+        .max(1);
+    for index in transitions
+        .into_iter()
+        .step_by(transition_stride)
+        .take(MAX_LIFECYCLE_TRANSITIONS)
+    {
+        selected.insert(index);
+    }
+
+    let remaining = MAX_PRESENTED_FRAMES.saturating_sub(selected.len());
+    if remaining > 0 {
+        let stride = frames.len().div_ceil(remaining).max(1);
+        for index in (0..frames.len()).step_by(stride) {
+            if selected.len() >= MAX_PRESENTED_FRAMES {
+                break;
+            }
+            selected.insert(index);
+        }
+    }
+
+    selected
+        .into_iter()
+        .take(MAX_PRESENTED_FRAMES)
+        .map(|index| &frames[index])
+        .collect()
 }
 
 fn glow(topology: &Topology, out: &mut String, id: &str, color: &str) {
@@ -165,10 +183,10 @@ mod tests {
     }
 
     #[test]
-    fn shot_bank_sampling_is_bounded_and_keeps_hardware_use() {
+    fn shot_bank_sampling_is_strictly_bounded_and_keeps_hardware_use() {
         let trace = Machine::run_match("m3-shot-sampling", 5000);
         let sampled = sampled_frames(&trace.frames);
-        assert!(sampled.len() <= MAX_PRESENTED_FRAMES + 12);
+        assert!(sampled.len() <= MAX_PRESENTED_FRAMES);
         assert!(sampled
             .iter()
             .any(|frame| frame.enemy_shots.iter().flatten().count() >= 2));
