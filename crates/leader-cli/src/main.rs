@@ -14,7 +14,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use leader_core::{build_topology, MicroCycleKind, Machine};
+use leader_core::{build_topology, validate_native_control_authority, MicroCycleKind, Machine};
 use leader_svg::{render, RenderConfig};
 
 fn main() {
@@ -68,6 +68,8 @@ fn render_cmd(options: Options) -> Result<(), String> {
     if !trace.finished {
         return Err(format!("match did not clear within {} frames", options.max_frames));
     }
+    let validation = validate_native_control_authority(&trace)
+        .map_err(|error| format!("native F3 trace invalid: {error}"))?;
     let config = RenderConfig::default();
     let svg = render(&topology, &trace, config);
     let svg = director::apply_camera(svg, &topology, &trace, config);
@@ -80,8 +82,13 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
     println!(
-        "rendered {} nodes / {} links / {} frames / {} kills -> {}",
-        topology.nodes.len(), topology.links.len(), trace.total_frames, trace.kills.len(), options.output.display()
+        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords -> {}",
+        topology.nodes.len(),
+        topology.links.len(),
+        trace.total_frames,
+        trace.kills.len(),
+        validation.micro_words,
+        options.output.display()
     );
     Ok(())
 }
@@ -89,6 +96,8 @@ fn render_cmd(options: Options) -> Result<(), String> {
 fn trace_cmd(mut options: Options) -> Result<(), String> {
     if options.output == PathBuf::from("generated/Leader.svg") { options.output = PathBuf::from("generated/trace.json"); }
     let trace = Machine::run_match(&options.seed, options.max_frames);
+    validate_native_control_authority(&trace)
+        .map_err(|error| format!("native F3 trace invalid: {error}"))?;
     write(&options.output, trace.to_json().as_bytes())?;
     println!("frames={} kills={} clear={}", trace.total_frames, trace.kills.len(), trace.finished);
     if trace.finished { Ok(()) } else { Err("trace hit frame limit".to_owned()) }
@@ -97,6 +106,8 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
 fn stats_cmd(options: Options) -> Result<(), String> {
     let topology = build_topology();
     let trace = Machine::run_match(&options.seed, options.max_frames);
+    let validation = validate_native_control_authority(&trace)
+        .map_err(|error| format!("native F3 trace invalid: {error}"))?;
     let decode_latches = trace
         .micro_cycles
         .iter()
@@ -113,6 +124,11 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     println!("trace.alu_events={}", trace.alu_events.len());
     println!("trace.register_writes={}", trace.register_writes.len());
     println!("trace.pc_events={}", trace.pc_events.len());
+    println!("trace.native_verified_micro_words={}", validation.micro_words);
+    println!("trace.native_verified_decode_latches={}", validation.decode_latches);
+    println!("trace.native_verified_alu_events={}", validation.alu_events);
+    println!("trace.native_verified_register_writes={}", validation.register_writes);
+    println!("trace.native_verified_pc_loads={}", validation.pc_loads);
     println!("trace.kills={}", trace.kills.len());
     println!("trace.finished={}", trace.finished);
     println!("trace.final_score={}", trace.final_score);
