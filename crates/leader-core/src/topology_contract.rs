@@ -79,6 +79,17 @@ pub fn validate_final_topology(topology: &Topology) -> Result<TopologyValidation
         "formationDivider",
         "formationCounter",
         "formationTick",
+        "enemyShotAlloc",
+        "enemyShotCooldown",
+        "enemyShot0X",
+        "enemyShot0Y",
+        "enemyShot0Active",
+        "enemyShot1X",
+        "enemyShot1Y",
+        "enemyShot1Active",
+        "enemyShot2X",
+        "enemyShot2Y",
+        "enemyShot2Active",
     ] {
         if topology.node(required).is_none() {
             return Err(format!("final topology missing required node {required}"));
@@ -100,8 +111,8 @@ mod tests {
     fn final_runtime_topology_is_closed_unique_and_inside_groups() {
         let topology = build_topology();
         let validation = validate_final_topology(&topology).expect("valid final topology");
-        assert!(validation.nodes >= 439);
-        assert!(validation.links >= 484);
+        assert!(validation.nodes >= 450);
+        assert!(validation.links >= 504);
     }
 
     #[test]
@@ -115,8 +126,8 @@ mod tests {
     #[test]
     fn missing_m3_peripheral_is_detected() {
         let mut topology = build_topology();
-        topology.nodes.retain(|node| node.id != "formationTick");
+        topology.nodes.retain(|node| node.id != "enemyShot2Active");
         let error = validate_final_topology(&topology).expect_err("missing M3 hardware must fail");
-        assert!(error.contains("formationTick") || error.contains("missing source"));
+        assert!(error.contains("enemyShot2Active") || error.contains("missing target"));
     }
 }
