@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod control_state_overlay;
 mod control_word_overlay;
 mod decoder_overlay;
 mod director;
@@ -93,6 +94,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let svg = decoder_overlay::apply(svg, &topology, &trace, config);
     let svg = microcode_overlay::apply(svg, &topology, &trace, config);
     let svg = control_word_overlay::apply(svg, &topology, &trace, config);
+    let svg = control_state_overlay::apply(svg, &topology, &trace, config);
     let svg = stack_overlay::apply(svg, &topology, &trace, config);
     let svg = timing_overlay::apply(svg, &topology, &trace, config);
     write(&options.output, svg.as_bytes())?;
