@@ -7,12 +7,12 @@ use crate::program::{
     SHIFT_OFFSET, SHIFT_RESULT,
 };
 use crate::rng::{hash_seed, DeterministicRng};
-use crate::shift_register::ShiftRegister16;
+use crate::shift_register::{ShiftRegister16, ShiftRegisterEventKind};
 use crate::trace::{
     AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind,
     ControlLatchEvent, ControlLatchKind, FlagEvent, FrameState, KillEvent, MatchTrace,
     MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent, PcEventKind, PhaseKind,
-    RegisterWriteEvent, SpEvent, SpEventKind,
+    RegisterWriteEvent, ShiftRegisterEvent, SpEvent, SpEventKind,
 };
 
 const ROM_LIMIT: usize = 0x2000;
@@ -346,8 +346,25 @@ impl Machine {
         );
     }
 
+    fn record_shift_register_event(
+        &mut self,
+        pc: u16,
+        address: u16,
+        kind: ShiftRegisterEventKind,
+    ) {
+        self.trace.shift_register_events.push(ShiftRegisterEvent {
+            frame: self.game.frame,
+            ordinal: self.ordinal,
+            pc,
+            address,
+            kind,
+        });
+    }
+
     fn shift_result_read(&mut self, pc: u16) -> u8 {
+        let kind = self.shift_register.read_event();
         let value = self.shift_register.read();
+        self.record_shift_register_event(pc, SHIFT_RESULT, kind);
         self.mem[SHIFT_RESULT as usize] = value;
         self.record_bus_transaction(
             pc,
@@ -368,16 +385,13 @@ impl Machine {
         value
     }
 
-    fn shift_write(&mut self, address: u16, value: u8) {
-        match address {
-            SHIFT_DATA => {
-                self.shift_register.write_data(value);
-            }
-            SHIFT_OFFSET => {
-                self.shift_register.write_offset(value);
-            }
-            _ => {}
-        }
+    fn shift_write(&mut self, pc: u16, address: u16, value: u8) {
+        let kind = match address {
+            SHIFT_DATA => self.shift_register.write_data(value),
+            SHIFT_OFFSET => self.shift_register.write_offset(value),
+            _ => return,
+        };
+        self.record_shift_register_event(pc, address, kind);
         self.mem[SHIFT_RESULT as usize] = self.shift_register.read();
     }
 
@@ -512,10 +526,10 @@ impl Bus for Machine {
     }
 
     fn write8(&mut self, pc: u16, address: u16, value: u8) {
-        self.traced_write(pc, address, value, "CPU_WRITE");
         if matches!(address, SHIFT_DATA | SHIFT_OFFSET) {
-            self.shift_write(address, value);
+            self.shift_write(pc, address, value);
         }
+        self.traced_write(pc, address, value, "CPU_WRITE");
         if address == DEVICE_CMD {
             self.device_command(pc, value);
         }
@@ -778,11 +792,53 @@ mod tests {
         assert!(!trace.alu_events.is_empty());
         assert!(!trace.flag_events.is_empty());
         assert!(!trace.control_latch_events.is_empty());
+        assert!(!trace.shift_register_events.is_empty());
         assert!(!trace.register_writes.is_empty());
         assert!(!trace.pc_events.is_empty());
         assert!(!trace.sp_events.is_empty());
         assert!(trace.sp_events.iter().any(|event| matches!(event.kind, SpEventKind::Push(_))));
         assert!(trace.sp_events.iter().any(|event| matches!(event.kind, SpEventKind::Pop(_))));
+        assert!(matches!(
+            trace.shift_register_events.as_slice(),
+            [
+                ShiftRegisterEvent {
+                    address: SHIFT_DATA,
+                    kind: ShiftRegisterEventKind::DataWrite {
+                        before: 0x0000,
+                        after: 0x1200,
+                        input: 0x12
+                    },
+                    ..
+                },
+                ShiftRegisterEvent {
+                    address: SHIFT_DATA,
+                    kind: ShiftRegisterEventKind::DataWrite {
+                        before: 0x1200,
+                        after: 0x3412,
+                        input: 0x34
+                    },
+                    ..
+                },
+                ShiftRegisterEvent {
+                    address: SHIFT_OFFSET,
+                    kind: ShiftRegisterEventKind::OffsetWrite {
+                        before: 0,
+                        after: 3,
+                        input: 3
+                    },
+                    ..
+                },
+                ShiftRegisterEvent {
+                    address: SHIFT_RESULT,
+                    kind: ShiftRegisterEventKind::Read {
+                        value: 0x3412,
+                        offset: 3,
+                        result: 0xA0
+                    },
+                    ..
+                }
+            ]
+        ));
         for kind in [
             ControlLatchKind::AddressLo,
             ControlLatchKind::AddressHi,
