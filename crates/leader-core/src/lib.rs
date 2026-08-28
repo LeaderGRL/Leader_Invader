@@ -16,6 +16,7 @@ pub mod program;
 pub mod rng;
 pub mod stack_datapath;
 pub mod topology;
+pub mod topology_contract;
 pub mod trace;
 pub mod trace_validation;
 
@@ -46,6 +47,7 @@ pub use microcode::{
 pub use pc_datapath::{derive_pc_datapath, PcDatapathEvent, PcDatapathKind};
 pub use stack_datapath::{derive_stack_datapath, StackDatapathEvent, StackDatapathKind};
 pub use topology::{Group, Link, Node, Rect, SignalKind, Topology};
+pub use topology_contract::{validate_final_topology, TopologyValidation};
 pub use trace::{
     AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind, FrameState,
     KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent, PcEventKind,
