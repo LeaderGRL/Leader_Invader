@@ -1,6 +1,9 @@
 use crate::enemy_shot_bank::{EnemyShotBank, ENEMY_SHOT_SLOTS};
 use crate::formation_cadence::FormationCadence;
-use crate::game::{Bot, GameState, InputState, Projectile, ALIEN_COLS, ALIEN_H, ALIEN_ROWS, ALIEN_W, PLAYER_Y, SCREEN_H, SCREEN_W};
+use crate::game::{
+    Bot, GameState, InputState, Projectile, ALIEN_COLS, ALIEN_H, ALIEN_ROWS, ALIEN_W, PLAYER_Y,
+    SCREEN_H, SCREEN_W,
+};
 use crate::isa::{Bus, Cpu, Flags, MicroCycleKind, MicroPhase, PcSource, Reg, StepOutcome};
 use crate::logic::{AluTrace, Decrement16Trace, PcIncrementTrace};
 use crate::microcode::MicroAddressTransition;
@@ -9,6 +12,10 @@ use crate::program::{
     SHIFT_OFFSET, SHIFT_RESULT,
 };
 use crate::rng::{hash_seed, DeterministicRng};
+use crate::shield_bank::{
+    ShieldBank, SHIELD_COUNT, SHIELD_H, SHIELD_RAM_BASE, SHIELD_TOTAL_BYTES, SHIELD_W, SHIELD_X,
+    SHIELD_Y,
+};
 use crate::shift_register::{ShiftRegister16, ShiftRegisterEventKind};
 use crate::trace::{
     AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind,
@@ -31,6 +38,7 @@ pub struct Machine {
     bot: Bot,
     input: InputState,
     enemy_shots: EnemyShotBank,
+    shields: ShieldBank,
     shift_register: ShiftRegister16,
     formation_cadence: FormationCadence,
     trace: MatchTrace,
@@ -59,6 +67,7 @@ impl Machine {
             bot,
             input: InputState::default(),
             enemy_shots,
+            shields: ShieldBank::default(),
             shift_register: ShiftRegister16::default(),
             formation_cadence: FormationCadence::default(),
             trace: MatchTrace::new(seed.to_owned(), hash),
@@ -144,7 +153,13 @@ impl Machine {
             command::RENDER_VRAM => self.render_video_device(pc),
             command::DMA_SCANOUT => self.dma_scanout(pc),
             command::CHECK_CLEAR => self.check_clear(pc),
-            _ => self.sample(pc, PhaseKind::Decode, Some(DEVICE_CMD), Some(cmd), "UNKNOWN_DEVICE_CMD"),
+            _ => self.sample(
+                pc,
+                PhaseKind::Decode,
+                Some(DEVICE_CMD),
+                Some(cmd),
+                "UNKNOWN_DEVICE_CMD",
+            ),
         }
     }
 
@@ -163,7 +178,13 @@ impl Machine {
             BusTransactionKind::Input,
             "AUTOPILOT_INPUT",
         );
-        self.sample(pc, PhaseKind::Input, Some(INPUT_PORT), Some(encoded), "AUTOPILOT_INPUT");
+        self.sample(
+            pc,
+            PhaseKind::Input,
+            Some(INPUT_PORT),
+            Some(encoded),
+            "AUTOPILOT_INPUT",
+        );
     }
 
     fn move_player(&mut self, pc: u16) {
@@ -196,7 +217,12 @@ impl Machine {
             self.game.fleet_dir = -self.game.fleet_dir;
             self.game.fleet_y += 2;
             self.traced_write(pc, RAM_BASE + 2, self.game.fleet_y as u8, "FLEET_Y_WRITE");
-            self.traced_write(pc, RAM_BASE + 3, self.game.fleet_dir as u8, "FLEET_DIR_WRITE");
+            self.traced_write(
+                pc,
+                RAM_BASE + 3,
+                self.game.fleet_dir as u8,
+                "FLEET_DIR_WRITE",
+            );
         } else {
             self.game.fleet_x = next;
             self.sample(pc, PhaseKind::Alu, None, Some(next as u8), "FLEET_X_ADD");
@@ -213,8 +239,24 @@ impl Machine {
     fn player_shot(&mut self, pc: u16) {
         self.game.player_cooldown = self.game.player_cooldown.saturating_sub(1);
         if let Some(mut shot) = self.game.player_shot {
+            let old_y = shot.y;
             shot.y -= 3;
-            self.sample(pc, PhaseKind::Alu, None, Some(shot.y.max(0) as u8), "SHOT_Y_SUB");
+            self.sample(
+                pc,
+                PhaseKind::Alu,
+                None,
+                Some(shot.y.max(0) as u8),
+                "SHOT_Y_SUB",
+            );
+
+            for impact_y in (shot.y..old_y).rev() {
+                if self.shield_impact(pc, shot.x, impact_y, "SHIELD_DAMAGE_PLAYER") {
+                    self.game.player_shot = None;
+                    self.traced_write(pc, RAM_BASE + 6, 0, "SHOT_SHIELD_CLEAR");
+                    return;
+                }
+            }
+
             if shot.y <= 4 {
                 self.game.player_shot = None;
                 self.traced_write(pc, RAM_BASE + 6, 0, "SHOT_CLEAR");
@@ -284,6 +326,7 @@ impl Machine {
             let Some(mut shot) = self.enemy_shots.slot(slot) else {
                 continue;
             };
+            let old_y = shot.y;
             shot.y += 2;
             self.sample(
                 pc,
@@ -292,6 +335,19 @@ impl Machine {
                 Some(shot.y as u8),
                 "ENEMY_SHOT_Y_ADD",
             );
+
+            let shield_hit = (old_y + 1..=shot.y)
+                .any(|impact_y| self.shield_impact(pc, shot.x, impact_y, "SHIELD_DAMAGE_ENEMY"));
+            if shield_hit {
+                self.enemy_shots.clear(slot);
+                self.traced_write(
+                    pc,
+                    enemy_shot_ram(slot, 2),
+                    0,
+                    "ENEMY_SHOT_SHIELD_CLEAR",
+                );
+                continue;
+            }
 
             if shot.y >= PLAYER_Y - 2 && shot.x >= left && shot.x <= right {
                 self.game.lives = self.game.lives.saturating_sub(1).max(1);
@@ -350,6 +406,19 @@ impl Machine {
                 }
             }
         }
+    }
+
+    fn shield_impact(&mut self, pc: u16, x: i16, y: i16, control: &'static str) -> bool {
+        let Some(damage) = self.shields.damage_world(x, y) else {
+            return false;
+        };
+        self.traced_write(
+            pc,
+            SHIELD_RAM_BASE + damage.byte_index as u16,
+            damage.after,
+            control,
+        );
+        true
     }
 
     fn advance_frame(&mut self, pc: u16) {
@@ -495,7 +564,13 @@ impl Machine {
             BusTransactionKind::Read,
             control,
         );
-        self.sample(pc, PhaseKind::MemoryRead, Some(address), Some(value), control);
+        self.sample(
+            pc,
+            PhaseKind::MemoryRead,
+            Some(address),
+            Some(value),
+            control,
+        );
         value
     }
 
@@ -510,7 +585,13 @@ impl Machine {
             BusTransactionKind::Write,
             control,
         );
-        self.sample(pc, PhaseKind::MemoryWrite, Some(address), Some(value), control);
+        self.sample(
+            pc,
+            PhaseKind::MemoryWrite,
+            Some(address),
+            Some(value),
+            control,
+        );
     }
 
     fn record_bus_transaction(
@@ -578,6 +659,8 @@ impl Machine {
             self.mem[enemy_shot_ram(slot, 1) as usize] = shot.map_or(0, |shot| shot.y as u8);
             self.mem[enemy_shot_ram(slot, 2) as usize] = u8::from(shot.is_some());
         }
+        self.mem[SHIELD_RAM_BASE as usize..SHIELD_RAM_BASE as usize + SHIELD_TOTAL_BYTES]
+            .copy_from_slice(self.shields.bytes());
     }
 
     fn render_vram(&mut self) -> u32 {
@@ -591,6 +674,7 @@ impl Machine {
             }
         }
         draw_player(&mut self.mem, self.game.player_x, PLAYER_Y);
+        draw_shields(&mut self.mem, &self.shields);
         if let Some(shot) = self.game.player_shot {
             draw_shot(&mut self.mem, shot.x, shot.y, 4);
         }
@@ -877,6 +961,19 @@ fn draw_player(memory: &mut [u8; 65_536], x: i16, y: i16) {
     }
 }
 
+fn draw_shields(memory: &mut [u8; 65_536], shields: &ShieldBank) {
+    for shield in 0..SHIELD_COUNT {
+        let origin_x = SHIELD_X[shield];
+        for y in 0..SHIELD_H {
+            for x in 0..SHIELD_W {
+                if shields.pixel(shield, x, y) {
+                    pixel(memory, origin_x + x as i16, SHIELD_Y + y as i16);
+                }
+            }
+        }
+    }
+}
+
 fn draw_shot(memory: &mut [u8; 65_536], x: i16, y: i16, height: i16) {
     for dy in 0..height {
         pixel(memory, x, y + dy);
@@ -923,6 +1020,10 @@ mod tests {
             .frames
             .iter()
             .any(|frame| frame.enemy_shots.iter().flatten().count() >= 2));
+        assert!(trace
+            .bus_transactions
+            .iter()
+            .any(|event| matches!(event.control, "SHIELD_DAMAGE_PLAYER" | "SHIELD_DAMAGE_ENEMY")));
         assert!(trace.micro_samples.iter().any(|sample| sample.control == "CALL"));
         assert!(trace.micro_samples.iter().any(|sample| sample.control == "RET"));
         assert!(trace
