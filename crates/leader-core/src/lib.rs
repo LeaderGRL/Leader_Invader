@@ -7,6 +7,7 @@ pub mod datapath;
 pub mod decoder_datapath;
 pub mod enemy_shot_bank;
 pub mod enemy_shot_contract;
+pub mod enemy_shot_layout;
 pub mod formation_cadence;
 pub mod formation_cadence_contract;
 pub mod formation_cadence_layout;
@@ -45,6 +46,7 @@ pub use enemy_shot_bank::{EnemyShotBank, ENEMY_SHOT_SLOTS};
 pub use enemy_shot_contract::{
     enemy_shot_ram, validate_enemy_shot_bank_contract, EnemyShotValidation, ENEMY_SHOT_RAM_BASE,
 };
+pub use enemy_shot_layout::ENEMY_SHOT_NODES;
 pub use formation_cadence::{FormationCadence, FormationCadenceEvent};
 pub use formation_cadence_contract::{
     validate_formation_cadence_contract, FormationCadenceValidation,
@@ -104,5 +106,6 @@ pub fn build_topology() -> Topology {
     control_layout::inject_internal_control_lines(&mut topology);
     shift_register_layout::inject_shift_register(&mut topology);
     formation_cadence_layout::inject_formation_cadence(&mut topology);
+    enemy_shot_layout::inject_enemy_shot_bank(&mut topology);
     topology
 }
