@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 pub mod assembler;
+pub mod call_stack_contract;
 pub mod control_contract;
 pub mod control_layout;
 pub mod datapath;
@@ -18,6 +19,7 @@ pub mod topology;
 pub mod trace;
 pub mod trace_validation;
 
+pub use call_stack_contract::{validate_call_stack_contract, CallStackValidation};
 pub use control_contract::{
     control_topology_violations, physical_control_lines, physically_used_control_mask,
     PhysicalControlLine, EXTERNAL_CONTROL_NODES,
