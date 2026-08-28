@@ -4,13 +4,18 @@ use crate::{
 
 const STACK_WINDOW_START: u16 = 0x7F00;
 const STACK_WINDOW_END: u16 = 0x7FFF;
+const MAX_NATIVE_SP_BUS_GAP: u16 = 4;
 
-/// Materializes the first-class SP mutation stream from native stack bus transactions.
+/// Compatibility fallback for historical traces that predate CPU-native `SpEvent`s.
 ///
-/// This is a trace-normalization boundary, not semantic reconstruction: every event
-/// comes from the exact CPU read/write transaction that accompanies the real PUSH/POP.
+/// Current execution emits the first-class SP stream directly from the CPU at the
+/// exact ripple increment/decrement mutation point. Existing native events are
+/// therefore authoritative and are never overwritten here. Only an empty legacy
+/// trace is reconstructed from its exact stack-window bus transactions.
 pub fn materialize_sp_events(trace: &mut MatchTrace) {
-    trace.sp_events.clear();
+    if !trace.sp_events.is_empty() {
+        return;
+    }
 
     for transaction in &trace.bus_transactions {
         let Some(address) = transaction.address else {
@@ -78,15 +83,25 @@ pub fn validate_sp_event_stream(trace: &MatchTrace) -> Result<usize, String> {
             _ => unreachable!(),
         };
         if sp.frame != bus.frame
-            || sp.ordinal != bus.ordinal
             || sp.pc != bus.pc
             || Some(sp.address) != bus.address
             || Some(sp.data) != bus.data
             || sp.kind.as_str() != expected_kind
         {
             return Err(format!(
-                "SP event diverges from native stack transaction at frame={} ordinal={}",
-                bus.frame, bus.ordinal
+                "SP event diverges from native stack transaction at frame={} bus_ordinal={} sp_ordinal={}",
+                bus.frame, bus.ordinal, sp.ordinal
+            ));
+        }
+
+        // CPU-native SP events are emitted after the shared READ/WRITE micro-routine
+        // returns to the STACK execute row. They must therefore follow their exact
+        // bus transaction locally, rather than share its ordinal as the historical
+        // materialized stream did.
+        if sp.ordinal < bus.ordinal || sp.ordinal - bus.ordinal > MAX_NATIVE_SP_BUS_GAP {
+            return Err(format!(
+                "SP event is not locally ordered after stack transaction at frame={} bus_ordinal={} sp_ordinal={}",
+                bus.frame, bus.ordinal, sp.ordinal
             ));
         }
 
@@ -119,10 +134,10 @@ mod tests {
     use crate::Machine;
 
     #[test]
-    fn materialized_sp_stream_is_balanced_and_bit_accurate() {
-        let mut trace = Machine::run_match("f3-sp-native", 5000);
-        materialize_sp_events(&mut trace);
-        let count = validate_sp_event_stream(&trace).expect("valid SP stream");
+    fn cpu_emits_balanced_bit_accurate_sp_stream_directly() {
+        let trace = Machine::run_match("f3-sp-cpu-native", 5000);
+        assert!(!trace.sp_events.is_empty());
+        let count = validate_sp_event_stream(&trace).expect("valid direct CPU SP stream");
         assert!(count > 0);
         let pushes = trace
             .sp_events
@@ -138,12 +153,50 @@ mod tests {
     }
 
     #[test]
+    fn materialization_is_noop_when_cpu_native_stream_exists() {
+        let mut trace = Machine::run_match("f3-sp-noop", 5000);
+        let expected = trace.sp_events.clone();
+        assert!(!expected.is_empty());
+        materialize_sp_events(&mut trace);
+        assert_eq!(trace.sp_events, expected);
+    }
+
+    #[test]
+    fn historical_bus_fallback_reconstructs_same_sp_stream_semantics() {
+        let mut trace = Machine::run_match("f3-sp-fallback", 5000);
+        let expected = trace.sp_events.clone();
+        assert!(!expected.is_empty());
+        trace.sp_events.clear();
+        materialize_sp_events(&mut trace);
+        assert_eq!(trace.sp_events.len(), expected.len());
+
+        for (legacy, native) in trace.sp_events.iter().zip(expected) {
+            assert_eq!(legacy.frame, native.frame);
+            assert_eq!(legacy.pc, native.pc);
+            assert_eq!(legacy.address, native.address);
+            assert_eq!(legacy.data, native.data);
+            assert_eq!(legacy.kind.as_str(), native.kind.as_str());
+            assert_eq!(legacy.kind.before(), native.kind.before());
+            assert_eq!(legacy.kind.after(), native.kind.after());
+            assert_eq!(legacy.kind.chain(), native.kind.chain());
+        }
+    }
+
+    #[test]
     fn corrupted_sp_transition_is_detected() {
         let mut trace = Machine::run_match("f3-sp-negative", 5000);
-        materialize_sp_events(&mut trace);
         let event = trace.sp_events.first_mut().expect("SP event");
         event.address ^= 1;
         let error = validate_sp_event_stream(&trace).expect_err("corrupt SP event must fail");
         assert!(error.contains("SP event diverges"));
+    }
+
+    #[test]
+    fn implausibly_delayed_sp_event_is_detected() {
+        let mut trace = Machine::run_match("f3-sp-order-negative", 5000);
+        let event = trace.sp_events.first_mut().expect("SP event");
+        event.ordinal = event.ordinal.saturating_add(MAX_NATIVE_SP_BUS_GAP + 1);
+        let error = validate_sp_event_stream(&trace).expect_err("delayed SP event must fail");
+        assert!(error.contains("locally ordered"));
     }
 }
