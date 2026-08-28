@@ -22,8 +22,8 @@ use std::{
 };
 
 use leader_core::{
-    build_topology, validate_call_stack_contract, validate_native_control_authority, MatchTrace,
-    MicroCycleKind, Machine, Topology,
+    build_topology, validate_call_stack_contract, validate_final_topology,
+    validate_native_control_authority, MatchTrace, MicroCycleKind, Machine, Topology,
 };
 use leader_svg::{render, RenderConfig};
 
@@ -92,6 +92,8 @@ fn validate_f3_trace(trace: &MatchTrace) -> Result<(leader_core::NativeTraceVali
 
 fn render_cmd(options: Options) -> Result<(), String> {
     let topology = build_topology();
+    let topology_validation = validate_final_topology(&topology)
+        .map_err(|error| format!("final F3 topology invalid: {error}"))?;
     let trace = Machine::run_match(&options.seed, options.max_frames);
     if !trace.finished {
         return Err(format!("match did not clear within {} frames", options.max_frames));
@@ -117,14 +119,15 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
     println!(
-        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} CALL pairs / {} native overlays -> {}",
-        topology.nodes.len(),
-        topology.links.len(),
+        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} CALL pairs / {} native overlays / {} bytes -> {}",
+        topology_validation.nodes,
+        topology_validation.links,
         trace.total_frames,
         trace.kills.len(),
         validation.micro_words,
         call_stack.call_pairs,
         svg_validation.overlay_groups,
+        svg_validation.bytes,
         options.output.display()
     );
     Ok(())
@@ -141,6 +144,8 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
 
 fn stats_cmd(options: Options) -> Result<(), String> {
     let topology = build_topology();
+    let topology_validation = validate_final_topology(&topology)
+        .map_err(|error| format!("final F3 topology invalid: {error}"))?;
     let trace = Machine::run_match(&options.seed, options.max_frames);
     let (validation, call_stack) = validate_f3_trace(&trace)?;
     let decode_latches = trace
@@ -148,8 +153,8 @@ fn stats_cmd(options: Options) -> Result<(), String> {
         .iter()
         .filter(|event| event.kind == MicroCycleKind::DecodeLatch)
         .count();
-    println!("topology.nodes={}", topology.nodes.len());
-    println!("topology.links={}", topology.links.len());
+    println!("topology.nodes={}", topology_validation.nodes);
+    println!("topology.links={}", topology_validation.links);
     println!("trace.frames={}", trace.frames.len());
     println!("trace.micro_samples={}", trace.micro_samples.len());
     println!("trace.micro_cycles={}", trace.micro_cycles.len());
