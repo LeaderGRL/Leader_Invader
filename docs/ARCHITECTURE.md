@@ -33,10 +33,10 @@ Owns semantics, physical control contracts and determinism.
 - ripple-carry ALU, PC incrementer and SP increment/decrement networks;
 - byte-addressed work RAM and stack window;
 - real 128×96 1-bit VRAM generation;
-- native microcycle, bus, ALU, register and PC event streams;
+- first-class microcycle, bus, ALU, flag, control-latch, register, PC and SP event streams;
 - physical topology for all 24 µROM output lines and their consumers;
 - CALL/RET combinational return-path contract;
-- trace/control and final-topology validators;
+- trace/control, SP and final-topology validators;
 - `MatchTrace`, the contract between simulation and presentation.
 
 ### `leader-svg`
@@ -50,7 +50,7 @@ Owns the reusable declarative base presentation.
 - reduced-motion fallback;
 - historical coarse `MicroSample` activity for backward-compatible library callers.
 
-The production CLI intentionally clears `micro_samples` before invoking this base renderer, so the historical coarse activity layer is absent from the README artifact.
+The production CLI removes `micro_samples` from the base-render copy, so the historical coarse activity layer is absent from the README artifact.
 
 ### `leader-cli`
 
@@ -66,15 +66,18 @@ Production layers native overlays for:
 - decoder;
 - µPC / microcode;
 - all 24 physical control outputs;
-- control-state latches;
+- exact control-state latch values;
 - T-state microcycle snapshots;
 - ALU;
+- flags;
 - register writes;
 - bus transactions;
 - stack/SP;
 - timing.
 
-It then validates the completed SVG before writing it. CI calls this exact path; there is no hidden renderer.
+`render`, `trace` and `stats` consume the first-class streams returned directly by `Machine::run_match()`. They do **not** materialize SP from the bus and do not depend on `MicroSample` semantic reconstruction.
+
+The CLI validates the completed trace/topology/SVG before writing it. CI calls this exact path; there is no hidden renderer.
 
 ## Fidelity contract
 
@@ -82,22 +85,22 @@ It then validates the completed SVG before writing it. CI calls this exact path;
 
 **F2 — ISA execution — complete.** The autonomous game loop lives in assembled ROM bytecode. Fetch/decode/control flow, stack behavior, registers, flags and memory are execution state. Corrupting ROM breaks the match causally.
 
-**F3 — physical datapath authority — advanced.** Critical visible control and datapath paths are same-tick authoritative rather than descriptive. The current implementation includes:
+**F3 — physical datapath authority — complete.** Every visible critical CPU/control path is driven from native same-tick machine state or a physically justified combinational path. The completed implementation includes:
 
 - native T0/T1/T2 microcycles;
 - a real µPC with fetch, sequential, dispatch, routine-call and routine-return transitions;
 - a physical `256 × 24` control-ROM model;
 - 24 distinct visible control outputs, each with a unique bit/node/label contract;
 - physical wiring from internal control outputs to MAR/MDR/IR, PC increment, ALU/select/flag paths, target/condition/PC/register state, bus enables and commit;
-- explicit visible `ADDR LO`, `ADDR HI`, `COND`, `PC SEL` and `REG SEL` state nodes;
+- explicit visible `ADDR LO`, `ADDR HI`, `COND`, `PC SEL` and `REG SEL` state nodes with exact native values;
 - a visible combinational `RETURN BYTE` mux connecting stable PC high/low bytes to CALL stack writes and the stack data path back to RET address latches;
 - gated architectural commits for register writes, memory writes and PC loads;
-- native bus ownership, exact ALU, register-write and PC streams;
+- first-class native bus ownership, exact ALU, flag, control-latch, register-write, PC and SP streams;
 - native decode from `DecodeLatch` microcycles;
-- exact SP ripple reconstruction from native stack transactions;
-- a production SVG whose high-fidelity hardware presentation is independent of `MicroSample`.
+- direct CPU-native SP ripple transitions rather than production reconstruction from bus activity;
+- a production SVG whose high-fidelity hardware presentation is independent of `MicroSample` and stack fallback materialization.
 
-A visible critical control line is considered complete only when removing or mis-selecting that line changes or prevents the real machine result in the same instruction.
+A visible critical control line is complete only when removing or mis-selecting that line changes, prevents or invalidates the real machine result in the same instruction.
 
 No random decorative glow is allowed at any level.
 
@@ -126,24 +129,29 @@ REG_SELECT BUS_ADDRESS_ENABLE BUS_DATA_ENABLE ARCH_COMMIT
 
 ## Native trace model
 
-The trace uses several time-aligned native streams rather than treating `MicroSample` as universal truth.
+The trace uses time-aligned first-class streams rather than treating `MicroSample` as universal truth.
 
 1. `FrameState` — stable game/display checkpoints.
 2. `MicroCycleEvent` — exact T-state snapshots with PC/MAR/MDR/IR and native `DecodeLatch` events.
 3. `MicroAddressEvent` — µPC transitions and selected 24-bit control word.
 4. `BusTransactionEvent` — address/data ownership and fetch/read/write/input/DMA/scanout transactions.
 5. `AluEvent` — operation, operands, result and exact carry chain.
-6. `RegisterWriteEvent` — architectural register mutation.
-7. `PcEvent` — exact ripple increments and selected PC loads.
-8. `MicroSample` — historical compatibility only in production architecture.
+6. `FlagEvent` — exact architectural Z/C/L state after a physically enabled flag latch.
+7. `ControlLatchEvent` — exact kind/value/validity for `ADDR LO`, `ADDR HI`, `COND`, `PC SEL` and `REG SEL`.
+8. `RegisterWriteEvent` — architectural register mutation.
+9. `PcEvent` — exact ripple increments and selected PC loads.
+10. `SpEvent` — exact PUSH/POP mutation, stack address/data and 16-bit ripple chain.
+11. `MicroSample` — historical compatibility only; not a production authority source.
 
-The production renderer clears `micro_samples` before base rendering, then consumes the native streams directly. A pipeline test requires byte-for-byte identical F3 output after `trace.micro_samples.clear()`.
+`Machine::run_match()` emits all first-class streams directly. The production renderer clears `micro_samples` only from the reusable base-render copy, then consumes the native streams directly. Pipeline tests require byte-for-byte identical F3 output after `trace.micro_samples.clear()` and stack tests prove `SpEvent` remains authoritative even after bus transactions are removed.
+
+Historical helpers may still reconstruct old traces from bus or `MicroSample` data when the newer stream is absent. Those compatibility branches are not invoked by the production CLI.
 
 ## CPU authority
 
 ### Fetch and memory routines
 
-The selected µROM row must physically enable each mutation:
+The selected µROM row physically enables each mutation:
 
 ```text
 FETCH_T0: MAR_LOAD + BUS_ADDRESS_ENABLE
@@ -151,17 +159,31 @@ FETCH_T1: MEMR + MDR_LOAD + PC_INC + BUS_DATA_ENABLE
 FETCH_T2: IR_LOAD
 ```
 
-Shared operand/read/write routines follow the same rule. Native bus validation ties `ROM_FETCH`, `CPU_READ` and `CPU_WRITE` transactions back to their required physical rows.
+Shared operand/read/write routines follow the same rule. Native validation ties `ROM_FETCH`, `CPU_READ` and `CPU_WRITE` transactions back to their required physical rows.
 
-### ALU
+Every native `PcEvent::Increment` is independently tied to the preceding `FETCH_T1`/`OPERAND_T1` row carrying `PC_INC`.
 
-Five-row ALU instructions load explicit CPU latches for A, B and operation selection. Propagation consumes only those latches. Flags require `FLAGS_LOAD`; register mutation requires the final write-enable/commit row.
+### ALU and flags
 
-The SVG exposes operation, lhs, rhs, effective rhs, result and carry chain as data attributes while lighting the exact full-adder path.
+Five-row ALU instructions load explicit CPU latches for A, B and operation selection. Propagation consumes only those latches. Flags mutate only when `FLAGS_LOAD` is physically active; register mutation requires the final write-enable/commit row.
 
-### Register file
+The SVG exposes operation, lhs, rhs, effective rhs, result and carry chain as data attributes while lighting the exact full-adder path. A separate flag overlay exposes the actual Z/C/L values latched by the CPU.
+
+### Register file and control-state latches
 
 `REG_SELECT` loads real register-selection state. The selected A register is the authoritative architectural write-back destination. Native register events expose before/after values and are validated against `REGW + ARCH_COMMIT`.
+
+`ControlLatchEvent` is emitted at the real mutation point for each visible control-state latch. Each event is validated against its corresponding µROM enable:
+
+```text
+ADDR LO  <- ADDR_LO_LOAD
+ADDR HI  <- ADDR_HI_LOAD
+COND     <- CONDITION_LOAD
+PC SEL   <- PC_SELECT
+REG SEL  <- REG_SELECT
+```
+
+A not-taken branch records `PC SEL` with `valid=false`, explicitly proving stale target selection was cleared.
 
 ### Control flow
 
@@ -185,20 +207,31 @@ PC HI ----/          ^
 STACK RAM -> DATA BUS -> ADDR LO / ADDR HI -> PC SELECT -> PC
 ```
 
-`validate_call_stack_contract()` proves against the real native trace that:
+`validate_call_stack_contract()` consumes the first-class SP datapath stream and proves that:
 
 - CALL pushes high then low byte of `PC + 3`;
 - RET pops the exact bytes in LIFO order;
 - reconstructed return addresses equal the actual `PcEvent::Return` targets;
 - call/return pairs are balanced for the complete match.
 
+Corrupting the authoritative `SpEvent` byte fails the contract. Corrupting only the older bus fallback cannot override the first-class SP stream.
+
 This closes the return-address source path without inventing an unnecessary 25th control bit.
 
 ### Stack / SP
 
-`STACK` gates PUSH/POP. SP movement uses exact 16-bit ripple decrement/increment logic. The stack SVG exposes push/pop kind, SP before/after, address and data byte.
+`STACK` gates PUSH/POP. SP movement uses exact 16-bit ripple decrement/increment logic.
 
-A dedicated first-class `SpEvent` stream would improve trace explicitness but is not required for execution or rendering fidelity because all needed values are already derived from authoritative native stack transactions.
+The CPU emits `SpEvent` directly at the mutation boundary:
+
+```text
+PUSH: ripple_decrement16(SP) -> SP -> stack write -> SpEvent::Push
+POP : stack read -> ripple_increment16(SP) -> SP -> SpEvent::Pop
+```
+
+Each event contains the complete ripple trace, address, byte, PC and control label. The central native-control validator requires a local execute µROM word carrying `STACK`, while `validate_sp_event_stream()` cross-checks each event against its exact stack-window bus transaction and ordering.
+
+`materialize_sp_events()` remains only as a compatibility fallback for historical traces with no first-class SP stream. Production does not call it.
 
 ## Physical topology contract
 
@@ -215,11 +248,30 @@ The final injected topology is validated before production rendering.
 
 This validation runs on the actual final topology after visual-layout and F3 hardware injection, not only on the historical base topology.
 
+## Native control-authority contract
+
+`validate_native_control_authority()` ties the trace back to the selected physical µROM word.
+
+It validates:
+
+- every traced µROM word equals `control_word_at(µADDR, opcode).bits24()`;
+- `DecodeLatch` requires `IR_LOAD`;
+- ALU propagation requires `ALU`;
+- `FlagEvent` requires `FLAGS_LOAD`;
+- every visible `ControlLatchEvent` requires its physical load/select enable;
+- register write requires `REGW + ARCH_COMMIT`;
+- PC increment requires `PC_INC` on the exact fetch/operand row;
+- PC load requires `PCLD + ARCH_COMMIT`;
+- SP mutation requires `STACK`;
+- ROM fetch, CPU read and CPU write require their corresponding shared micro-routine rows.
+
+Negative tests remove each class of authority and require validation failure.
+
 ## Native SVG contract
 
 The completed production SVG is validated before it is written.
 
-Required native groups include PC, decoder, microcode, 24-bit control bank, control-state latches, microcycles, ALU, register file, bus, stack and timing.
+Required native groups include PC, decoder, microcode, 24-bit control bank, control-state latches, microcycles, ALU, flags, register file, bus, stack and timing.
 
 The artifact must also contain structured metadata for the corresponding native values. Generation fails if:
 
@@ -228,7 +280,7 @@ The artifact must also contain structured metadata for the corresponding native 
 - script or JavaScript URLs are present;
 - the SVG exceeds the **5,000,000 byte** production budget.
 
-The current artifact is roughly 4 MB, leaving explicit headroom while preserving inspectability.
+The current artifact is roughly **3.3 MB**, leaving substantial headroom while preserving inspectability.
 
 ## Determinism
 
@@ -268,6 +320,7 @@ Generation fails rather than publishing misleading output if:
 - the final injected topology is invalid;
 - a traced µROM word differs from the physical word selected by µADDR/opcode;
 - native architectural activity lacks the required control authority;
+- native SP activity diverges from its physical `STACK` row or bus transaction;
 - CALL/RET stack bytes disagree with the real PC stream;
 - required native SVG overlays or metadata disappear;
 - legacy semantic activity leaks back into production;
