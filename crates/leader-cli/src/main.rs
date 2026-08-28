@@ -14,6 +14,7 @@ mod native_pipeline_tests;
 mod pc_overlay;
 mod register_overlay;
 mod render_contract;
+mod shift_register_overlay;
 mod stack_overlay;
 mod timing_overlay;
 
@@ -132,7 +133,7 @@ fn validate_native_trace(
 fn render_cmd(options: Options) -> Result<(), String> {
     let topology = build_topology();
     let topology_validation = validate_final_topology(&topology)
-        .map_err(|error| format!("final F3 topology invalid: {error}"))?;
+        .map_err(|error| format!("final topology invalid: {error}"))?;
     let trace = run_native_trace(&options.seed, options.max_frames);
     if !trace.finished {
         return Err(format!(
@@ -155,6 +156,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let svg = register_overlay::apply(svg, &topology, &trace, config);
     let svg = bus_overlay::apply(svg, &topology, &trace, config);
     let svg = stack_overlay::apply(svg, &topology, &trace, config);
+    let svg = shift_register_overlay::apply(svg, &topology, &trace, config);
     let svg = timing_overlay::apply(svg, &topology, &trace, config);
     let svg_validation = render_contract::validate_native_svg_contract(&svg)
         .map_err(|error| format!("native SVG contract invalid: {error}"))?;
@@ -208,7 +210,7 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
 fn stats_cmd(options: Options) -> Result<(), String> {
     let topology = build_topology();
     let topology_validation = validate_final_topology(&topology)
-        .map_err(|error| format!("final F3 topology invalid: {error}"))?;
+        .map_err(|error| format!("final topology invalid: {error}"))?;
     let trace = run_native_trace(&options.seed, options.max_frames);
     let (validation, call_stack, sp_events, shift) = validate_native_trace(&trace)?;
     let decode_latches = trace
