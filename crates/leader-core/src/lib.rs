@@ -34,6 +34,7 @@ pub mod topology;
 pub mod topology_contract;
 pub mod trace;
 pub mod trace_validation;
+pub mod video_pipeline_contract;
 
 pub use call_stack_contract::{validate_call_stack_contract, CallStackValidation};
 pub use control_contract::{
@@ -99,6 +100,7 @@ pub use trace::{
     PhaseKind, ProjectileSnapshot, RegisterWriteEvent, ShiftRegisterEvent, SpEvent, SpEventKind,
 };
 pub use trace_validation::{validate_native_control_authority, NativeTraceValidation};
+pub use video_pipeline_contract::{validate_video_pipeline_contract, VideoPipelineValidation};
 
 impl PartialEq for FrameState {
     fn eq(&self, other: &Self) -> bool {
