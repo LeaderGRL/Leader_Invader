@@ -4,8 +4,8 @@ use leader_svg::{render, RenderConfig};
 use crate::{
     alu_overlay, bus_overlay, control_state_overlay, control_word_overlay, decoder_overlay,
     director, enemy_shot_overlay, flags_overlay, formation_cadence_overlay, microcode_overlay,
-    microcycle_overlay, pc_overlay, register_overlay, render_native_base, shift_register_overlay,
-    stack_overlay, timing_overlay,
+    microcycle_overlay, pc_overlay, register_overlay, render_native_base, shield_overlay,
+    shift_register_overlay, stack_overlay, timing_overlay,
 };
 
 fn apply_native_pipeline(
@@ -29,6 +29,7 @@ fn apply_native_pipeline(
     let svg = formation_cadence_overlay::apply(svg, topology, trace, config);
     let svg = shift_register_overlay::apply(svg, topology, trace, config);
     let svg = enemy_shot_overlay::apply(svg, topology, trace, config);
+    let svg = shield_overlay::apply(svg, topology, trace, config);
     timing_overlay::apply(svg, topology, trace, config)
 }
 
@@ -71,6 +72,10 @@ fn complete_native_overlay_pipeline_is_native_only_without_materialization() {
         .frames
         .iter()
         .any(|frame| frame.enemy_shots.iter().flatten().count() >= 2));
+    assert!(trace.bus_transactions.iter().any(|event| matches!(
+        event.control,
+        "SHIELD_DAMAGE_PLAYER" | "SHIELD_DAMAGE_ENEMY"
+    )));
 
     let base = render_native_base(&topology, &trace, config);
     let baseline = apply_native_pipeline(base.clone(), &topology, &trace, config);
@@ -92,4 +97,8 @@ fn complete_native_overlay_pipeline_is_native_only_without_materialization() {
     assert!(baseline.contains("data-enemy-shot-slot=\"2\""));
     assert!(baseline.contains("data-enemy-shot-active-count=\"2\"")
         || baseline.contains("data-enemy-shot-active-count=\"3\""));
+    assert!(baseline.contains("id=\"m3-shield-bank\""));
+    assert!(baseline.contains("data-shield-mask=\""));
+    assert!(baseline.contains("data-shield-before=\""));
+    assert!(baseline.contains("data-shield-after=\""));
 }
