@@ -14,6 +14,7 @@ pub mod microcode;
 pub mod pc_datapath;
 pub mod program;
 pub mod rng;
+pub mod sp_trace;
 pub mod stack_datapath;
 pub mod topology;
 pub mod topology_contract;
@@ -45,13 +46,14 @@ pub use microcode::{
     MicroSequencer,
 };
 pub use pc_datapath::{derive_pc_datapath, PcDatapathEvent, PcDatapathKind};
+pub use sp_trace::{materialize_sp_events, validate_sp_event_stream};
 pub use stack_datapath::{derive_stack_datapath, StackDatapathEvent, StackDatapathKind};
 pub use topology::{Group, Link, Node, Rect, SignalKind, Topology};
 pub use topology_contract::{validate_final_topology, TopologyValidation};
 pub use trace::{
     AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind, FrameState,
     KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent, PcEventKind,
-    PhaseKind, ProjectileSnapshot, RegisterWriteEvent,
+    PhaseKind, ProjectileSnapshot, RegisterWriteEvent, SpEvent, SpEventKind,
 };
 pub use trace_validation::{validate_native_control_authority, NativeTraceValidation};
 
