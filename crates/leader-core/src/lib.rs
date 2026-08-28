@@ -6,6 +6,7 @@ pub mod control_layout;
 pub mod datapath;
 pub mod decoder_datapath;
 pub mod enemy_shot_bank;
+pub mod enemy_shot_contract;
 pub mod formation_cadence;
 pub mod formation_cadence_contract;
 pub mod formation_cadence_layout;
@@ -41,6 +42,9 @@ pub use datapath::{
 };
 pub use decoder_datapath::{derive_decoder_datapath, DecoderDatapathEvent};
 pub use enemy_shot_bank::{EnemyShotBank, ENEMY_SHOT_SLOTS};
+pub use enemy_shot_contract::{
+    enemy_shot_ram, validate_enemy_shot_bank_contract, EnemyShotValidation, ENEMY_SHOT_RAM_BASE,
+};
 pub use formation_cadence::{FormationCadence, FormationCadenceEvent};
 pub use formation_cadence_contract::{
     validate_formation_cadence_contract, FormationCadenceValidation,
