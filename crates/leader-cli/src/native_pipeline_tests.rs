@@ -5,7 +5,7 @@ use crate::{
     alu_overlay, bus_overlay, control_state_overlay, control_word_overlay, decoder_overlay,
     director, enemy_shot_overlay, flags_overlay, formation_cadence_overlay, microcode_overlay,
     microcycle_overlay, pc_overlay, register_overlay, render_native_base, shield_overlay,
-    shift_register_overlay, stack_overlay, timing_overlay,
+    shift_register_overlay, stack_overlay, timing_overlay, video_pipeline_overlay,
 };
 
 fn apply_native_pipeline(
@@ -25,6 +25,7 @@ fn apply_native_pipeline(
     let svg = flags_overlay::apply(svg, topology, trace, config);
     let svg = register_overlay::apply(svg, topology, trace, config);
     let svg = bus_overlay::apply(svg, topology, trace, config);
+    let svg = video_pipeline_overlay::apply(svg, topology, trace, config);
     let svg = stack_overlay::apply(svg, topology, trace, config);
     let svg = formation_cadence_overlay::apply(svg, topology, trace, config);
     let svg = shift_register_overlay::apply(svg, topology, trace, config);
@@ -107,6 +108,12 @@ fn complete_native_overlay_pipeline_is_native_only_without_materialization() {
     assert!(baseline.contains("data-shield-mask=\""));
     assert!(baseline.contains("data-shield-before=\""));
     assert!(baseline.contains("data-shield-after=\""));
+    assert!(baseline.contains("id=\"m3-video-pipeline\""));
+    assert!(baseline.contains("data-video-stage=\"raster\""));
+    assert!(baseline.contains("data-video-stage=\"dma\""));
+    assert!(baseline.contains("data-video-stage=\"scanout\""));
+    assert!(baseline.contains("data-video-stage=\"wait\""));
+    assert!(baseline.contains("data-video-wait-bit=\"1\""));
     assert!(baseline.contains("data-bus-control=\"VRAM_RASTER_1536_BYTES\""));
     assert!(baseline.contains("data-bus-control=\"DMA_BURST_1536_BYTES\""));
     assert!(baseline.contains("data-bus-control=\"SCANOUT_128x96_1BPP\""));
