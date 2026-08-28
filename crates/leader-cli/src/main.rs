@@ -9,6 +9,7 @@ mod microcode_overlay;
 #[cfg(test)]
 mod native_pipeline_tests;
 mod pc_overlay;
+mod register_overlay;
 mod stack_overlay;
 mod timing_overlay;
 
@@ -97,6 +98,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let svg = control_word_overlay::apply(svg, &topology, &trace, config);
     let svg = control_state_overlay::apply(svg, &topology, &trace, config);
     let svg = alu_overlay::apply(svg, &topology, &trace, config);
+    let svg = register_overlay::apply(svg, &topology, &trace, config);
     let svg = stack_overlay::apply(svg, &topology, &trace, config);
     let svg = timing_overlay::apply(svg, &topology, &trace, config);
     write(&options.output, svg.as_bytes())?;
