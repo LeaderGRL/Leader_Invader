@@ -25,8 +25,9 @@ use std::{
 
 use leader_core::{
     build_topology, validate_call_stack_contract, validate_final_topology,
-    validate_native_control_authority, validate_shift_register_contract, validate_sp_event_stream,
-    MatchTrace, MicroCycleKind, Machine, Topology,
+    validate_formation_cadence_contract, validate_native_control_authority,
+    validate_shift_register_contract, validate_sp_event_stream, MatchTrace, MicroCycleKind, Machine,
+    Topology,
 };
 use leader_svg::{render, RenderConfig};
 
@@ -116,6 +117,7 @@ fn validate_native_trace(
         leader_core::CallStackValidation,
         usize,
         leader_core::ShiftRegisterValidation,
+        leader_core::FormationCadenceValidation,
     ),
     String,
 > {
@@ -127,7 +129,9 @@ fn validate_native_trace(
         .map_err(|error| format!("CALL/RET stack contract invalid: {error}"))?;
     let shift = validate_shift_register_contract(trace)
         .map_err(|error| format!("native M3 shift-register trace invalid: {error}"))?;
-    Ok((native, call_stack, sp_events, shift))
+    let cadence = validate_formation_cadence_contract(trace)
+        .map_err(|error| format!("native M3 formation cadence trace invalid: {error}"))?;
+    Ok((native, call_stack, sp_events, shift, cadence))
 }
 
 fn render_cmd(options: Options) -> Result<(), String> {
@@ -141,7 +145,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
             options.max_frames
         ));
     }
-    let (validation, call_stack, sp_events, shift) = validate_native_trace(&trace)?;
+    let (validation, call_stack, sp_events, shift, cadence) = validate_native_trace(&trace)?;
     let config = RenderConfig::default();
     let svg = render_native_base(&topology, &trace, config);
     let svg = director::apply_camera(svg, &topology, &trace, config);
@@ -164,7 +168,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
     println!(
-        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} shift events / {} native overlays / {} bytes -> {}",
+        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} shift events / {} cadence clocks / {} cadence ticks / {} native overlays / {} bytes -> {}",
         topology_validation.nodes,
         topology_validation.links,
         trace.total_frames,
@@ -176,6 +180,8 @@ fn render_cmd(options: Options) -> Result<(), String> {
         sp_events,
         call_stack.call_pairs,
         shift.data_writes + shift.offset_writes + shift.reads,
+        cadence.clocks,
+        cadence.ticks,
         svg_validation.overlay_groups,
         svg_validation.bytes,
         options.output.display()
@@ -188,16 +194,18 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
         options.output = PathBuf::from("generated/trace.json");
     }
     let trace = run_native_trace(&options.seed, options.max_frames);
-    let (_, _, _, shift) = validate_native_trace(&trace)?;
+    let (_, _, _, shift, cadence) = validate_native_trace(&trace)?;
     write(&options.output, trace.to_json().as_bytes())?;
     println!(
-        "frames={} kills={} flag_events={} control_latch_events={} sp_events={} shift_events={} clear={}",
+        "frames={} kills={} flag_events={} control_latch_events={} sp_events={} shift_events={} cadence_clocks={} cadence_ticks={} clear={}",
         trace.total_frames,
         trace.kills.len(),
         trace.flag_events.len(),
         trace.control_latch_events.len(),
         trace.sp_events.len(),
         shift.data_writes + shift.offset_writes + shift.reads,
+        cadence.clocks,
+        cadence.ticks,
         trace.finished
     );
     if trace.finished {
@@ -212,7 +220,7 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     let topology_validation = validate_final_topology(&topology)
         .map_err(|error| format!("final topology invalid: {error}"))?;
     let trace = run_native_trace(&options.seed, options.max_frames);
-    let (validation, call_stack, sp_events, shift) = validate_native_trace(&trace)?;
+    let (validation, call_stack, sp_events, shift, cadence) = validate_native_trace(&trace)?;
     let decode_latches = trace
         .micro_cycles
         .iter()
@@ -229,6 +237,7 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     println!("trace.alu_events={}", trace.alu_events.len());
     println!("trace.flag_events={}", trace.flag_events.len());
     println!("trace.control_latch_events={}", trace.control_latch_events.len());
+    println!("trace.formation_cadence_events={}", trace.formation_cadence_events.len());
     println!("trace.shift_register_events={}", trace.shift_register_events.len());
     println!("trace.register_writes={}", trace.register_writes.len());
     println!("trace.pc_events={}", trace.pc_events.len());
@@ -279,6 +288,15 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     println!("trace.shift_data_writes={}", shift.data_writes);
     println!("trace.shift_offset_writes={}", shift.offset_writes);
     println!("trace.shift_reads={}", shift.reads);
+    println!("trace.cadence_clocks={}", cadence.clocks);
+    println!("trace.cadence_ticks={}", cadence.ticks);
+    println!("trace.cadence_divisor3={}", cadence.divisor3);
+    println!("trace.cadence_divisor2={}", cadence.divisor2);
+    println!("trace.cadence_divisor1={}", cadence.divisor1);
+    println!(
+        "trace.cadence_movement_transactions={}",
+        cadence.movement_transactions
+    );
     println!("trace.call_pairs={}", call_stack.call_pairs);
     println!("trace.return_pairs={}", call_stack.return_pairs);
     println!("trace.call_stack_bytes={}", call_stack.stack_bytes);
