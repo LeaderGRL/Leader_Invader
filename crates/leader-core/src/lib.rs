@@ -5,6 +5,7 @@ pub mod control_contract;
 pub mod control_layout;
 pub mod datapath;
 pub mod decoder_datapath;
+pub mod formation_cadence;
 pub mod game;
 pub mod isa;
 pub mod layout;
@@ -36,6 +37,7 @@ pub use datapath::{
     BusDatapathEvent, DatapathEvent, DatapathState, RegisterDatapathEvent,
 };
 pub use decoder_datapath::{derive_decoder_datapath, DecoderDatapathEvent};
+pub use formation_cadence::{FormationCadence, FormationCadenceEvent};
 pub use isa::{Cpu, Flags, MicroCycleKind, MicroPhase, PcSource, Reg, StepOutcome};
 pub use logic::{
     logic_trace, ripple_add, ripple_decrement16, ripple_increment16, ripple_sub, AluOp, AluTrace,
@@ -50,9 +52,7 @@ pub use microcode::{
 };
 pub use pc_datapath::{derive_pc_datapath, PcDatapathEvent, PcDatapathKind};
 pub use shift_register::{ShiftRegister16, ShiftRegisterEventKind};
-pub use shift_register_contract::{
-    validate_shift_register_contract, ShiftRegisterValidation,
-};
+pub use shift_register_contract::{validate_shift_register_contract, ShiftRegisterValidation};
 pub use shift_register_layout::SHIFT_REGISTER_NODES;
 pub use sp_trace::{materialize_sp_events, validate_sp_event_stream};
 pub use stack_datapath::{derive_stack_datapath, StackDatapathEvent, StackDatapathKind};
