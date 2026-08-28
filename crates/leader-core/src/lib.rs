@@ -21,6 +21,7 @@ pub mod pc_datapath;
 pub mod program;
 pub mod rng;
 pub mod shield_bank;
+pub mod shield_contract;
 pub mod shift_register;
 pub mod shift_register_contract;
 pub mod shift_register_layout;
@@ -69,9 +70,10 @@ pub use pc_datapath::{derive_pc_datapath, PcDatapathEvent, PcDatapathKind};
 pub use shield_bank::{
     bit_address as shield_bit_address, bit_mask as shield_bit_mask,
     byte_offset as shield_byte_offset, locate_world as locate_shield_world, ShieldBank, ShieldDamage,
-    SHIELD_BYTES_PER, SHIELD_BYTES_PER_ROW, SHIELD_COUNT, SHIELD_H, SHIELD_TOTAL_BYTES, SHIELD_W,
-    SHIELD_X, SHIELD_Y,
+    SHIELD_BYTES_PER, SHIELD_BYTES_PER_ROW, SHIELD_COUNT, SHIELD_H, SHIELD_RAM_BASE,
+    SHIELD_TOTAL_BYTES, SHIELD_W, SHIELD_X, SHIELD_Y,
 };
+pub use shield_contract::{validate_shield_bank_contract, ShieldValidation};
 pub use shift_register::{ShiftRegister16, ShiftRegisterEventKind};
 pub use shift_register_contract::{validate_shift_register_contract, ShiftRegisterValidation};
 pub use shift_register_layout::SHIFT_REGISTER_NODES;
