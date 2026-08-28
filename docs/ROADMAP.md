@@ -8,11 +8,11 @@
 - Real RAM state + 128×96 one-bit VRAM generation.
 - Trace-driven long-form SVG.
 - GitHub Actions regeneration from commit SHA.
-- cinematic director with subsystem close-ups and final framebuffer zoom.
+- Cinematic director with subsystem close-ups and final framebuffer zoom.
 
-## M1 — byte-addressed ISA ✅
+## M1 — byte-addressed ISA / F2 ✅
 
-The game control loop now lives in assembled ROM bytecode interpreted by the CPU.
+The game control loop lives in assembled ROM bytecode interpreted by the CPU.
 
 - real instruction fetch / decode / execute through ROM bytes;
 - eight 8-bit registers, flags, PC and stack pointer;
@@ -21,25 +21,46 @@ The game control loop now lives in assembled ROM bytecode interpreted by the CPU
 - repository-owned two-pass assembler with labels/fixups;
 - game program emitted as an 8 KiB-bounded ROM image;
 - WAIT_VBLANK and HALT are real instructions;
-- trace records ROM fetches, decoded opcodes, stack traffic, memory traffic and ALU work.
+- corrupting the ROM breaks the match causally.
 
-Acceptance is covered by test: replacing the first ROM opcode with `HALT` prevents the match from advancing or killing an invader.
+The complex collision/raster/DMA operations remain memory-mapped hardware devices. The ROM controls when and in what order those devices execute.
 
-The complex collision/raster/DMA operations are intentionally still modeled as memory-mapped hardware devices. The ROM controls *when* and *in what order* those devices execute. Moving those devices down into gate-level datapath logic belongs to M2/M3 rather than hiding host callbacks behind fake CPU lights.
+## M2 — bit-accurate datapath / F3 🚧
 
-## M2 — bit-accurate datapath
+Most of the critical visible CPU path is now physically authoritative.
 
-Promote visible datapath nodes to first-class logic state.
+### Completed
 
-- DFF edge semantics;
-- PC/MAR/MDR/IR bits;
-- carry propagation through every ALU slice;
-- decoder select lines;
-- tri-state bus ownership;
-- explicit control-ROM outputs;
-- derive visible activity directly from each tick's bit state instead of subsystem-level trace mapping.
+- native T0/T1/T2 CPU microcycles;
+- real µPC with fetch, sequential, dispatch, routine-call and routine-return transitions;
+- `256 × 24` physical control-ROM representation;
+- complete 24-bit control word persisted into the trace and consumed by the SVG overlay;
+- physically gated MAR/MDR/IR fetch latches and ripple PC increment;
+- shared operand/read/write micro-routines;
+- ripple-carry 8-bit ALU and 16-bit PC/SP increment/decrement networks;
+- authoritative operand A/B and ALU-op latches;
+- authoritative flag latch;
+- authoritative register selection and write-back destination;
+- authoritative low/high address latches;
+- authoritative branch-condition latch and PC input selection;
+- LD/ST, jumps/branches, CALL and RET routed through those latches;
+- compact LDI/ADDI routed through real A/B/op latches and commit control;
+- native bus ownership transactions;
+- native exact ALU, register-write and PC event streams;
+- native decoder visualization from IR `DecodeLatch` microcycles;
+- native-first bus, decoder, ALU, register, PC and stack render paths;
+- CI invariants proving those render paths remain valid after deleting `micro_samples`.
 
-Acceptance: every glowing datapath node is directly computed in the same tick, and breaking a visible critical node changes execution causally.
+### Remaining
+
+- decide whether SP should gain its own first-class native mutation event stream instead of deriving visual SP transitions from already-native stack bus transactions;
+- decide whether CALL should gain a dedicated return-address latch rather than sampling the current PC combinationally before pushing the two bytes;
+- continue shrinking/removing historical semantic reconstruction fallbacks where they no longer provide useful compatibility;
+- audit the remaining coarse base-SVG activity layer and either migrate or retire semantic-only illumination paths.
+
+### Acceptance
+
+Every visible critical datapath/control node must be computed from same-tick machine state, and breaking a critical control line must change or prevent execution causally.
 
 ## M3 — richer arcade hardware
 
