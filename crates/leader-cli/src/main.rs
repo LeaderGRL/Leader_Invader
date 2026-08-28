@@ -22,8 +22,9 @@ use std::{
 };
 
 use leader_core::{
-    build_topology, validate_call_stack_contract, validate_final_topology,
-    validate_native_control_authority, MatchTrace, MicroCycleKind, Machine, Topology,
+    build_topology, materialize_sp_events, validate_call_stack_contract, validate_final_topology,
+    validate_native_control_authority, validate_sp_event_stream, MatchTrace, MicroCycleKind, Machine,
+    Topology,
 };
 use leader_svg::{render, RenderConfig};
 
@@ -42,63 +43,102 @@ fn run() -> Result<(), String> {
         "render" => render_cmd(options),
         "trace" => trace_cmd(options),
         "stats" => stats_cmd(options),
-        "help" | "--help" | "-h" => { help(); Ok(()) }
+        "help" | "--help" | "-h" => {
+            help();
+            Ok(())
+        }
         other => Err(format!("unknown command '{other}'")),
     }
 }
 
 #[derive(Debug, Clone)]
-struct Options { seed: String, output: PathBuf, max_frames: u32 }
+struct Options {
+    seed: String,
+    output: PathBuf,
+    max_frames: u32,
+}
 
 impl Options {
     fn parse(args: Vec<String>) -> Result<Self, String> {
         let (mut seed, mut output, mut max_frames) = (
-            "leader-invader-dev".to_owned(), PathBuf::from("generated/Leader.svg"), 5000_u32,
+            "leader-invader-dev".to_owned(),
+            PathBuf::from("generated/Leader.svg"),
+            5000_u32,
         );
         let mut index = 0;
         while index < args.len() {
             match args[index].as_str() {
-                "--seed" => { index += 1; seed = args.get(index).ok_or("--seed requires value")?.clone(); }
-                "--output" | "-o" => { index += 1; output = PathBuf::from(args.get(index).ok_or("--output requires path")?); }
+                "--seed" => {
+                    index += 1;
+                    seed = args.get(index).ok_or("--seed requires value")?.clone();
+                }
+                "--output" | "-o" => {
+                    index += 1;
+                    output = PathBuf::from(args.get(index).ok_or("--output requires path")?);
+                }
                 "--max-frames" => {
                     index += 1;
-                    max_frames = args.get(index).ok_or("--max-frames requires value")?.parse().map_err(|error| format!("invalid frame count: {error}"))?;
+                    max_frames = args
+                        .get(index)
+                        .ok_or("--max-frames requires value")?
+                        .parse()
+                        .map_err(|error| format!("invalid frame count: {error}"))?;
                 }
                 other => return Err(format!("unknown option '{other}'")),
             }
             index += 1;
         }
-        Ok(Self { seed, output, max_frames })
+        Ok(Self {
+            seed,
+            output,
+            max_frames,
+        })
     }
 }
 
-fn render_native_base(
-    topology: &Topology,
-    trace: &MatchTrace,
-    config: RenderConfig,
-) -> String {
+fn run_normalized_trace(seed: &str, max_frames: u32) -> MatchTrace {
+    let mut trace = Machine::run_match(seed, max_frames);
+    materialize_sp_events(&mut trace);
+    trace
+}
+
+fn render_native_base(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
     let mut native_base = trace.clone();
     native_base.micro_samples.clear();
     render(topology, &native_base, config)
 }
 
-fn validate_f3_trace(trace: &MatchTrace) -> Result<(leader_core::NativeTraceValidation, leader_core::CallStackValidation), String> {
+fn validate_f3_trace(
+    trace: &MatchTrace,
+) -> Result<
+    (
+        leader_core::NativeTraceValidation,
+        leader_core::CallStackValidation,
+        usize,
+    ),
+    String,
+> {
     let native = validate_native_control_authority(trace)
         .map_err(|error| format!("native F3 trace invalid: {error}"))?;
+    let sp_events = validate_sp_event_stream(trace)
+        .map_err(|error| format!("native SP trace invalid: {error}"))?;
     let call_stack = validate_call_stack_contract(trace)
         .map_err(|error| format!("CALL/RET stack contract invalid: {error}"))?;
-    Ok((native, call_stack))
+    Ok((native, call_stack, sp_events))
 }
 
 fn render_cmd(options: Options) -> Result<(), String> {
     let topology = build_topology();
     let topology_validation = validate_final_topology(&topology)
         .map_err(|error| format!("final F3 topology invalid: {error}"))?;
-    let trace = Machine::run_match(&options.seed, options.max_frames);
+    let trace = run_normalized_trace(&options.seed, options.max_frames);
     if !trace.finished {
-        return Err(format!("match did not clear within {} frames", options.max_frames));
+        return Err(format!(
+            "match did not clear within {} frames",
+            options.max_frames
+        ));
     }
-    let (validation, call_stack) = validate_f3_trace(&trace)?;
+    let (validation, call_stack, sp_events) = validate_f3_trace(&trace)?;
     let config = RenderConfig::default();
     let svg = render_native_base(&topology, &trace, config);
     let svg = director::apply_camera(svg, &topology, &trace, config);
@@ -119,12 +159,13 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
     println!(
-        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} CALL pairs / {} native overlays / {} bytes -> {}",
+        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} SP events / {} CALL pairs / {} native overlays / {} bytes -> {}",
         topology_validation.nodes,
         topology_validation.links,
         trace.total_frames,
         trace.kills.len(),
         validation.micro_words,
+        sp_events,
         call_stack.call_pairs,
         svg_validation.overlay_groups,
         svg_validation.bytes,
@@ -134,20 +175,32 @@ fn render_cmd(options: Options) -> Result<(), String> {
 }
 
 fn trace_cmd(mut options: Options) -> Result<(), String> {
-    if options.output == PathBuf::from("generated/Leader.svg") { options.output = PathBuf::from("generated/trace.json"); }
-    let trace = Machine::run_match(&options.seed, options.max_frames);
+    if options.output == PathBuf::from("generated/Leader.svg") {
+        options.output = PathBuf::from("generated/trace.json");
+    }
+    let trace = run_normalized_trace(&options.seed, options.max_frames);
     validate_f3_trace(&trace)?;
     write(&options.output, trace.to_json().as_bytes())?;
-    println!("frames={} kills={} clear={}", trace.total_frames, trace.kills.len(), trace.finished);
-    if trace.finished { Ok(()) } else { Err("trace hit frame limit".to_owned()) }
+    println!(
+        "frames={} kills={} sp_events={} clear={}",
+        trace.total_frames,
+        trace.kills.len(),
+        trace.sp_events.len(),
+        trace.finished
+    );
+    if trace.finished {
+        Ok(())
+    } else {
+        Err("trace hit frame limit".to_owned())
+    }
 }
 
 fn stats_cmd(options: Options) -> Result<(), String> {
     let topology = build_topology();
     let topology_validation = validate_final_topology(&topology)
         .map_err(|error| format!("final F3 topology invalid: {error}"))?;
-    let trace = Machine::run_match(&options.seed, options.max_frames);
-    let (validation, call_stack) = validate_f3_trace(&trace)?;
+    let trace = run_normalized_trace(&options.seed, options.max_frames);
+    let (validation, call_stack, sp_events) = validate_f3_trace(&trace)?;
     let decode_latches = trace
         .micro_cycles
         .iter()
@@ -164,14 +217,34 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     println!("trace.alu_events={}", trace.alu_events.len());
     println!("trace.register_writes={}", trace.register_writes.len());
     println!("trace.pc_events={}", trace.pc_events.len());
+    println!("trace.sp_events={}", trace.sp_events.len());
     println!("trace.native_verified_micro_words={}", validation.micro_words);
-    println!("trace.native_verified_decode_latches={}", validation.decode_latches);
-    println!("trace.native_verified_alu_events={}", validation.alu_events);
-    println!("trace.native_verified_register_writes={}", validation.register_writes);
-    println!("trace.native_verified_pc_loads={}", validation.pc_loads);
-    println!("trace.native_verified_rom_fetches={}", validation.rom_fetches);
+    println!(
+        "trace.native_verified_decode_latches={}",
+        validation.decode_latches
+    );
+    println!(
+        "trace.native_verified_alu_events={}",
+        validation.alu_events
+    );
+    println!(
+        "trace.native_verified_register_writes={}",
+        validation.register_writes
+    );
+    println!(
+        "trace.native_verified_pc_loads={}",
+        validation.pc_loads
+    );
+    println!(
+        "trace.native_verified_rom_fetches={}",
+        validation.rom_fetches
+    );
     println!("trace.native_verified_cpu_reads={}", validation.cpu_reads);
-    println!("trace.native_verified_cpu_writes={}", validation.cpu_writes);
+    println!(
+        "trace.native_verified_cpu_writes={}",
+        validation.cpu_writes
+    );
+    println!("trace.native_verified_sp_events={sp_events}");
     println!("trace.call_pairs={}", call_stack.call_pairs);
     println!("trace.return_pairs={}", call_stack.return_pairs);
     println!("trace.call_stack_bytes={}", call_stack.stack_bytes);
@@ -183,7 +256,8 @@ fn stats_cmd(options: Options) -> Result<(), String> {
 
 fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
     }
     fs::write(path, bytes).map_err(|error| format!("cannot write {}: {error}", path.display()))
 }
