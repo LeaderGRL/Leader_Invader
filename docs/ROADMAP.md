@@ -25,13 +25,11 @@ The game control loop lives in assembled ROM bytecode interpreted by the CPU.
 
 The complex collision/raster/DMA operations remain memory-mapped hardware devices. The ROM controls when and in what order those devices execute.
 
-## M2 — bit-accurate datapath / F3 🚧
+## M2 — bit-accurate datapath / F3 ✅
 
-The critical visible CPU/control path is now overwhelmingly native and physically authoritative.
+The visible CPU/control path is production-native and physically authoritative.
 
-### Completed
-
-#### Control unit
+### Control unit
 
 - native T0/T1/T2 CPU microcycles;
 - real µPC with fetch, sequential, dispatch, routine-call and routine-return transitions;
@@ -40,70 +38,89 @@ The critical visible CPU/control path is now overwhelmingly native and physicall
 - 24 distinct visible control outputs with a stable bit → node → label contract;
 - full µROM scan proving all 24 physical bits are exercised;
 - internal control outputs wired to real physical consumers;
-- visible address, condition, PC-select and register-select state latches.
+- visible address, condition, PC-select and register-select state latches;
+- exact first-class values for those visible latches.
 
-#### Datapath authority
+### Datapath authority
 
 - physically gated MAR/MDR/IR fetch latches and ripple PC increment;
 - shared operand/read/write micro-routines;
 - ripple-carry 8-bit ALU and 16-bit PC/SP increment/decrement networks;
 - authoritative operand A/B and ALU-op latches;
-- authoritative flags;
+- authoritative flag mutation and exact Z/C/L native events;
 - authoritative register selection and write-back destination;
 - authoritative low/high target-address latches;
 - authoritative branch-condition latch and PC input selection;
 - LD/ST, jumps/branches, CALL and RET routed through those latches;
-- compact LDI/ADDI routed through the same physical A/B/op and commit discipline.
+- compact LDI/ADDI routed through the same physical A/B/op and commit discipline;
+- PC increments explicitly validated against `PC_INC`;
+- PC loads explicitly validated against `PCLD + ARCH_COMMIT`;
+- SP mutations explicitly validated against `STACK`.
 
-#### CALL / RET
+### CALL / RET
 
 - dedicated visible `RETURN BYTE` high/low PC mux;
 - combinational PC → stack-data CALL path instead of an unnecessary hidden return-address latch;
 - RET data path from stack → data bus → low/high address latches → PC;
-- full-match contract proving CALL pushes exactly `instruction_pc + 3`, RET restores those bytes in LIFO order and actual PC return targets match the reconstructed stack stream.
+- direct CPU-native `SpEvent` PUSH/POP stream;
+- full-match contract proving CALL pushes exactly `instruction_pc + 3`, RET restores those bytes in LIFO order and actual PC return targets match the reconstructed stack stream;
+- corruption of authoritative SP return bytes is detected;
+- corruption of an older bus fallback cannot override the first-class SP stream.
 
-#### Native trace and replay
+### Native trace and replay
 
 - native bus ownership transactions;
-- native exact ALU, register-write and PC event streams;
+- native exact ALU events and carry chains;
+- native exact flag events;
+- native exact control-latch value events;
+- native register-write events;
+- native exact PC increment/load events;
+- native exact SP PUSH/POP events including ripple chain, address and data;
 - native decoder visualization from IR `DecodeLatch` microcycles;
 - exact PC before/after/source/carry metadata in SVG;
-- exact SP before/after/address/data metadata in SVG;
+- exact SP before/after/ripple/address/data metadata in SVG;
 - exact ALU operands/result/carry-chain metadata in SVG;
+- exact Z/C/L flag metadata in SVG;
+- exact visible control-latch kind/value/validity metadata in SVG;
 - exact register before/after write metadata in SVG;
 - exact bus owner/address/data/control metadata in SVG;
 - exact T-state PC/MAR/MDR/IR snapshots in SVG;
 - complete native-only F3 overlay pipeline independent of `micro_samples`.
 
-#### Production contracts
+### Production contracts
 
-- production base rendering clears `micro_samples`, so the legacy coarse activity layer cannot enter `generated/Leader.svg`;
+- production base rendering suppresses the legacy `MicroSample` activity layer;
+- production CLI receives every required first-class stream directly from `Machine::run_match()`;
+- production no longer calls SP materialization/fallback reconstruction;
 - native control authority validator ties architectural mutations back to physical µROM rows;
 - traced µROM words are compared exactly against `control_word_at(µADDR, opcode).bits24()`;
 - CPU fetch/read/write transactions are tied to their shared physical micro-routines;
+- SP events are cross-checked against exact native stack bus transactions and local ordering;
 - final injected topology validator checks unique/closed nodes and links, group containment and required F3 hardware;
 - final SVG contract requires all native overlay/metadata families and rejects legacy coarse activity;
 - GitHub-safe declarative output validation;
 - hard production SVG budget of 5,000,000 bytes;
+- current artifact is roughly 3.3 MB;
 - CI cancels obsolete branch/PR runs and ignores generated-only updates.
 
-### Remaining F3 work
+### F3 acceptance — satisfied
 
-The remaining items are now refinements rather than missing causal CPU paths:
+F3 required every visible critical CPU datapath/control node to be driven from native same-tick state or a physically justified combinational path, production rendering to contain no semantic fallback activity, and all trace/topology/SVG contracts to remain green.
 
-- optionally add a dedicated first-class `SpEvent` mutation stream; current SP execution and rendering are already causal through native stack transactions and exact ripple reconstruction;
-- decide how long historical `MicroSample` reconstruction fallbacks should remain in public core helper APIs for old traces;
-- continue reducing duplicate presentation work where multiple native overlays cover the same physical nodes, while preserving inspectable metadata and the 5 MB artifact budget;
-- audit whether flag/control-state **values** should become dedicated native events in addition to their already-authoritative physical load enables;
-- close any remaining visible wiring gaps discovered during review before declaring F3 complete.
+Those conditions are now enforced in code and CI. Historical reconstruction helpers remain only for backward compatibility with old trace shapes; they are not production dependencies.
 
-### Acceptance
+### Post-F3 maintenance
 
-F3 is complete when every visible critical CPU datapath/control node is driven from native same-tick state or a physically justified combinational path, production rendering contains no semantic fallback activity, and all trace/topology/SVG contracts remain green.
+These are cleanup/optimization tasks, not F3 blockers:
+
+- decide when old `MicroSample`/bus reconstruction helper APIs can be deprecated or removed;
+- continue reducing duplicate presentation work where multiple native overlays cover the same physical nodes, while preserving inspectable metadata;
+- keep the generated artifact comfortably below the 5 MB budget;
+- close any future visible wiring regression discovered by the topology/SVG contracts.
 
 ## M3 — richer arcade hardware
 
-Once F3 is closed, push more of the game-specific peripherals toward explicit hardware:
+With F3 closed, move more game-specific peripheral behavior into explicit hardware:
 
 - multiple enemy shots;
 - shields;
@@ -111,6 +128,8 @@ Once F3 is closed, push more of the game-specific peripherals toward explicit ha
 - original-arcade-inspired 16-bit shift-register peripheral;
 - optional 8080-flavoured memory map;
 - no proprietary arcade ROM assets.
+
+The first M3 slices should follow the same rule established by F3: a visible peripheral path is backed by real state/control and emits a native event stream before it gains cinematic presentation.
 
 ## M4 — live WASM explorer
 
