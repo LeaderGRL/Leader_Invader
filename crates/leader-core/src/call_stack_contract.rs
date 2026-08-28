@@ -133,12 +133,12 @@ pub fn validate_call_stack_contract(trace: &MatchTrace) -> Result<CallStackValid
 
     if call_pc_returns != pushed_returns {
         return Err(format!(
-            "CALL PC source and pushed return stream differ: pc={call_pc_returns:04X?} stack={pushed_returns:04X?}"
+            "CALL PC source and pushed return stream differ: pc={call_pc_returns:?} stack={pushed_returns:?}"
         ));
     }
     if ret_pc_targets != popped_returns {
         return Err(format!(
-            "RET PC targets and popped return stream differ: pc={ret_pc_targets:04X?} stack={popped_returns:04X?}"
+            "RET PC targets and popped return stream differ: pc={ret_pc_targets:?} stack={popped_returns:?}"
         ));
     }
 
