@@ -4,6 +4,7 @@ use crate::game::{GameState, Projectile, ALIEN_ROWS};
 use crate::isa::{MicroCycleKind, MicroPhase, PcSource, Reg};
 use crate::logic::{AluTrace, Decrement16Trace, PcIncrementTrace};
 use crate::microcode::MicroAddressSource;
+use crate::shift_register::ShiftRegisterEventKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhaseKind {
@@ -129,6 +130,15 @@ pub struct ControlLatchEvent {
     pub value: u16,
     pub valid: bool,
     pub control: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShiftRegisterEvent {
+    pub frame: u32,
+    pub ordinal: u16,
+    pub pc: u16,
+    pub address: u16,
+    pub kind: ShiftRegisterEventKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -360,6 +370,7 @@ pub struct MatchTrace {
     pub alu_events: Vec<AluEvent>,
     pub flag_events: Vec<FlagEvent>,
     pub control_latch_events: Vec<ControlLatchEvent>,
+    pub shift_register_events: Vec<ShiftRegisterEvent>,
     pub register_writes: Vec<RegisterWriteEvent>,
     pub pc_events: Vec<PcEvent>,
     pub sp_events: Vec<SpEvent>,
@@ -384,6 +395,7 @@ impl MatchTrace {
             alu_events: Vec::new(),
             flag_events: Vec::new(),
             control_latch_events: Vec::new(),
+            shift_register_events: Vec::new(),
             register_writes: Vec::new(),
             pc_events: Vec::new(),
             sp_events: Vec::new(),
@@ -397,7 +409,7 @@ impl MatchTrace {
 
     #[must_use]
     pub fn to_json(&self) -> String {
-        let mut out = String::with_capacity(self.frames.len() * 340);
+        let mut out = String::with_capacity(self.frames.len() * 350);
         let _ = write!(
             out,
             "{{\n  \"seed\": \"{}\",\n  \"seed_hash\": \"{:016x}\",\n  \"finished\": {},\n  \"total_frames\": {},\n  \"final_score\": {},\n  \"final_lives\": {},\n  \"kills\": [",
@@ -495,6 +507,24 @@ impl MatchTrace {
                 out.push(',');
             }
             let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"pc\":{},\"kind\":\"{}\",\"value\":{},\"valid\":{},\"control\":\"{}\"}}", event.frame, event.ordinal, event.pc, event.kind.as_str(), event.value, event.valid, event.control);
+        }
+
+        out.push_str("\n  ],\n  \"shift_register_events\": [");
+        for (index, event) in self.shift_register_events.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            match event.kind {
+                ShiftRegisterEventKind::DataWrite { before, after, input } => {
+                    let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"pc\":{},\"address\":{},\"kind\":\"data_write\",\"before\":{},\"after\":{},\"input\":{}}}", event.frame, event.ordinal, event.pc, event.address, before, after, input);
+                }
+                ShiftRegisterEventKind::OffsetWrite { before, after, input } => {
+                    let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"pc\":{},\"address\":{},\"kind\":\"offset_write\",\"before\":{},\"after\":{},\"input\":{}}}", event.frame, event.ordinal, event.pc, event.address, before, after, input);
+                }
+                ShiftRegisterEventKind::Read { value, offset, result } => {
+                    let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"pc\":{},\"address\":{},\"kind\":\"read\",\"value\":{},\"offset\":{},\"result\":{}}}", event.frame, event.ordinal, event.pc, event.address, value, offset, result);
+                }
+            }
         }
 
         out.push_str("\n  ],\n  \"register_writes\": [");
