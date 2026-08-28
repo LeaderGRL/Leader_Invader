@@ -20,6 +20,7 @@ mod shield_overlay;
 mod shift_register_overlay;
 mod stack_overlay;
 mod timing_overlay;
+mod video_pipeline_overlay;
 
 use std::{
     env, fs,
@@ -30,8 +31,8 @@ use leader_core::{
     build_topology, validate_call_stack_contract, validate_enemy_shot_bank_contract,
     validate_final_topology, validate_formation_cadence_contract, validate_memory_map_contract,
     validate_native_control_authority, validate_shield_bank_contract,
-    validate_shift_register_contract, validate_sp_event_stream, MatchTrace, MicroCycleKind, Machine,
-    Topology,
+    validate_shift_register_contract, validate_sp_event_stream, validate_video_pipeline_contract,
+    MatchTrace, MicroCycleKind, Machine, Topology,
 };
 use leader_svg::{render, RenderConfig};
 
@@ -125,6 +126,7 @@ fn validate_native_trace(
         leader_core::EnemyShotValidation,
         leader_core::ShieldValidation,
         leader_core::MemoryMapValidation,
+        leader_core::VideoPipelineValidation,
     ),
     String,
 > {
@@ -144,6 +146,8 @@ fn validate_native_trace(
         .map_err(|error| format!("native M3 shield bank invalid: {error}"))?;
     let memory_map = validate_memory_map_contract(trace)
         .map_err(|error| format!("native memory-map contract invalid: {error}"))?;
+    let video = validate_video_pipeline_contract(trace)
+        .map_err(|error| format!("native video pipeline invalid: {error}"))?;
     Ok((
         native,
         call_stack,
@@ -153,6 +157,7 @@ fn validate_native_trace(
         enemy_shots,
         shields,
         memory_map,
+        video,
     ))
 }
 
@@ -167,8 +172,17 @@ fn render_cmd(options: Options) -> Result<(), String> {
             options.max_frames
         ));
     }
-    let (validation, call_stack, sp_events, shift, cadence, enemy_shots, shields, memory_map) =
-        validate_native_trace(&trace)?;
+    let (
+        validation,
+        call_stack,
+        sp_events,
+        shift,
+        cadence,
+        enemy_shots,
+        shields,
+        memory_map,
+        video,
+    ) = validate_native_trace(&trace)?;
     let config = RenderConfig::default();
     let svg = render_native_base(&topology, &trace, config);
     let svg = director::apply_camera(svg, &topology, &trace, config);
@@ -182,6 +196,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let svg = flags_overlay::apply(svg, &topology, &trace, config);
     let svg = register_overlay::apply(svg, &topology, &trace, config);
     let svg = bus_overlay::apply(svg, &topology, &trace, config);
+    let svg = video_pipeline_overlay::apply(svg, &topology, &trace, config);
     let svg = stack_overlay::apply(svg, &topology, &trace, config);
     let svg = formation_cadence_overlay::apply(svg, &topology, &trace, config);
     let svg = shift_register_overlay::apply(svg, &topology, &trace, config);
@@ -194,7 +209,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
     println!(
-        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} shift events / {} cadence clocks / {} cadence ticks / {} enemy-shot writes / {} max concurrent shots / {} shield-caused shot clears / {} shield damages / {} shield pixels left / {} mapped bus transactions / {} native overlays / {} bytes -> {}",
+        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} shift events / {} cadence clocks / {} cadence ticks / {} enemy-shot writes / {} max concurrent shots / {} shield-caused shot clears / {} shield damages / {} shield pixels left / {} mapped bus transactions / video {}/{}/{}/{} / {} native overlays / {} bytes -> {}",
         topology_validation.nodes,
         topology_validation.links,
         trace.total_frames,
@@ -214,6 +229,10 @@ fn render_cmd(options: Options) -> Result<(), String> {
         shields.damages,
         shields.pixels_after,
         memory_map.addressed_transactions,
+        video.raster_writes,
+        video.dma_bursts,
+        video.scanouts,
+        video.waits,
         svg_validation.overlay_groups,
         svg_validation.bytes,
         options.output.display()
@@ -226,11 +245,11 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
         options.output = PathBuf::from("generated/trace.json");
     }
     let trace = run_native_trace(&options.seed, options.max_frames);
-    let (_, _, _, shift, cadence, enemy_shots, shields, memory_map) =
+    let (_, _, _, shift, cadence, enemy_shots, shields, memory_map, video) =
         validate_native_trace(&trace)?;
     write(&options.output, trace.to_json().as_bytes())?;
     println!(
-        "frames={} kills={} flag_events={} control_latch_events={} sp_events={} shift_events={} cadence_clocks={} cadence_ticks={} enemy_shot_spawns={} enemy_shot_moves={} enemy_shot_clears={} enemy_shot_shield_clears={} max_enemy_shots={} shield_damages={} shield_player={} shield_enemy={} mapped_bus_transactions={} clear={}",
+        "frames={} kills={} flag_events={} control_latch_events={} sp_events={} shift_events={} cadence_clocks={} cadence_ticks={} enemy_shot_spawns={} enemy_shot_moves={} enemy_shot_clears={} enemy_shot_shield_clears={} max_enemy_shots={} shield_damages={} shield_player={} shield_enemy={} mapped_bus_transactions={} video_raster={} video_dma={} video_scanout={} video_waits={} clear={}",
         trace.total_frames,
         trace.kills.len(),
         trace.flag_events.len(),
@@ -248,6 +267,10 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
         shields.player_damages,
         shields.enemy_damages,
         memory_map.addressed_transactions,
+        video.raster_writes,
+        video.dma_bursts,
+        video.scanouts,
+        video.waits,
         trace.finished
     );
     if trace.finished {
@@ -262,8 +285,17 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     let topology_validation = validate_final_topology(&topology)
         .map_err(|error| format!("final topology invalid: {error}"))?;
     let trace = run_native_trace(&options.seed, options.max_frames);
-    let (validation, call_stack, sp_events, shift, cadence, enemy_shots, shields, memory_map) =
-        validate_native_trace(&trace)?;
+    let (
+        validation,
+        call_stack,
+        sp_events,
+        shift,
+        cadence,
+        enemy_shots,
+        shields,
+        memory_map,
+        video,
+    ) = validate_native_trace(&trace)?;
     let decode_latches = trace
         .micro_cycles
         .iter()
@@ -326,6 +358,10 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     println!("trace.memory_map_ram={}", memory_map.ram);
     println!("trace.memory_map_vram={}", memory_map.vram);
     println!("trace.memory_map_mmio={}", memory_map.mmio);
+    println!("trace.video_raster_writes={}", video.raster_writes);
+    println!("trace.video_dma_bursts={}", video.dma_bursts);
+    println!("trace.video_scanouts={}", video.scanouts);
+    println!("trace.video_waits={}", video.waits);
     println!("trace.call_pairs={}", call_stack.call_pairs);
     println!("trace.return_pairs={}", call_stack.return_pairs);
     println!("trace.call_stack_bytes={}", call_stack.stack_bytes);
