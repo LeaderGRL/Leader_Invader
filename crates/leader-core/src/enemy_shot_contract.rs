@@ -49,39 +49,37 @@ pub fn validate_enemy_shot_bank_contract(
         if after.frame <= before.frame {
             continue;
         }
-        if after.frame != before.frame + 1 {
-            return Err(format!(
-                "enemy-shot snapshots skip frame {} -> {}",
-                before.frame, after.frame
-            ));
-        }
 
         for slot in 0..ENEMY_SHOT_SLOTS {
             let mut x = before.enemy_shots[slot].map_or(0, |shot| shot.x as u8);
             let mut y = before.enemy_shots[slot].map_or(0, |shot| shot.y as u8);
             let mut active = before.enemy_shots[slot].is_some();
             let mut writes = 0usize;
-            let mut armed = false;
-            let mut cleared = false;
-            let mut moved = false;
+            let mut armed_count = 0usize;
+            let mut clear_count = 0usize;
+            let mut move_count = 0usize;
 
             for transaction in trace.bus_transactions.iter().filter(|transaction| {
-                transaction.frame == before.frame
+                transaction.frame >= before.frame
+                    && transaction.frame < after.frame
                     && transaction.kind == BusTransactionKind::Write
                     && transaction.address.is_some_and(|address| {
                         (enemy_shot_ram(slot, 0)..=enemy_shot_ram(slot, 2)).contains(&address)
                     })
             }) {
                 let address = transaction.address.expect("filtered address");
-                let data = transaction
-                    .data
-                    .ok_or_else(|| format!("enemy-shot RAM write has no data at frame={}", before.frame))?;
+                let data = transaction.data.ok_or_else(|| {
+                    format!(
+                        "enemy-shot RAM write has no data at frame={}",
+                        transaction.frame
+                    )
+                })?;
                 match address - enemy_shot_ram(slot, 0) {
                     0 => {
                         if transaction.control != "ENEMY_SHOT_X_WRITE" {
                             return Err(format!(
                                 "slot {slot} X write has wrong control {} at frame={}",
-                                transaction.control, before.frame
+                                transaction.control, transaction.frame
                             ));
                         }
                         x = data;
@@ -90,25 +88,39 @@ pub fn validate_enemy_shot_bank_contract(
                         if transaction.control != "ENEMY_SHOT_Y_WRITE" {
                             return Err(format!(
                                 "slot {slot} Y write has wrong control {} at frame={}",
-                                transaction.control, before.frame
+                                transaction.control, transaction.frame
                             ));
                         }
+                        if active {
+                            move_count += 1;
+                        }
                         y = data;
-                        moved = active;
                     }
                     2 => match (data, transaction.control) {
                         (1, "ENEMY_SHOT_ARM") => {
+                            if active {
+                                return Err(format!(
+                                    "slot {slot} is armed while already active at frame={}",
+                                    transaction.frame
+                                ));
+                            }
                             active = true;
-                            armed = true;
+                            armed_count += 1;
                         }
                         (0, "ENEMY_SHOT_HIT" | "ENEMY_SHOT_CLEAR") => {
+                            if !active {
+                                return Err(format!(
+                                    "slot {slot} is cleared while inactive at frame={}",
+                                    transaction.frame
+                                ));
+                            }
                             active = false;
-                            cleared = true;
+                            clear_count += 1;
                         }
                         _ => {
                             return Err(format!(
                                 "slot {slot} ACTIVE write is invalid: data={data} control={} frame={}",
-                                transaction.control, before.frame
+                                transaction.control, transaction.frame
                             ));
                         }
                     },
@@ -132,9 +144,9 @@ pub fn validate_enemy_shot_bank_contract(
                 validation.transitions += 1;
             }
             validation.ram_writes += writes;
-            validation.spawns += usize::from(armed);
-            validation.clears += usize::from(cleared);
-            validation.moves += usize::from(moved && !armed);
+            validation.spawns += armed_count;
+            validation.clears += clear_count;
+            validation.moves += move_count;
         }
     }
 
