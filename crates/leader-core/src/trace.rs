@@ -1,5 +1,6 @@
 use std::fmt::Write;
 
+use crate::formation_cadence::FormationCadenceEvent;
 use crate::game::{GameState, Projectile, ALIEN_ROWS};
 use crate::isa::{MicroCycleKind, MicroPhase, PcSource, Reg};
 use crate::logic::{AluTrace, Decrement16Trace, PcIncrementTrace};
@@ -130,6 +131,14 @@ pub struct ControlLatchEvent {
     pub value: u16,
     pub valid: bool,
     pub control: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FormationCadenceTraceEvent {
+    pub frame: u32,
+    pub ordinal: u16,
+    pub pc: u16,
+    pub event: FormationCadenceEvent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -370,6 +379,7 @@ pub struct MatchTrace {
     pub alu_events: Vec<AluEvent>,
     pub flag_events: Vec<FlagEvent>,
     pub control_latch_events: Vec<ControlLatchEvent>,
+    pub formation_cadence_events: Vec<FormationCadenceTraceEvent>,
     pub shift_register_events: Vec<ShiftRegisterEvent>,
     pub register_writes: Vec<RegisterWriteEvent>,
     pub pc_events: Vec<PcEvent>,
@@ -395,6 +405,7 @@ impl MatchTrace {
             alu_events: Vec::new(),
             flag_events: Vec::new(),
             control_latch_events: Vec::new(),
+            formation_cadence_events: Vec::new(),
             shift_register_events: Vec::new(),
             register_writes: Vec::new(),
             pc_events: Vec::new(),
@@ -409,7 +420,7 @@ impl MatchTrace {
 
     #[must_use]
     pub fn to_json(&self) -> String {
-        let mut out = String::with_capacity(self.frames.len() * 350);
+        let mut out = String::with_capacity(self.frames.len() * 370);
         let _ = write!(
             out,
             "{{\n  \"seed\": \"{}\",\n  \"seed_hash\": \"{:016x}\",\n  \"finished\": {},\n  \"total_frames\": {},\n  \"final_score\": {},\n  \"final_lives\": {},\n  \"kills\": [",
@@ -507,6 +518,15 @@ impl MatchTrace {
                 out.push(',');
             }
             let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"pc\":{},\"kind\":\"{}\",\"value\":{},\"valid\":{},\"control\":\"{}\"}}", event.frame, event.ordinal, event.pc, event.kind.as_str(), event.value, event.valid, event.control);
+        }
+
+        out.push_str("\n  ],\n  \"formation_cadence_events\": [");
+        for (index, trace_event) in self.formation_cadence_events.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            let event = trace_event.event;
+            let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"pc\":{},\"alive\":{},\"divisor\":{},\"before\":{},\"after\":{},\"tick\":{}}}", trace_event.frame, trace_event.ordinal, trace_event.pc, event.alive, event.divisor, event.before, event.after, event.tick);
         }
 
         out.push_str("\n  ],\n  \"shift_register_events\": [");
