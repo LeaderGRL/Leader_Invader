@@ -1,8 +1,17 @@
+use std::collections::BTreeSet;
+
 use leader_core::{bit16, derive_pc_datapath, MatchTrace, PcDatapathKind, PcSource, Topology};
 use leader_svg::RenderConfig;
 
+const MAX_PC_EVENTS: usize = 150;
+
 #[must_use]
-pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
+pub fn apply(
+    mut svg: String,
+    topology: &Topology,
+    trace: &MatchTrace,
+    config: RenderConfig,
+) -> String {
     if trace.total_frames == 0 {
         return svg;
     }
@@ -20,12 +29,13 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: R
 
 fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
     let events = derive_pc_datapath(trace);
-    let stride = (events.len() / 150).max(1);
+    let selected = selected_indices(&events);
     let total = config.total();
     let mut out = String::with_capacity(240_000);
     out.push_str("<g id=\"f3-pc\">\n");
 
-    for event in events.iter().step_by(stride) {
+    for index in selected {
+        let event = &events[index];
         let moment = trace_moment(event.frame, event.ordinal, trace, config);
         match event.kind {
             PcDatapathKind::Increment(increment) => {
@@ -87,6 +97,78 @@ fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> Stri
 
     out.push_str("</g>\n");
     out
+}
+
+fn selected_indices(events: &[leader_core::PcDatapathEvent]) -> Vec<usize> {
+    if events.len() <= MAX_PC_EVENTS {
+        return (0..events.len()).collect();
+    }
+
+    let mut selected = BTreeSet::new();
+    selected.insert(0);
+    selected.insert(events.len() - 1);
+
+    let mut normal_increment = false;
+    let mut carry_increment = false;
+    let mut jump = false;
+    let mut branch = false;
+    let mut call = false;
+    let mut ret = false;
+
+    for (index, event) in events.iter().enumerate() {
+        match event.kind {
+            PcDatapathKind::Increment(step) if step.low_byte_carry() && !carry_increment => {
+                selected.insert(index);
+                carry_increment = true;
+            }
+            PcDatapathKind::Increment(_) if !normal_increment => {
+                selected.insert(index);
+                normal_increment = true;
+            }
+            PcDatapathKind::Load {
+                source: PcSource::Jump,
+                ..
+            } if !jump => {
+                selected.insert(index);
+                jump = true;
+            }
+            PcDatapathKind::Load {
+                source: PcSource::Branch,
+                ..
+            } if !branch => {
+                selected.insert(index);
+                branch = true;
+            }
+            PcDatapathKind::Load {
+                source: PcSource::Call,
+                ..
+            } if !call => {
+                selected.insert(index);
+                call = true;
+            }
+            PcDatapathKind::Load {
+                source: PcSource::Return,
+                ..
+            } if !ret => {
+                selected.insert(index);
+                ret = true;
+            }
+            _ => {}
+        }
+    }
+
+    let remaining = MAX_PC_EVENTS.saturating_sub(selected.len());
+    if remaining > 0 {
+        let stride = events.len().div_ceil(remaining).max(1);
+        for index in (0..events.len()).step_by(stride) {
+            if selected.len() >= MAX_PC_EVENTS {
+                break;
+            }
+            selected.insert(index);
+        }
+    }
+
+    selected.into_iter().take(MAX_PC_EVENTS).collect()
 }
 
 fn pulse_group<F>(
@@ -154,6 +236,20 @@ mod tests {
         assert!(rendered.contains("data-pc-before=\""));
         assert!(rendered.contains("data-pc-after=\""));
         assert!(rendered.len() > 1000);
+    }
+
+    #[test]
+    fn sampler_keeps_rare_pc_classes_when_trace_grows() {
+        let trace = Machine::run_match("pc-overlay-sampling", 5000);
+        let events = derive_pc_datapath(&trace);
+        let selected = selected_indices(&events);
+        assert!(selected.len() <= MAX_PC_EVENTS);
+        for source in [PcSource::Call, PcSource::Return] {
+            assert!(selected.iter().any(|index| matches!(
+                events[*index].kind,
+                PcDatapathKind::Load { source: actual, .. } if actual == source
+            )));
+        }
     }
 
     #[test]
