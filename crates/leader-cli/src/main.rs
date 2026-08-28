@@ -7,6 +7,7 @@ mod control_word_overlay;
 mod decoder_overlay;
 mod director;
 mod microcode_overlay;
+mod microcycle_overlay;
 #[cfg(test)]
 mod native_pipeline_tests;
 mod pc_overlay;
@@ -98,6 +99,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let svg = microcode_overlay::apply(svg, &topology, &trace, config);
     let svg = control_word_overlay::apply(svg, &topology, &trace, config);
     let svg = control_state_overlay::apply(svg, &topology, &trace, config);
+    let svg = microcycle_overlay::apply(svg, &topology, &trace, config);
     let svg = alu_overlay::apply(svg, &topology, &trace, config);
     let svg = register_overlay::apply(svg, &topology, &trace, config);
     let svg = bus_overlay::apply(svg, &topology, &trace, config);
