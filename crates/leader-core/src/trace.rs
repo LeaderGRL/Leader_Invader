@@ -1,5 +1,6 @@
 use std::fmt::Write;
 
+use crate::enemy_shot_bank::ENEMY_SHOT_SLOTS;
 use crate::formation_cadence::FormationCadenceEvent;
 use crate::game::{GameState, Projectile, ALIEN_ROWS};
 use crate::isa::{MicroCycleKind, MicroPhase, PcSource, Reg};
@@ -331,7 +332,7 @@ pub struct FrameState {
     pub fleet_y: i16,
     pub fleet_dir: i8,
     pub player_shot: Option<ProjectileSnapshot>,
-    pub enemy_shot: Option<ProjectileSnapshot>,
+    pub enemy_shots: [Option<ProjectileSnapshot>; ENEMY_SHOT_SLOTS],
     pub alive_rows: [u8; ALIEN_ROWS],
     pub score: u16,
     pub lives: u8,
@@ -341,7 +342,12 @@ pub struct FrameState {
 
 impl FrameState {
     #[must_use]
-    pub fn from_game(game: &GameState, pc: u16, vram_checksum: u32) -> Self {
+    pub fn from_game(
+        game: &GameState,
+        enemy_shots: &[Option<Projectile>; ENEMY_SHOT_SLOTS],
+        pc: u16,
+        vram_checksum: u32,
+    ) -> Self {
         Self {
             frame: game.frame,
             player_x: game.player_x,
@@ -349,7 +355,7 @@ impl FrameState {
             fleet_y: game.fleet_y,
             fleet_dir: game.fleet_dir,
             player_shot: game.player_shot.map(Into::into),
-            enemy_shot: game.enemy_shot.map(Into::into),
+            enemy_shots: std::array::from_fn(|index| enemy_shots[index].map(Into::into)),
             alive_rows: game.alive_rows,
             score: game.score,
             lives: game.lives,
@@ -420,7 +426,7 @@ impl MatchTrace {
 
     #[must_use]
     pub fn to_json(&self) -> String {
-        let mut out = String::with_capacity(self.frames.len() * 370);
+        let mut out = String::with_capacity(self.frames.len() * 420);
         let _ = write!(
             out,
             "{{\n  \"seed\": \"{}\",\n  \"seed_hash\": \"{:016x}\",\n  \"finished\": {},\n  \"total_frames\": {},\n  \"final_score\": {},\n  \"final_lives\": {},\n  \"kills\": [",
@@ -448,8 +454,14 @@ impl MatchTrace {
                 out.push(',');
             }
             let player_shot = projectile_json(frame.player_shot);
-            let enemy_shot = projectile_json(frame.enemy_shot);
-            let _ = write!(out, "\n    {{\"frame\":{},\"player_x\":{},\"fleet_x\":{},\"fleet_y\":{},\"fleet_dir\":{},\"player_shot\":{},\"enemy_shot\":{},\"alive_rows\":[{},{},{},{}],\"score\":{},\"lives\":{},\"pc\":{},\"vram_checksum\":{}}}", frame.frame, frame.player_x, frame.fleet_x, frame.fleet_y, frame.fleet_dir, player_shot, enemy_shot, frame.alive_rows[0], frame.alive_rows[1], frame.alive_rows[2], frame.alive_rows[3], frame.score, frame.lives, frame.pc, frame.vram_checksum);
+            let enemy_shots = frame
+                .enemy_shots
+                .iter()
+                .copied()
+                .map(projectile_json)
+                .collect::<Vec<_>>()
+                .join(",");
+            let _ = write!(out, "\n    {{\"frame\":{},\"player_x\":{},\"fleet_x\":{},\"fleet_y\":{},\"fleet_dir\":{},\"player_shot\":{},\"enemy_shots\":[{}],\"alive_rows\":[{},{},{},{}],\"score\":{},\"lives\":{},\"pc\":{},\"vram_checksum\":{}}}", frame.frame, frame.player_x, frame.fleet_x, frame.fleet_y, frame.fleet_dir, player_shot, enemy_shots, frame.alive_rows[0], frame.alive_rows[1], frame.alive_rows[2], frame.alive_rows[3], frame.score, frame.lives, frame.pc, frame.vram_checksum);
         }
 
         out.push_str("\n  ],\n  \"micro_samples\": [");
