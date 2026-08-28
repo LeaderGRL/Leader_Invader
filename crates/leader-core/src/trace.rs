@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use crate::game::{GameState, Projectile, ALIEN_ROWS};
 use crate::isa::{MicroCycleKind, MicroPhase, PcSource, Reg};
-use crate::logic::{AluTrace, PcIncrementTrace};
+use crate::logic::{AluTrace, Decrement16Trace, PcIncrementTrace};
 use crate::microcode::MicroAddressSource;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +107,57 @@ pub struct PcEvent {
     pub frame: u32,
     pub ordinal: u16,
     pub kind: PcEventKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpEventKind {
+    Push(Decrement16Trace),
+    Pop(PcIncrementTrace),
+}
+
+impl SpEventKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Push(_) => "push",
+            Self::Pop(_) => "pop",
+        }
+    }
+
+    #[must_use]
+    pub const fn before(self) -> u16 {
+        match self {
+            Self::Push(trace) => trace.before,
+            Self::Pop(trace) => trace.before,
+        }
+    }
+
+    #[must_use]
+    pub const fn after(self) -> u16 {
+        match self {
+            Self::Push(trace) => trace.after,
+            Self::Pop(trace) => trace.after,
+        }
+    }
+
+    #[must_use]
+    pub const fn chain(self) -> u32 {
+        match self {
+            Self::Push(trace) => trace.borrow_chain,
+            Self::Pop(trace) => trace.carry_chain,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpEvent {
+    pub frame: u32,
+    pub ordinal: u16,
+    pub pc: u16,
+    pub address: u16,
+    pub data: u8,
+    pub kind: SpEventKind,
+    pub control: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,6 +309,7 @@ pub struct MatchTrace {
     pub alu_events: Vec<AluEvent>,
     pub register_writes: Vec<RegisterWriteEvent>,
     pub pc_events: Vec<PcEvent>,
+    pub sp_events: Vec<SpEvent>,
     pub kills: Vec<KillEvent>,
     pub finished: bool,
     pub total_frames: u32,
@@ -279,6 +331,7 @@ impl MatchTrace {
             alu_events: Vec::new(),
             register_writes: Vec::new(),
             pc_events: Vec::new(),
+            sp_events: Vec::new(),
             kills: Vec::new(),
             finished: false,
             total_frames: 0,
@@ -301,13 +354,21 @@ impl MatchTrace {
             self.final_lives
         );
         for (index, kill) in self.kills.iter().enumerate() {
-            if index > 0 { out.push(','); }
-            let _ = write!(out, "\n    {{\"frame\":{},\"row\":{},\"col\":{},\"score_after\":{}}}", kill.frame, kill.row, kill.col, kill.score_after);
+            if index > 0 {
+                out.push(',');
+            }
+            let _ = write!(
+                out,
+                "\n    {{\"frame\":{},\"row\":{},\"col\":{},\"score_after\":{}}}",
+                kill.frame, kill.row, kill.col, kill.score_after
+            );
         }
 
         out.push_str("\n  ],\n  \"frames\": [");
         for (index, frame) in self.frames.iter().enumerate() {
-            if index > 0 { out.push(','); }
+            if index > 0 {
+                out.push(',');
+            }
             let player_shot = projectile_json(frame.player_shot);
             let enemy_shot = projectile_json(frame.enemy_shot);
             let _ = write!(out, "\n    {{\"frame\":{},\"player_x\":{},\"fleet_x\":{},\"fleet_y\":{},\"fleet_dir\":{},\"player_shot\":{},\"enemy_shot\":{},\"alive_rows\":[{},{},{},{}],\"score\":{},\"lives\":{},\"pc\":{},\"vram_checksum\":{}}}", frame.frame, frame.player_x, frame.fleet_x, frame.fleet_y, frame.fleet_dir, player_shot, enemy_shot, frame.alive_rows[0], frame.alive_rows[1], frame.alive_rows[2], frame.alive_rows[3], frame.score, frame.lives, frame.pc, frame.vram_checksum);
@@ -315,65 +376,107 @@ impl MatchTrace {
 
         out.push_str("\n  ],\n  \"micro_samples\": [");
         for (index, sample) in self.micro_samples.iter().enumerate() {
-            if index > 0 { out.push(','); }
-            let address = sample.address.map_or_else(|| "null".to_owned(), |value| value.to_string());
-            let data = sample.data.map_or_else(|| "null".to_owned(), |value| value.to_string());
+            if index > 0 {
+                out.push(',');
+            }
+            let address = sample
+                .address
+                .map_or_else(|| "null".to_owned(), |value| value.to_string());
+            let data = sample
+                .data
+                .map_or_else(|| "null".to_owned(), |value| value.to_string());
             let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"phase\":\"{}\",\"pc\":{},\"address\":{},\"data\":{},\"control\":\"{}\"}}", sample.frame, sample.ordinal, sample.phase.as_str(), sample.pc, address, data, json_escape(&sample.control));
         }
 
         out.push_str("\n  ],\n  \"micro_cycles\": [");
         for (index, event) in self.micro_cycles.iter().enumerate() {
-            if index > 0 { out.push(','); }
+            if index > 0 {
+                out.push(',');
+            }
             let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"phase\":\"{}\",\"kind\":\"{}\",\"pc\":{},\"mar\":{},\"mdr\":{},\"ir\":{},\"control\":\"{}\"}}", event.frame, event.ordinal, event.phase.as_str(), event.kind.as_str(), event.pc, event.mar, event.mdr, event.ir, event.control);
         }
 
         out.push_str("\n  ],\n  \"micro_addresses\": [");
         for (index, event) in self.micro_addresses.iter().enumerate() {
-            if index > 0 { out.push(','); }
+            if index > 0 {
+                out.push(',');
+            }
             let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"before\":{},\"address\":{},\"source\":\"{}\",\"opcode\":{},\"control_bits\":{},\"label\":\"{}\"}}", event.frame, event.ordinal, event.before, event.address, event.source.as_str(), event.opcode, event.control_bits, event.label);
         }
 
         out.push_str("\n  ],\n  \"bus_transactions\": [");
         for (index, event) in self.bus_transactions.iter().enumerate() {
-            if index > 0 { out.push(','); }
-            let address = event.address.map_or_else(|| "null".to_owned(), |value| value.to_string());
-            let data = event.data.map_or_else(|| "null".to_owned(), |value| value.to_string());
+            if index > 0 {
+                out.push(',');
+            }
+            let address = event
+                .address
+                .map_or_else(|| "null".to_owned(), |value| value.to_string());
+            let data = event
+                .data
+                .map_or_else(|| "null".to_owned(), |value| value.to_string());
             let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"pc\":{},\"address\":{},\"data\":{},\"address_source\":\"{}\",\"data_source\":\"{}\",\"kind\":\"{}\",\"control\":\"{}\"}}", event.frame, event.ordinal, event.pc, address, data, event.address_source.as_str(), event.data_source.as_str(), event.kind.as_str(), event.control);
         }
 
         out.push_str("\n  ],\n  \"alu_events\": [");
         for (index, event) in self.alu_events.iter().enumerate() {
-            if index > 0 { out.push(','); }
+            if index > 0 {
+                out.push(',');
+            }
             let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"pc\":{},\"op\":\"{}\",\"lhs\":{},\"rhs\":{},\"rhs_effective\":{},\"result\":{},\"carry_chain\":{},\"control\":\"{}\"}}", event.frame, event.ordinal, event.pc, event.trace.op.as_str(), event.trace.lhs, event.trace.rhs, event.trace.rhs_effective, event.trace.result, event.trace.carry_chain, event.control);
         }
 
         out.push_str("\n  ],\n  \"register_writes\": [");
         for (index, event) in self.register_writes.iter().enumerate() {
-            if index > 0 { out.push(','); }
+            if index > 0 {
+                out.push(',');
+            }
             let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"pc\":{},\"reg\":\"{}\",\"before\":{},\"after\":{},\"control\":\"{}\"}}", event.frame, event.ordinal, event.pc, event.reg.name(), event.before, event.after, event.control);
         }
 
         out.push_str("\n  ],\n  \"pc_events\": [");
         for (index, event) in self.pc_events.iter().enumerate() {
-            if index > 0 { out.push(','); }
+            if index > 0 {
+                out.push(',');
+            }
             match event.kind {
                 PcEventKind::Increment(trace) => {
                     let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"kind\":\"increment\",\"before\":{},\"after\":{},\"carry_chain\":{}}}", event.frame, event.ordinal, trace.before, trace.after, trace.carry_chain);
                 }
-                PcEventKind::Load { before, after, source, control } => {
+                PcEventKind::Load {
+                    before,
+                    after,
+                    source,
+                    control,
+                } => {
                     let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"kind\":\"load\",\"before\":{},\"after\":{},\"source\":\"{}\",\"control\":\"{}\"}}", event.frame, event.ordinal, before, after, source.as_str(), control);
                 }
             }
         }
+
+        out.push_str("\n  ],\n  \"sp_events\": [");
+        for (index, event) in self.sp_events.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"pc\":{},\"kind\":\"{}\",\"before\":{},\"after\":{},\"chain\":{},\"address\":{},\"data\":{},\"control\":\"{}\"}}", event.frame, event.ordinal, event.pc, event.kind.as_str(), event.kind.before(), event.kind.after(), event.kind.chain(), event.address, event.data, event.control);
+        }
+
         out.push_str("\n  ]\n}\n");
         out
     }
 }
 
 fn projectile_json(projectile: Option<ProjectileSnapshot>) -> String {
-    projectile.map_or_else(|| "null".to_owned(), |value| format!("{{\"x\":{},\"y\":{}}}", value.x, value.y))
+    projectile.map_or_else(
+        || "null".to_owned(),
+        |value| format!("{{\"x\":{},\"y\":{}}}", value.x, value.y),
+    )
 }
 
 fn json_escape(input: &str) -> String {
-    input.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+    input
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
