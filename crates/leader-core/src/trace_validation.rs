@@ -18,6 +18,7 @@ pub struct NativeTraceValidation {
     pub micro_words: usize,
     pub decode_latches: usize,
     pub alu_events: usize,
+    pub flag_events: usize,
     pub register_writes: usize,
     pub pc_loads: usize,
     pub rom_fetches: usize,
@@ -66,6 +67,19 @@ pub fn validate_native_control_authority(
             "ALU enable for native AluEvent",
         )?;
         validated.alu_events += 1;
+    }
+
+    for event in &trace.flag_events {
+        require_micro_authority(
+            &micro_index,
+            event.frame,
+            event.ordinal,
+            0,
+            Some(event.control),
+            |bits| internal_on(bits, internal::FLAGS_LOAD),
+            "FLAGS_LOAD for native FlagEvent",
+        )?;
+        validated.flag_events += 1;
     }
 
     for event in &trace.register_writes {
@@ -176,6 +190,9 @@ pub fn validate_native_control_authority(
     }
     if validated.alu_events == 0 {
         return Err("native trace contains no validated ALU events".to_owned());
+    }
+    if validated.flag_events == 0 {
+        return Err("native trace contains no validated flag latch events".to_owned());
     }
     if validated.register_writes == 0 {
         return Err("native trace contains no validated register writes".to_owned());
@@ -304,6 +321,7 @@ mod tests {
         assert!(validation.micro_words > 0);
         assert!(validation.decode_latches > 0);
         assert!(validation.alu_events > 0);
+        assert!(validation.flag_events > 0);
         assert!(validation.register_writes > 0);
         assert!(validation.pc_loads > 0);
         assert!(validation.rom_fetches > 0);
@@ -326,6 +344,23 @@ mod tests {
         }
         let error = validate_native_control_authority(&trace).expect_err("authority corruption must fail");
         assert!(error.contains("REGW + ARCH_COMMIT"));
+    }
+
+    #[test]
+    fn removing_flags_load_authority_is_detected() {
+        let mut trace = Machine::run_match("f3-flags-authority-negative", 120);
+        let flags = *trace.flag_events.first().expect("flag event");
+        for event in trace.micro_addresses.iter_mut().filter(|event| {
+            event.frame == flags.frame
+                && event.ordinal == flags.ordinal
+                && decode_microcode(event.opcode)
+                    .is_some_and(|instruction| instruction.mnemonic == flags.control)
+        }) {
+            event.control_bits &= !((internal::FLAGS_LOAD as u32) << 8);
+        }
+        let error = validate_native_control_authority(&trace)
+            .expect_err("FLAGS_LOAD corruption must fail");
+        assert!(error.contains("FLAGS_LOAD for native FlagEvent"));
     }
 
     #[test]
