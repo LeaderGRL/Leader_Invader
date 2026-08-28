@@ -110,30 +110,50 @@ The F3 authority rule is now applied to the core game-specific hardware set. Sim
 - replay contract rejects bit creation, duplicate/multi-bit destruction and wrong provenance;
 - physical `ADDR -> MASK -> WRITE -> RAM0..3 -> VIDEO` path;
 - CRT shield pixels disappear at exact native RAM-write timestamps;
-- cross-device enemy-shot/shield ordering is validated;
-- shield-complete generated replay measured **3,856,346 bytes**, leaving roughly **1.14 MB** under budget.
+- cross-device enemy-shot/shield ordering is validated.
 
 ### M3 acceptance — satisfied
 
-The four core arcade systems are now authoritative, physically represented and production-validated:
+The four core arcade systems are authoritative, physically represented and production-validated. No proprietary arcade ROM assets are used.
+
+## Post-M3 hardware cleanup
+
+### Canonical 8080-flavoured memory map ✅
+
+The existing address layout was centralized **without changing any address or ROM semantics**:
 
 ```text
-shift register
-formation cadence
-three-slot enemy projectile bank
-bit-addressed destructible shields
+0000–1FFF  ROM
+2000–7FFF  RAM
+  2020–2028  three enemy-shot slots
+  2040–207F  shield bitmap RAM
+  7F00–7FFF  stack
+8000–87FF  VRAM
+A000–A1FF  MMIO
 ```
 
-No proprietary arcade ROM assets are used.
+Completed contracts:
 
-### Post-M3 hardware cleanup / optional fidelity
+- `MemoryRegion` / `MemoryOwner` canonical definitions;
+- program ports re-exported from the memory map for backward compatibility;
+- projectile, shield and stack windows source their addresses from the canonical map;
+- top-level region non-overlap tests;
+- RAM subregion containment/non-overlap tests;
+- all declared ports proven inside MMIO;
+- 1536-byte framebuffer proven to fit the 2 KiB physical VRAM region;
+- exact ownership-boundary tests;
+- `validate_memory_map_contract()` rejects unmapped native bus accesses;
+- fetch/read/write/input/DMA/scanout data ownership is validated against the mapped region;
+- production `render`, `trace` and `stats` all require this contract.
 
-These are follow-ups, not M3 blockers:
+The generated replay after this follow-up measures **3,805,473 bytes**, leaving roughly **1.19 MB** below the 5 MB budget.
 
-- centralize and document an 8080-flavoured memory map while preserving current addresses;
-- add explicit non-overlap/region ownership tests for ROM, RAM, shield/projectile subregions, VRAM and MMIO;
+### Remaining optional cleanup
+
+- migrate remaining internal address-classification literals to `memory_map::owner()` where useful, while keeping the ownership contract as the safety net;
 - explore richer original-arcade timing/peripheral quirks only where they improve inspectability;
-- continue reducing presentation duplication while maintaining the 5 MB budget;
+- remove obsolete warning-only/helper code that is no longer needed by physical wrong-row tests;
+- continue reducing presentation duplication while maintaining inspectable metadata;
 - eventually deprecate historical `MicroSample`/bus reconstruction helper APIs when compatibility is no longer needed.
 
 ## M4 — live WASM explorer
