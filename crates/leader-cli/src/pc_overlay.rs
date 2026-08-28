@@ -8,9 +8,6 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: R
     }
 
     let overlay = render(topology, trace, config);
-    // `director` closes camera-world immediately before the nested SVG closes.
-    // Insert the PC overlay before that final world closing tag so it receives the
-    // exact same camera transform as every other hardware component.
     let Some(svg_close) = svg.rfind("</svg>") else {
         return svg;
     };
@@ -25,55 +22,90 @@ fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> Stri
     let events = derive_pc_datapath(trace);
     let stride = (events.len() / 150).max(1);
     let total = config.total();
-    let mut out = String::with_capacity(220_000);
+    let mut out = String::with_capacity(240_000);
     out.push_str("<g id=\"f3-pc\">\n");
 
     for event in events.iter().step_by(stride) {
         let moment = trace_moment(event.frame, event.ordinal, trace, config);
-        pulse_group(&mut out, moment, total, |out| match event.kind {
+        match event.kind {
             PcDatapathKind::Increment(increment) => {
-                glow_node(out, topology, "pcIncLo", "#67d9b3");
-                if increment.low_byte_carry() {
-                    glow_node(out, topology, "pcCarry", "#ffe16a");
-                    glow_node(out, topology, "pcIncHi", "#67d9b3");
-                }
-                for bit in 0..16 {
-                    if bit16(increment.after, bit) {
-                        glow_node(out, topology, &format!("pcBit{bit}"), "#67d9b3");
-                    }
-                }
+                pulse_group(
+                    &mut out,
+                    moment,
+                    total,
+                    "increment",
+                    increment.before,
+                    increment.after,
+                    if increment.low_byte_carry() { "1" } else { "0" },
+                    |out| {
+                        glow_node(out, topology, "pcIncLo", "#67d9b3");
+                        if increment.low_byte_carry() {
+                            glow_node(out, topology, "pcCarry", "#ffe16a");
+                            glow_node(out, topology, "pcIncHi", "#67d9b3");
+                        }
+                        for bit in 0..16 {
+                            if bit16(increment.after, bit) {
+                                glow_node(out, topology, &format!("pcBit{bit}"), "#67d9b3");
+                            }
+                        }
+                    },
+                );
             }
-            PcDatapathKind::Load { after, source, .. } => {
+            PcDatapathKind::Load {
+                before,
+                after,
+                source,
+            } => {
                 let color = match source {
                     PcSource::Jump => "#ff9b71",
                     PcSource::Branch => "#e8e677",
                     PcSource::Call => "#ef7caf",
                     PcSource::Return => "#72d4e7",
                 };
-                glow_node(out, topology, "pcMuxLo", color);
-                glow_node(out, topology, "pcMuxHi", color);
-                for bit in 0..16 {
-                    if bit16(after, bit) {
-                        glow_node(out, topology, &format!("pcBit{bit}"), color);
-                    }
-                }
+                pulse_group(
+                    &mut out,
+                    moment,
+                    total,
+                    source.as_str(),
+                    before,
+                    after,
+                    "0",
+                    |out| {
+                        glow_node(out, topology, "pcSelectLatch", color);
+                        glow_node(out, topology, "pcMuxLo", color);
+                        glow_node(out, topology, "pcMuxHi", color);
+                        for bit in 0..16 {
+                            if bit16(after, bit) {
+                                glow_node(out, topology, &format!("pcBit{bit}"), color);
+                            }
+                        }
+                    },
+                );
             }
-        });
+        }
     }
 
     out.push_str("</g>\n");
     out
 }
 
-fn pulse_group<F>(out: &mut String, moment: f32, total: f32, render: F)
-where
+fn pulse_group<F>(
+    out: &mut String,
+    moment: f32,
+    total: f32,
+    kind: &str,
+    before: u16,
+    after: u16,
+    carry: &str,
+    render: F,
+) where
     F: FnOnce(&mut String),
 {
     let k1 = norm(moment, total);
     let k2 = norm(moment + 0.025, total);
     let k3 = norm(moment + 0.13, total);
     out.push_str(&format!(
-        "<g opacity=\"0\"><animate attributeName=\"opacity\" values=\"0;0;1;0;0\" keyTimes=\"0;{k1:.6};{k2:.6};{k3:.6};1\" dur=\"{total:.3}s\" repeatCount=\"indefinite\"/>"
+        "<g opacity=\"0\" data-pc-kind=\"{kind}\" data-pc-before=\"{before:04X}\" data-pc-after=\"{after:04X}\" data-pc-low-carry=\"{carry}\"><animate attributeName=\"opacity\" values=\"0;0;1;0;0\" keyTimes=\"0;{k1:.6};{k2:.6};{k3:.6};1\" dur=\"{total:.3}s\" repeatCount=\"indefinite\"/>"
     ));
     render(out);
     out.push_str("</g>\n");
@@ -111,11 +143,16 @@ mod tests {
     use leader_core::{build_topology, Machine};
 
     #[test]
-    fn overlay_contains_pc_activity_for_real_match() {
+    fn overlay_contains_exact_pc_activity_for_real_match() {
         let topology = build_topology();
         let trace = Machine::run_match("pc-overlay", 5000);
         let rendered = render(&topology, &trace, RenderConfig::default());
         assert!(rendered.contains("id=\"f3-pc\""));
+        assert!(rendered.contains("data-pc-kind=\"increment\""));
+        assert!(rendered.contains("data-pc-kind=\"call\""));
+        assert!(rendered.contains("data-pc-kind=\"return\""));
+        assert!(rendered.contains("data-pc-before=\""));
+        assert!(rendered.contains("data-pc-after=\""));
         assert!(rendered.len() > 1000);
     }
 
