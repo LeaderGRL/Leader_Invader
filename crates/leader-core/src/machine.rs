@@ -1,3 +1,4 @@
+use crate::enemy_shot_bank::{EnemyShotBank, ENEMY_SHOT_SLOTS};
 use crate::formation_cadence::FormationCadence;
 use crate::game::{Bot, GameState, InputState, Projectile, ALIEN_COLS, ALIEN_H, ALIEN_ROWS, ALIEN_W, PLAYER_Y, SCREEN_H, SCREEN_W};
 use crate::isa::{Bus, Cpu, Flags, MicroCycleKind, MicroPhase, PcSource, Reg, StepOutcome};
@@ -19,6 +20,7 @@ use crate::trace::{
 const ROM_LIMIT: usize = 0x2000;
 const VRAM: usize = 0x8000;
 const VRAM_BYTES: usize = 128 * 96 / 8;
+const ENEMY_SHOT_RAM_BASE: u16 = RAM_BASE + 0x20;
 
 #[derive(Debug)]
 pub struct Machine {
@@ -28,6 +30,7 @@ pub struct Machine {
     rng: DeterministicRng,
     bot: Bot,
     input: InputState,
+    enemy_shots: EnemyShotBank,
     shift_register: ShiftRegister16,
     formation_cadence: FormationCadence,
     trace: MatchTrace,
@@ -46,6 +49,8 @@ impl Machine {
         let hash = hash_seed(seed);
         let mut rng = DeterministicRng::from_seed(hash);
         let bot = Bot::seeded(&mut rng);
+        let mut enemy_shots = EnemyShotBank::default();
+        enemy_shots.set_cooldown(12);
         let mut machine = Self {
             mem: Box::new([0; 65_536]),
             cpu: Cpu::default(),
@@ -53,6 +58,7 @@ impl Machine {
             rng,
             bot,
             input: InputState::default(),
+            enemy_shots,
             shift_register: ShiftRegister16::default(),
             formation_cadence: FormationCadence::default(),
             trace: MatchTrace::new(seed.to_owned(), hash),
@@ -65,6 +71,7 @@ impl Machine {
         machine.last_vram_checksum = machine.render_vram();
         machine.trace.frames.push(FrameState::from_game(
             &machine.game,
+            machine.enemy_shots.slots(),
             machine.cpu.pc(),
             machine.last_vram_checksum,
         ));
@@ -88,6 +95,7 @@ impl Machine {
                     );
                     machine.trace.frames.push(FrameState::from_game(
                         &machine.game,
+                        machine.enemy_shots.slots(),
                         machine.cpu.pc(),
                         machine.last_vram_checksum,
                     ));
@@ -109,9 +117,10 @@ impl Machine {
             }
         }
 
-        if machine.trace.frames.last().map(|f| f.frame) != Some(machine.game.frame) {
+        if machine.trace.frames.last().map(|frame| frame.frame) != Some(machine.game.frame) {
             machine.trace.frames.push(FrameState::from_game(
                 &machine.game,
+                machine.enemy_shots.slots(),
                 machine.cpu.pc(),
                 machine.last_vram_checksum,
             ));
@@ -140,7 +149,9 @@ impl Machine {
     }
 
     fn poll_input(&mut self, pc: u16) {
-        self.input = self.bot.decide(&self.game, &mut self.rng);
+        self.input = self
+            .bot
+            .decide(&self.game, self.enemy_shots.slots(), &mut self.rng);
         let encoded = encode_input(self.input);
         self.mem[INPUT_PORT as usize] = encoded;
         self.record_bus_transaction(
@@ -212,7 +223,10 @@ impl Machine {
                 self.traced_write(pc, RAM_BASE + 5, shot.y as u8, "SHOT_Y_WRITE");
             }
         } else if self.input.fire && self.game.player_cooldown == 0 {
-            let shot = Projectile { x: self.game.player_x, y: PLAYER_Y - 5 };
+            let shot = Projectile {
+                x: self.game.player_x,
+                y: PLAYER_Y - 5,
+            };
             self.game.player_shot = Some(shot);
             self.game.player_cooldown = 6;
             self.traced_write(pc, RAM_BASE + 4, shot.x as u8, "SHOT_X_WRITE");
@@ -222,21 +236,39 @@ impl Machine {
     }
 
     fn collide(&mut self, pc: u16) {
-        let Some(shot) = self.game.player_shot else { return; };
+        let Some(shot) = self.game.player_shot else {
+            return;
+        };
         for row in 0..ALIEN_ROWS {
             let mask = self.traced_read(pc, RAM_BASE + 0x10 + row as u16, "ALIEN_ROW_READ");
             for col in 0..ALIEN_COLS {
-                if mask & (1 << col) == 0 { continue; }
+                if mask & (1 << col) == 0 {
+                    continue;
+                }
                 let (x, y) = self.game.alien_origin(row, col);
-                if shot.x >= x && shot.x < x + ALIEN_W && shot.y >= y && shot.y < y + ALIEN_H + 2 {
+                if shot.x >= x
+                    && shot.x < x + ALIEN_W
+                    && shot.y >= y
+                    && shot.y < y + ALIEN_H + 2
+                {
                     let new_mask = mask & !(1 << col);
                     self.sample(pc, PhaseKind::Alu, None, Some(new_mask), "ALIEN_MASK_AND");
                     if self.game.clear_alien(row, col) {
-                        self.traced_write(pc, RAM_BASE + 0x10 + row as u16, new_mask, "ALIEN_ROW_WRITE");
+                        self.traced_write(
+                            pc,
+                            RAM_BASE + 0x10 + row as u16,
+                            new_mask,
+                            "ALIEN_ROW_WRITE",
+                        );
                         self.write16(pc, RAM_BASE + 0x0A, self.game.score, "SCORE_WRITE");
                         self.game.player_shot = None;
                         self.traced_write(pc, RAM_BASE + 6, 0, "SHOT_HIT_CLEAR");
-                        self.trace.kills.push(KillEvent { frame: self.game.frame, row, col, score_after: self.game.score });
+                        self.trace.kills.push(KillEvent {
+                            frame: self.game.frame,
+                            row,
+                            col,
+                            score_after: self.game.score,
+                        });
                     }
                     return;
                 }
@@ -245,33 +277,77 @@ impl Machine {
     }
 
     fn enemy_shot(&mut self, pc: u16) {
-        self.game.enemy_cooldown = self.game.enemy_cooldown.saturating_sub(1);
-        if let Some(mut shot) = self.game.enemy_shot {
+        self.enemy_shots.clock_cooldown();
+        let (left, right) = self.game.player_bounds();
+
+        for slot in 0..ENEMY_SHOT_SLOTS {
+            let Some(mut shot) = self.enemy_shots.slot(slot) else {
+                continue;
+            };
             shot.y += 2;
-            self.sample(pc, PhaseKind::Alu, None, Some(shot.y as u8), "ENEMY_SHOT_Y_ADD");
-            let (left, right) = self.game.player_bounds();
+            self.sample(
+                pc,
+                PhaseKind::Alu,
+                None,
+                Some(shot.y as u8),
+                "ENEMY_SHOT_Y_ADD",
+            );
+
             if shot.y >= PLAYER_Y - 2 && shot.x >= left && shot.x <= right {
                 self.game.lives = self.game.lives.saturating_sub(1).max(1);
-                self.game.enemy_shot = None;
-                self.traced_write(pc, RAM_BASE + 9, 0, "ENEMY_SHOT_HIT");
+                self.enemy_shots.clear(slot);
+                self.traced_write(
+                    pc,
+                    enemy_shot_ram(slot, 2),
+                    0,
+                    "ENEMY_SHOT_HIT",
+                );
             } else if shot.y >= SCREEN_H - 4 {
-                self.game.enemy_shot = None;
-                self.traced_write(pc, RAM_BASE + 9, 0, "ENEMY_SHOT_CLEAR");
+                self.enemy_shots.clear(slot);
+                self.traced_write(
+                    pc,
+                    enemy_shot_ram(slot, 2),
+                    0,
+                    "ENEMY_SHOT_CLEAR",
+                );
             } else {
-                self.game.enemy_shot = Some(shot);
-                self.traced_write(pc, RAM_BASE + 8, shot.y as u8, "ENEMY_SHOT_Y_WRITE");
+                self.enemy_shots.update(slot, shot);
+                self.traced_write(
+                    pc,
+                    enemy_shot_ram(slot, 1),
+                    shot.y as u8,
+                    "ENEMY_SHOT_Y_WRITE",
+                );
             }
         }
-        if self.game.enemy_shot.is_none() && self.game.enemy_cooldown == 0 {
+
+        if self.enemy_shots.cooldown() == 0
+            && self.enemy_shots.active_count() < ENEMY_SHOT_SLOTS
+        {
             let shooters = self.game.bottom_shooters();
             if !shooters.is_empty() {
                 let pick = shooters[self.rng.range_u32(shooters.len() as u32) as usize];
-                let shot = Projectile { x: pick.2, y: pick.3 + 1 };
-                self.game.enemy_shot = Some(shot);
-                self.game.enemy_cooldown = 22 + self.rng.range_u32(42) as u8;
-                self.traced_write(pc, RAM_BASE + 7, shot.x as u8, "ENEMY_SHOT_X_WRITE");
-                self.traced_write(pc, RAM_BASE + 8, shot.y as u8, "ENEMY_SHOT_Y_WRITE");
-                self.traced_write(pc, RAM_BASE + 9, 1, "ENEMY_SHOT_ARM");
+                let shot = Projectile {
+                    x: pick.2,
+                    y: pick.3 + 1,
+                };
+                let next_cooldown = 10 + self.rng.range_u32(6) as u8;
+                if let Some(slot) = self.enemy_shots.spawn(shot) {
+                    self.enemy_shots.set_cooldown(next_cooldown);
+                    self.traced_write(
+                        pc,
+                        enemy_shot_ram(slot, 0),
+                        shot.x as u8,
+                        "ENEMY_SHOT_X_WRITE",
+                    );
+                    self.traced_write(
+                        pc,
+                        enemy_shot_ram(slot, 1),
+                        shot.y as u8,
+                        "ENEMY_SHOT_Y_WRITE",
+                    );
+                    self.traced_write(pc, enemy_shot_ram(slot, 2), 1, "ENEMY_SHOT_ARM");
+                }
             }
         }
     }
@@ -465,7 +541,14 @@ impl Machine {
         self.traced_write(pc, address + 1, (value >> 8) as u8, control);
     }
 
-    fn sample(&mut self, pc: u16, phase: PhaseKind, address: Option<u16>, data: Option<u8>, control: &'static str) {
+    fn sample(
+        &mut self,
+        pc: u16,
+        phase: PhaseKind,
+        address: Option<u16>,
+        data: Option<u8>,
+        control: &'static str,
+    ) {
         self.trace.micro_samples.push(MicroSample {
             frame: self.game.frame,
             ordinal: self.ordinal,
@@ -489,6 +572,12 @@ impl Machine {
         for row in 0..ALIEN_ROWS {
             self.mem[(RAM_BASE + 0x10 + row as u16) as usize] = self.game.alive_rows[row];
         }
+        for slot in 0..ENEMY_SHOT_SLOTS {
+            let shot = self.enemy_shots.slot(slot);
+            self.mem[enemy_shot_ram(slot, 0) as usize] = shot.map_or(0, |shot| shot.x as u8);
+            self.mem[enemy_shot_ram(slot, 1) as usize] = shot.map_or(0, |shot| shot.y as u8);
+            self.mem[enemy_shot_ram(slot, 2) as usize] = u8::from(shot.is_some());
+        }
     }
 
     fn render_vram(&mut self) -> u32 {
@@ -502,9 +591,16 @@ impl Machine {
             }
         }
         draw_player(&mut self.mem, self.game.player_x, PLAYER_Y);
-        if let Some(shot) = self.game.player_shot { draw_shot(&mut self.mem, shot.x, shot.y, 4); }
-        if let Some(shot) = self.game.enemy_shot { draw_shot(&mut self.mem, shot.x, shot.y, 3); }
-        for x in 0..SCREEN_W { pixel(&mut self.mem, x, SCREEN_H - 3); }
+        if let Some(shot) = self.game.player_shot {
+            draw_shot(&mut self.mem, shot.x, shot.y, 4);
+        }
+        let enemy_shots = *self.enemy_shots.slots();
+        for shot in enemy_shots.into_iter().flatten() {
+            draw_shot(&mut self.mem, shot.x, shot.y, 3);
+        }
+        for x in 0..SCREEN_W {
+            pixel(&mut self.mem, x, SCREEN_H - 3);
+        }
         let mut hash = 0x811c_9dc5_u32;
         for byte in &self.mem[VRAM..VRAM + VRAM_BYTES] {
             hash ^= u32::from(*byte);
@@ -736,6 +832,10 @@ impl Bus for Machine {
     }
 }
 
+fn enemy_shot_ram(slot: usize, component: u16) -> u16 {
+    ENEMY_SHOT_RAM_BASE + slot as u16 * 3 + component
+}
+
 fn bus_data_source(address: u16) -> BusDataSource {
     match address {
         0x0000..=0x1fff => BusDataSource::Rom,
@@ -747,33 +847,55 @@ fn bus_data_source(address: u16) -> BusDataSource {
 }
 
 fn encode_input(input: InputState) -> u8 {
-    let horizontal = if input.horizontal < 0 { 1 } else if input.horizontal > 0 { 2 } else { 0 };
+    let horizontal = if input.horizontal < 0 {
+        1
+    } else if input.horizontal > 0 {
+        2
+    } else {
+        0
+    };
     horizontal | if input.fire { 4 } else { 0 }
 }
 
 fn pixel(memory: &mut [u8; 65_536], x: i16, y: i16) {
-    if !(0..SCREEN_W).contains(&x) || !(0..SCREEN_H).contains(&y) { return; }
+    if !(0..SCREEN_W).contains(&x) || !(0..SCREEN_H).contains(&y) {
+        return;
+    }
     let index = y as usize * SCREEN_W as usize + x as usize;
     memory[VRAM + index / 8] |= 1 << (7 - index % 8);
 }
 
 fn draw_player(memory: &mut [u8; 65_536], x: i16, y: i16) {
-    for dx in -5..=5 { pixel(memory, x + dx, y); }
-    for dx in -3..=3 { pixel(memory, x + dx, y - 1); }
-    for dy in 2..=4 { pixel(memory, x, y - dy); }
+    for dx in -5..=5 {
+        pixel(memory, x + dx, y);
+    }
+    for dx in -3..=3 {
+        pixel(memory, x + dx, y - 1);
+    }
+    for dy in 2..=4 {
+        pixel(memory, x, y - dy);
+    }
 }
 
 fn draw_shot(memory: &mut [u8; 65_536], x: i16, y: i16, height: i16) {
-    for dy in 0..height { pixel(memory, x, y + dy); }
+    for dy in 0..height {
+        pixel(memory, x, y + dy);
+    }
 }
 
 fn draw_invader(memory: &mut [u8; 65_536], x: i16, y: i16, variant: bool) {
-    let a = ["00111100", "01111110", "11011011", "11111111", "00100100", "01000010"];
-    let b = ["01100110", "11111111", "10111101", "11111111", "00100100", "01011010"];
+    let a = [
+        "00111100", "01111110", "11011011", "11111111", "00100100", "01000010",
+    ];
+    let b = [
+        "01100110", "11111111", "10111101", "11111111", "00100100", "01011010",
+    ];
     let bitmap = if variant { &b } else { &a };
     for (dy, row) in bitmap.iter().enumerate() {
         for (dx, value) in row.as_bytes().iter().enumerate() {
-            if *value == b'1' { pixel(memory, x + dx as i16, y + dy as i16); }
+            if *value == b'1' {
+                pixel(memory, x + dx as i16, y + dy as i16);
+            }
         }
     }
 }
@@ -788,6 +910,7 @@ mod tests {
         let b = Machine::run_match("same", 5000);
         assert_eq!(a.kills, b.kills);
         assert_eq!(a.total_frames, b.total_frames);
+        assert_eq!(a.frames, b.frames);
     }
 
     #[test]
@@ -796,9 +919,16 @@ mod tests {
         assert!(trace.finished, "{} frames", trace.total_frames);
         assert_eq!(trace.final_score, 320);
         assert_eq!(trace.kills.len(), 32);
-        assert!(trace.micro_samples.iter().any(|s| s.control == "CALL"));
-        assert!(trace.micro_samples.iter().any(|s| s.control == "RET"));
-        assert!(trace.micro_samples.iter().any(|s| s.control == "WAIT_VBLANK"));
+        assert!(trace
+            .frames
+            .iter()
+            .any(|frame| frame.enemy_shots.iter().flatten().count() >= 2));
+        assert!(trace.micro_samples.iter().any(|sample| sample.control == "CALL"));
+        assert!(trace.micro_samples.iter().any(|sample| sample.control == "RET"));
+        assert!(trace
+            .micro_samples
+            .iter()
+            .any(|sample| sample.control == "WAIT_VBLANK"));
         assert!(!trace.micro_cycles.is_empty());
         assert!(!trace.micro_addresses.is_empty());
         assert!(!trace.bus_transactions.is_empty());
@@ -810,13 +940,34 @@ mod tests {
         assert!(!trace.register_writes.is_empty());
         assert!(!trace.pc_events.is_empty());
         assert!(!trace.sp_events.is_empty());
-        assert!(trace.formation_cadence_events.iter().any(|event| event.event.tick));
-        assert!(trace.formation_cadence_events.iter().any(|event| !event.event.tick));
-        assert!(trace.formation_cadence_events.iter().any(|event| event.event.divisor == 3));
-        assert!(trace.formation_cadence_events.iter().any(|event| event.event.divisor == 2));
-        assert!(trace.formation_cadence_events.iter().any(|event| event.event.divisor == 1));
-        assert!(trace.sp_events.iter().any(|event| matches!(event.kind, SpEventKind::Push(_))));
-        assert!(trace.sp_events.iter().any(|event| matches!(event.kind, SpEventKind::Pop(_))));
+        assert!(trace
+            .formation_cadence_events
+            .iter()
+            .any(|event| event.event.tick));
+        assert!(trace
+            .formation_cadence_events
+            .iter()
+            .any(|event| !event.event.tick));
+        assert!(trace
+            .formation_cadence_events
+            .iter()
+            .any(|event| event.event.divisor == 3));
+        assert!(trace
+            .formation_cadence_events
+            .iter()
+            .any(|event| event.event.divisor == 2));
+        assert!(trace
+            .formation_cadence_events
+            .iter()
+            .any(|event| event.event.divisor == 1));
+        assert!(trace
+            .sp_events
+            .iter()
+            .any(|event| matches!(event.kind, SpEventKind::Push(_))));
+        assert!(trace
+            .sp_events
+            .iter()
+            .any(|event| matches!(event.kind, SpEventKind::Pop(_))));
         assert!(matches!(
             trace.shift_register_events.as_slice(),
             [
@@ -865,13 +1016,25 @@ mod tests {
             ControlLatchKind::PcSelect,
             ControlLatchKind::RegSelect,
         ] {
-            assert!(trace.control_latch_events.iter().any(|event| event.kind == kind));
+            assert!(trace
+                .control_latch_events
+                .iter()
+                .any(|event| event.kind == kind));
         }
         assert!(trace.alu_events.iter().any(|event| event.control == "CMPI"));
         assert!(trace.flag_events.iter().any(|event| event.control == "CMPI"));
-        assert!(trace.register_writes.iter().any(|event| event.control == "LDI"));
-        assert!(trace.pc_events.iter().any(|event| matches!(event.kind, PcEventKind::Load { .. })));
-        assert!(trace.micro_addresses.iter().any(|event| event.control_bits > u32::from(u8::MAX)));
+        assert!(trace
+            .register_writes
+            .iter()
+            .any(|event| event.control == "LDI"));
+        assert!(trace
+            .pc_events
+            .iter()
+            .any(|event| matches!(event.kind, PcEventKind::Load { .. })));
+        assert!(trace
+            .micro_addresses
+            .iter()
+            .any(|event| event.control_bits > u32::from(u8::MAX)));
         assert!(trace.bus_transactions.iter().any(|event| {
             event.kind == BusTransactionKind::Fetch
                 && event.address_source == BusAddressSource::ProgramCounter
@@ -883,8 +1046,7 @@ mod tests {
                 && event.data_source == BusDataSource::Vram
         }));
         assert!(trace.bus_transactions.iter().any(|event| {
-            event.kind == BusTransactionKind::Input
-                && event.data_source == BusDataSource::Device
+            event.kind == BusTransactionKind::Input && event.data_source == BusDataSource::Device
         }));
         assert!(trace.bus_transactions.iter().any(|event| {
             event.kind == BusTransactionKind::Read
@@ -892,14 +1054,34 @@ mod tests {
                 && event.data == Some(0xA0)
                 && event.data_source == BusDataSource::Device
         }));
-        assert!(trace.bus_transactions.iter().filter(|event| {
-            event.kind == BusTransactionKind::Write && event.address == Some(SHIFT_DATA)
-        }).count() >= 2);
-        assert!(trace.micro_addresses.iter().any(|event| event.address == crate::microcode::uaddr::FETCH_T0));
-        assert!(trace.micro_addresses.iter().any(|event| event.address >= crate::microcode::uaddr::EXEC_BASE));
-        assert!(trace.micro_addresses.iter().any(|event| event.source == crate::microcode::MicroAddressSource::Dispatch));
-        assert!(trace.micro_addresses.iter().any(|event| event.source == crate::microcode::MicroAddressSource::RoutineCall));
-        assert!(trace.micro_addresses.iter().any(|event| event.source == crate::microcode::MicroAddressSource::RoutineReturn));
+        assert!(trace
+            .bus_transactions
+            .iter()
+            .filter(|event| {
+                event.kind == BusTransactionKind::Write && event.address == Some(SHIFT_DATA)
+            })
+            .count()
+            >= 2);
+        assert!(trace
+            .micro_addresses
+            .iter()
+            .any(|event| event.address == crate::microcode::uaddr::FETCH_T0));
+        assert!(trace
+            .micro_addresses
+            .iter()
+            .any(|event| event.address >= crate::microcode::uaddr::EXEC_BASE));
+        assert!(trace
+            .micro_addresses
+            .iter()
+            .any(|event| event.source == crate::microcode::MicroAddressSource::Dispatch));
+        assert!(trace
+            .micro_addresses
+            .iter()
+            .any(|event| event.source == crate::microcode::MicroAddressSource::RoutineCall));
+        assert!(trace
+            .micro_addresses
+            .iter()
+            .any(|event| event.source == crate::microcode::MicroAddressSource::RoutineReturn));
     }
 
     #[test]
