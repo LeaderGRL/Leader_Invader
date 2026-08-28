@@ -2,6 +2,8 @@ name: ci
 
 on:
   pull_request:
+    paths-ignore:
+      - 'generated/**'
   push:
     paths-ignore:
       - 'generated/**'
