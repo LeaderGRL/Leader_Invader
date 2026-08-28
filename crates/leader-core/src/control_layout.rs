@@ -50,6 +50,16 @@ const CONTROL_CONSUMERS: [(&str, &str, &str); 20] = [
     ("ctrlArchCommit", "writeBus", "ARCH_COMMIT"),
 ];
 
+const CALL_RETURN_PATH: [(&str, &str, &str, SignalKind); 7] = [
+    ("pcMuxLo", "returnDataMux", "RETURN LO", SignalKind::Data),
+    ("pcMuxHi", "returnDataMux", "RETURN HI", SignalKind::Data),
+    ("ctrlStack", "returnDataMux", "STACK", SignalKind::Control),
+    ("returnDataMux", "dataBuf", "RETURN BYTE", SignalKind::Data),
+    ("dataBuf", "addrLoLatch", "RET LO", SignalKind::Data),
+    ("dataBuf", "addrHiLatch", "RET HI", SignalKind::Data),
+    ("returnDataMux", "stackRam", "CALL BYTE", SignalKind::Data),
+];
+
 pub fn inject_internal_control_lines(topology: &mut Topology) {
     if topology.node(INTERNAL_CONTROL_NODES[0].0).is_some() {
         return;
@@ -82,12 +92,30 @@ pub fn inject_internal_control_lines(topology: &mut Topology) {
         });
     }
 
+    topology.nodes.push(Node {
+        id: "returnDataMux".to_owned(),
+        title: "RETURN BYTE".to_owned(),
+        kind: "PC HI/LO MUX".to_owned(),
+        group: "bus".to_owned(),
+        bounds: Rect::new(4930.0, 3380.0, 160.0, 70.0),
+    });
+
     for (index, (from, to, label)) in CONTROL_CONSUMERS.iter().enumerate() {
         topology.links.push(Link {
             id: format!("control-consumer-{index}"),
             from: (*from).to_owned(),
             to: (*to).to_owned(),
             signal: SignalKind::Control,
+            label: (*label).to_owned(),
+        });
+    }
+
+    for (index, (from, to, label, signal)) in CALL_RETURN_PATH.iter().enumerate() {
+        topology.links.push(Link {
+            id: format!("call-return-path-{index}"),
+            from: (*from).to_owned(),
+            to: (*to).to_owned(),
+            signal: *signal,
             label: (*label).to_owned(),
         });
     }
@@ -137,6 +165,21 @@ mod tests {
             assert!(topology.links.iter().any(|link| {
                 link.from == from && link.to == to && link.label == label
             }), "missing control wire {from} -> {to} ({label})");
+        }
+    }
+
+    #[test]
+    fn call_return_path_is_visible_and_closed() {
+        let mut topology = crate::topology::build_topology();
+        crate::layout::apply_visual_layout(&mut topology);
+        inject_internal_control_lines(&mut topology);
+        assert!(topology.node("returnDataMux").is_some());
+        for (from, to, label, signal) in CALL_RETURN_PATH {
+            assert!(topology.node(from).is_some(), "missing source {from}");
+            assert!(topology.node(to).is_some(), "missing target {to}");
+            assert!(topology.links.iter().any(|link| {
+                link.from == from && link.to == to && link.label == label && link.signal == signal
+            }), "missing CALL/RET wire {from} -> {to} ({label})");
         }
     }
 }
