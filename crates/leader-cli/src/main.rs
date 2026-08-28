@@ -161,13 +161,14 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
     println!(
-        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} flag latches / {} SP events / {} CALL pairs / {} native overlays / {} bytes -> {}",
+        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} native overlays / {} bytes -> {}",
         topology_validation.nodes,
         topology_validation.links,
         trace.total_frames,
         trace.kills.len(),
         validation.micro_words,
         validation.flag_events,
+        validation.control_latches,
         sp_events,
         call_stack.call_pairs,
         svg_validation.overlay_groups,
@@ -185,10 +186,11 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
     validate_f3_trace(&trace)?;
     write(&options.output, trace.to_json().as_bytes())?;
     println!(
-        "frames={} kills={} flag_events={} sp_events={} clear={}",
+        "frames={} kills={} flag_events={} control_latch_events={} sp_events={} clear={}",
         trace.total_frames,
         trace.kills.len(),
         trace.flag_events.len(),
+        trace.control_latch_events.len(),
         trace.sp_events.len(),
         trace.finished
     );
@@ -220,6 +222,7 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     println!("trace.bus_transactions={}", trace.bus_transactions.len());
     println!("trace.alu_events={}", trace.alu_events.len());
     println!("trace.flag_events={}", trace.flag_events.len());
+    println!("trace.control_latch_events={}", trace.control_latch_events.len());
     println!("trace.register_writes={}", trace.register_writes.len());
     println!("trace.pc_events={}", trace.pc_events.len());
     println!("trace.sp_events={}", trace.sp_events.len());
@@ -235,6 +238,10 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     println!(
         "trace.native_verified_flag_events={}",
         validation.flag_events
+    );
+    println!(
+        "trace.native_verified_control_latches={}",
+        validation.control_latches
     );
     println!(
         "trace.native_verified_register_writes={}",
