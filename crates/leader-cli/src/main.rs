@@ -7,6 +7,7 @@ mod control_word_overlay;
 mod decoder_overlay;
 mod director;
 mod flags_overlay;
+mod formation_cadence_overlay;
 mod microcode_overlay;
 mod microcycle_overlay;
 #[cfg(test)]
@@ -160,6 +161,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let svg = register_overlay::apply(svg, &topology, &trace, config);
     let svg = bus_overlay::apply(svg, &topology, &trace, config);
     let svg = stack_overlay::apply(svg, &topology, &trace, config);
+    let svg = formation_cadence_overlay::apply(svg, &topology, &trace, config);
     let svg = shift_register_overlay::apply(svg, &topology, &trace, config);
     let svg = timing_overlay::apply(svg, &topology, &trace, config);
     let svg_validation = render_contract::validate_native_svg_contract(&svg)
