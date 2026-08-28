@@ -21,7 +21,8 @@ use std::{
 };
 
 use leader_core::{
-    build_topology, validate_native_control_authority, MatchTrace, MicroCycleKind, Machine, Topology,
+    build_topology, validate_call_stack_contract, validate_native_control_authority, MatchTrace,
+    MicroCycleKind, Machine, Topology,
 };
 use leader_svg::{render, RenderConfig};
 
@@ -83,14 +84,21 @@ fn render_native_base(
     render(topology, &native_base, config)
 }
 
+fn validate_f3_trace(trace: &MatchTrace) -> Result<(leader_core::NativeTraceValidation, leader_core::CallStackValidation), String> {
+    let native = validate_native_control_authority(trace)
+        .map_err(|error| format!("native F3 trace invalid: {error}"))?;
+    let call_stack = validate_call_stack_contract(trace)
+        .map_err(|error| format!("CALL/RET stack contract invalid: {error}"))?;
+    Ok((native, call_stack))
+}
+
 fn render_cmd(options: Options) -> Result<(), String> {
     let topology = build_topology();
     let trace = Machine::run_match(&options.seed, options.max_frames);
     if !trace.finished {
         return Err(format!("match did not clear within {} frames", options.max_frames));
     }
-    let validation = validate_native_control_authority(&trace)
-        .map_err(|error| format!("native F3 trace invalid: {error}"))?;
+    let (validation, call_stack) = validate_f3_trace(&trace)?;
     let config = RenderConfig::default();
     let svg = render_native_base(&topology, &trace, config);
     let svg = director::apply_camera(svg, &topology, &trace, config);
@@ -109,12 +117,13 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
     println!(
-        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords -> {}",
+        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} CALL pairs -> {}",
         topology.nodes.len(),
         topology.links.len(),
         trace.total_frames,
         trace.kills.len(),
         validation.micro_words,
+        call_stack.call_pairs,
         options.output.display()
     );
     Ok(())
@@ -123,8 +132,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
 fn trace_cmd(mut options: Options) -> Result<(), String> {
     if options.output == PathBuf::from("generated/Leader.svg") { options.output = PathBuf::from("generated/trace.json"); }
     let trace = Machine::run_match(&options.seed, options.max_frames);
-    validate_native_control_authority(&trace)
-        .map_err(|error| format!("native F3 trace invalid: {error}"))?;
+    validate_f3_trace(&trace)?;
     write(&options.output, trace.to_json().as_bytes())?;
     println!("frames={} kills={} clear={}", trace.total_frames, trace.kills.len(), trace.finished);
     if trace.finished { Ok(()) } else { Err("trace hit frame limit".to_owned()) }
@@ -133,8 +141,7 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
 fn stats_cmd(options: Options) -> Result<(), String> {
     let topology = build_topology();
     let trace = Machine::run_match(&options.seed, options.max_frames);
-    let validation = validate_native_control_authority(&trace)
-        .map_err(|error| format!("native F3 trace invalid: {error}"))?;
+    let (validation, call_stack) = validate_f3_trace(&trace)?;
     let decode_latches = trace
         .micro_cycles
         .iter()
@@ -159,6 +166,9 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     println!("trace.native_verified_rom_fetches={}", validation.rom_fetches);
     println!("trace.native_verified_cpu_reads={}", validation.cpu_reads);
     println!("trace.native_verified_cpu_writes={}", validation.cpu_writes);
+    println!("trace.call_pairs={}", call_stack.call_pairs);
+    println!("trace.return_pairs={}", call_stack.return_pairs);
+    println!("trace.call_stack_bytes={}", call_stack.stack_bytes);
     println!("trace.kills={}", trace.kills.len());
     println!("trace.finished={}", trace.finished);
     println!("trace.final_score={}", trace.final_score);
