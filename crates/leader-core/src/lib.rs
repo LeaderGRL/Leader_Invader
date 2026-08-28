@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 pub mod assembler;
+pub mod control_contract;
 pub mod control_layout;
 pub mod datapath;
 pub mod decoder_datapath;
@@ -17,6 +18,10 @@ pub mod topology;
 pub mod trace;
 pub mod trace_validation;
 
+pub use control_contract::{
+    control_topology_violations, physical_control_lines, physically_used_control_mask,
+    PhysicalControlLine, EXTERNAL_CONTROL_NODES,
+};
 pub use control_layout::INTERNAL_CONTROL_NODES;
 pub use datapath::{
     bit16, bit8, derive_alu_datapath, derive_bus_datapath, derive_datapath,
