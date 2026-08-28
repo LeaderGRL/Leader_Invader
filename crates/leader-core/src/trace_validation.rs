@@ -1,11 +1,15 @@
+use std::collections::HashMap;
+
 use crate::{
     control_word_at, microcode::decode as decode_microcode, microcode::internal, MatchTrace,
-    MicroCycleKind, PcEventKind,
+    MicroAddressEvent, MicroCycleKind, PcEventKind,
 };
 
 const REGW_BIT: u32 = 1 << 0;
 const ALU_BIT: u32 = 1 << 1;
 const PCLD_BIT: u32 = 1 << 4;
+
+type MicroIndex<'a> = HashMap<(u32, u16), Vec<&'a MicroAddressEvent>>;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeTraceValidation {
@@ -26,6 +30,7 @@ pub fn validate_native_control_authority(
         return Err("native trace contains no microcycle events".to_owned());
     }
 
+    let micro_index = index_micro_words(&trace.micro_addresses);
     let mut validated = NativeTraceValidation::default();
 
     for cycle in trace
@@ -34,7 +39,7 @@ pub fn validate_native_control_authority(
         .filter(|event| event.kind == MicroCycleKind::DecodeLatch)
     {
         require_micro_authority(
-            trace,
+            &micro_index,
             cycle.frame,
             cycle.ordinal,
             0,
@@ -47,7 +52,7 @@ pub fn validate_native_control_authority(
 
     for event in &trace.alu_events {
         require_micro_authority(
-            trace,
+            &micro_index,
             event.frame,
             event.ordinal,
             0,
@@ -62,7 +67,7 @@ pub fn validate_native_control_authority(
         // Register write-back follows the ALU trace sample, so its local ordinal
         // is one step after the execute row that carries REGW + ARCH_COMMIT.
         require_micro_authority(
-            trace,
+            &micro_index,
             event.frame,
             event.ordinal,
             1,
@@ -78,7 +83,7 @@ pub fn validate_native_control_authority(
             continue;
         };
         require_micro_authority(
-            trace,
+            &micro_index,
             event.frame,
             event.ordinal,
             0,
@@ -124,8 +129,19 @@ pub fn validate_native_control_authority(
     Ok(validated)
 }
 
+fn index_micro_words(events: &[MicroAddressEvent]) -> MicroIndex<'_> {
+    let mut index = HashMap::with_capacity(events.len().min(16_384));
+    for event in events {
+        index
+            .entry((event.frame, event.ordinal))
+            .or_insert_with(Vec::new)
+            .push(event);
+    }
+    index
+}
+
 fn require_micro_authority<F>(
-    trace: &MatchTrace,
+    index: &MicroIndex<'_>,
     frame: u32,
     ordinal: u16,
     max_ordinal_gap: u16,
@@ -136,35 +152,34 @@ fn require_micro_authority<F>(
 where
     F: Fn(u32) -> bool,
 {
-    let candidates = trace
-        .micro_addresses
-        .iter()
-        .filter(|event| event.frame == frame)
-        .filter(|event| event.ordinal.abs_diff(ordinal) <= max_ordinal_gap)
-        .filter(|event| {
-            control.is_none_or(|expected| {
-                decode_microcode(event.opcode)
+    let start = ordinal.saturating_sub(max_ordinal_gap);
+    let end = ordinal.saturating_add(max_ordinal_gap);
+    let mut observed = Vec::new();
+
+    for nearby_ordinal in start..=end {
+        let Some(events) = index.get(&(frame, nearby_ordinal)) else {
+            continue;
+        };
+        for event in events {
+            if control.is_some_and(|expected| {
+                !decode_microcode(event.opcode)
                     .is_some_and(|instruction| instruction.mnemonic == expected)
-            })
-        })
-        .collect::<Vec<_>>();
-
-    if candidates.iter().any(|event| predicate(event.control_bits)) {
-        return Ok(());
-    }
-
-    let observed = candidates
-        .iter()
-        .map(|event| {
-            format!(
+            }) {
+                continue;
+            }
+            if predicate(event.control_bits) {
+                return Ok(());
+            }
+            observed.push(format!(
                 "{:02X}/{:02X}:{:06X}",
                 event.opcode, event.address, event.control_bits
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
+            ));
+        }
+    }
+
     Err(format!(
-        "missing {authority} near frame={frame} ordinal={ordinal} gap={max_ordinal_gap}; micro_words=[{observed}]"
+        "missing {authority} near frame={frame} ordinal={ordinal} gap={max_ordinal_gap}; micro_words=[{}]",
+        observed.join(",")
     ))
 }
 
