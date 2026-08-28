@@ -1,5 +1,5 @@
 use crate::{
-    memory_map::{owner, MemoryOwner},
+    memory_map::{owner, MemoryOwner, INPUT_PORT, SHIFT_DATA, SHIFT_OFFSET, SHIFT_RESULT},
     BusAddressSource, BusDataSource, BusTransactionKind, MatchTrace,
 };
 
@@ -10,6 +10,9 @@ pub struct MemoryMapValidation {
     pub ram: usize,
     pub vram: usize,
     pub mmio: usize,
+    pub shift_data_writes: usize,
+    pub shift_offset_writes: usize,
+    pub shift_result_reads: usize,
 }
 
 pub fn validate_memory_map_contract(trace: &MatchTrace) -> Result<MemoryMapValidation, String> {
@@ -69,6 +72,14 @@ pub fn validate_memory_map_contract(trace: &MatchTrace) -> Result<MemoryMapValid
                         event.data_source
                     ));
                 }
+                if matches!(address, SHIFT_DATA | SHIFT_OFFSET) {
+                    return Err(format!(
+                        "write-only shift-register port was read at {address:04X}"
+                    ));
+                }
+                if address == SHIFT_RESULT {
+                    validation.shift_result_reads += 1;
+                }
             }
             BusTransactionKind::Write => {
                 if event.address_source != BusAddressSource::Cpu {
@@ -83,9 +94,23 @@ pub fn validate_memory_map_contract(trace: &MatchTrace) -> Result<MemoryMapValid
                         event.data_source
                     ));
                 }
+                if region == MemoryOwner::Rom {
+                    return Err(format!("write targets read-only ROM at {address:04X}"));
+                }
+                if address == SHIFT_RESULT {
+                    return Err(format!(
+                        "read-only shift-register result port was written at {address:04X}"
+                    ));
+                }
+                if address == SHIFT_DATA {
+                    validation.shift_data_writes += 1;
+                } else if address == SHIFT_OFFSET {
+                    validation.shift_offset_writes += 1;
+                }
             }
             BusTransactionKind::Input => {
-                if region != MemoryOwner::Mmio
+                if address != INPUT_PORT
+                    || region != MemoryOwner::Mmio
                     || event.address_source != BusAddressSource::None
                     || event.data_source != BusDataSource::Device
                 {
@@ -119,6 +144,17 @@ pub fn validate_memory_map_contract(trace: &MatchTrace) -> Result<MemoryMapValid
             validation.rom, validation.ram, validation.vram, validation.mmio
         ));
     }
+    if validation.shift_data_writes < 2
+        || validation.shift_offset_writes == 0
+        || validation.shift_result_reads == 0
+    {
+        return Err(format!(
+            "complete trace does not exercise the directional shift-register MMIO contract: data_writes={} offset_writes={} result_reads={}",
+            validation.shift_data_writes,
+            validation.shift_offset_writes,
+            validation.shift_result_reads
+        ));
+    }
 
     Ok(validation)
 }
@@ -137,6 +173,9 @@ mod tests {
         assert!(validation.ram > 0);
         assert!(validation.vram > 0);
         assert!(validation.mmio > 0);
+        assert!(validation.shift_data_writes >= 2);
+        assert!(validation.shift_offset_writes > 0);
+        assert!(validation.shift_result_reads > 0);
     }
 
     #[test]
@@ -194,5 +233,64 @@ mod tests {
         event.address = Some(crate::memory_map::RAM_BASE);
         let error = validate_memory_map_contract(&trace).expect_err("RAM fetch must fail");
         assert!(error.contains("fetch authority is invalid"));
+    }
+
+    #[test]
+    fn write_to_rom_is_rejected() {
+        let mut trace = Machine::run_match("m3-memory-map-rom-write", 5000);
+        let event = trace
+            .bus_transactions
+            .iter_mut()
+            .find(|event| event.kind == BusTransactionKind::Write)
+            .expect("write event");
+        event.address = Some(crate::memory_map::ROM_BASE);
+        event.address_source = BusAddressSource::Cpu;
+        event.data_source = BusDataSource::Cpu;
+        let error = validate_memory_map_contract(&trace).expect_err("ROM write must fail");
+        assert!(error.contains("read-only ROM"));
+    }
+
+    #[test]
+    fn shift_result_write_is_rejected() {
+        let mut trace = Machine::run_match("m3-memory-map-shift-result-write", 5000);
+        let event = trace
+            .bus_transactions
+            .iter_mut()
+            .find(|event| event.kind == BusTransactionKind::Write)
+            .expect("write event");
+        event.address = Some(SHIFT_RESULT);
+        event.address_source = BusAddressSource::Cpu;
+        event.data_source = BusDataSource::Cpu;
+        let error =
+            validate_memory_map_contract(&trace).expect_err("SHIFT_RESULT write must fail");
+        assert!(error.contains("read-only shift-register result"));
+    }
+
+    #[test]
+    fn shift_data_read_is_rejected() {
+        let mut trace = Machine::run_match("m3-memory-map-shift-data-read", 5000);
+        let event = trace
+            .bus_transactions
+            .iter_mut()
+            .find(|event| event.kind == BusTransactionKind::Read)
+            .expect("read event");
+        event.address = Some(SHIFT_DATA);
+        event.address_source = BusAddressSource::Cpu;
+        event.data_source = BusDataSource::Device;
+        let error = validate_memory_map_contract(&trace).expect_err("SHIFT_DATA read must fail");
+        assert!(error.contains("write-only shift-register port"));
+    }
+
+    #[test]
+    fn input_event_on_wrong_mmio_port_is_rejected() {
+        let mut trace = Machine::run_match("m3-memory-map-input-port", 5000);
+        let event = trace
+            .bus_transactions
+            .iter_mut()
+            .find(|event| event.kind == BusTransactionKind::Input)
+            .expect("input event");
+        event.address = Some(SHIFT_RESULT);
+        let error = validate_memory_map_contract(&trace).expect_err("wrong input port must fail");
+        assert!(error.contains("input authority is invalid"));
     }
 }
