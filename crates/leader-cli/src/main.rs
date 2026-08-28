@@ -189,7 +189,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
     println!(
-        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} shift events / {} cadence clocks / {} cadence ticks / {} enemy-shot writes / {} max concurrent shots / {} shield damages / {} shield pixels left / {} native overlays / {} bytes -> {}",
+        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} shift events / {} cadence clocks / {} cadence ticks / {} enemy-shot writes / {} max concurrent shots / {} shield-caused shot clears / {} shield damages / {} shield pixels left / {} native overlays / {} bytes -> {}",
         topology_validation.nodes,
         topology_validation.links,
         trace.total_frames,
@@ -205,6 +205,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
         cadence.ticks,
         enemy_shots.ram_writes,
         enemy_shots.max_active,
+        enemy_shots.shield_clears,
         shields.damages,
         shields.pixels_after,
         svg_validation.overlay_groups,
@@ -222,7 +223,7 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
     let (_, _, _, shift, cadence, enemy_shots, shields) = validate_native_trace(&trace)?;
     write(&options.output, trace.to_json().as_bytes())?;
     println!(
-        "frames={} kills={} flag_events={} control_latch_events={} sp_events={} shift_events={} cadence_clocks={} cadence_ticks={} enemy_shot_spawns={} enemy_shot_moves={} enemy_shot_clears={} max_enemy_shots={} shield_damages={} shield_player={} shield_enemy={} clear={}",
+        "frames={} kills={} flag_events={} control_latch_events={} sp_events={} shift_events={} cadence_clocks={} cadence_ticks={} enemy_shot_spawns={} enemy_shot_moves={} enemy_shot_clears={} enemy_shot_shield_clears={} max_enemy_shots={} shield_damages={} shield_player={} shield_enemy={} clear={}",
         trace.total_frames,
         trace.kills.len(),
         trace.flag_events.len(),
@@ -234,6 +235,7 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
         enemy_shots.spawns,
         enemy_shots.moves,
         enemy_shots.clears,
+        enemy_shots.shield_clears,
         enemy_shots.max_active,
         shields.damages,
         shields.player_damages,
@@ -302,6 +304,7 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     println!("trace.enemy_shot_spawns={}", enemy_shots.spawns);
     println!("trace.enemy_shot_moves={}", enemy_shots.moves);
     println!("trace.enemy_shot_clears={}", enemy_shots.clears);
+    println!("trace.enemy_shot_shield_clears={}", enemy_shots.shield_clears);
     println!("trace.enemy_shot_max_active={}", enemy_shots.max_active);
     println!("trace.enemy_shot_slots_used={}", enemy_shots.slots_used);
     println!("trace.shield_damages={}", shields.damages);
