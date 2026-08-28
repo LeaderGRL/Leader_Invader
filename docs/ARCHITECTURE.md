@@ -16,6 +16,7 @@ leader-core ----------> MatchTrace ------------> leader-svg base
   |                                                   v
   +--> ROM + CPU + µROM + RAM + VRAM          generated/Leader.svg
        + arcade peripherals
+       + canonical memory map
        + validated physical topology
 ```
 
@@ -31,6 +32,7 @@ Owns semantics, determinism and physical/causal contracts.
 - physical µPC / microsequencer and 24-bit control words;
 - real operand, register-select, address, branch-condition and PC-mux latches;
 - ripple-carry ALU, PC incrementer and SP increment/decrement networks;
+- canonical ROM/RAM/VRAM/MMIO ownership map;
 - byte-addressed work RAM and stack window;
 - real 128×96 1-bit VRAM generation;
 - native CPU trace streams;
@@ -38,7 +40,7 @@ Owns semantics, determinism and physical/causal contracts.
 - three-slot enemy projectile bank;
 - 64-byte bit-addressed shield bank;
 - topology injection for CPU and arcade peripherals;
-- CPU, stack, topology and M3 peripheral validators;
+- CPU, stack, topology, memory-map and M3 peripheral validators;
 - `MatchTrace`, the contract between simulation and presentation.
 
 ### `leader-svg`
@@ -257,6 +259,41 @@ RAM0 RAM1 RAM2 RAM3
 
 The CRT overlay starts from the same initial bitmap and attaches a disappearance animation to each damaged bit at the timestamp of its native RAM write. There is no separate decorative shield state.
 
+## Canonical memory ownership
+
+The project now has one 8080-flavoured address map without changing any existing binary address:
+
+```text
+0000–1FFF  PROGRAM ROM    8 KiB
+2000–7FFF  WORK RAM      24 KiB
+  2020–2028  enemy-shot slot RAM
+  2040–207F  shield bitmap RAM
+  7F00–7FFF  stack window
+8000–87FF  VIDEO RAM      2 KiB
+A000–A1FF  MMIO           input / shift / game device
+```
+
+`memory_map.rs` owns `MemoryRegion`, `MemoryOwner`, top-level ranges, M3 RAM subregions and all public MMIO ports. `program.rs` re-exports its historical constants from this module, preserving source compatibility while removing duplicate address authority.
+
+Static map tests prove:
+
+- ROM/RAM/VRAM/MMIO are disjoint;
+- projectile, shield and stack subregions fit in RAM and do not overlap;
+- every declared port belongs to MMIO;
+- the 1536-byte 128×96 framebuffer fits in the 2 KiB physical VRAM region;
+- all owner boundary transitions are exact.
+
+`validate_memory_map_contract()` then validates the **runtime trace**, not only constants:
+
+- every addressed transaction belongs to a mapped owner;
+- fetches target ROM and are ROM-sourced;
+- reads use `Rom`, `Ram`, `Vram` or `Device` according to the mapped owner;
+- writes are CPU-driven;
+- input transactions remain MMIO/device-owned;
+- DMA and scanout remain VRAM-owned.
+
+Corrupting an address into `0x9000`, moving a fetch into RAM or changing a RAM read to ROM data causes validation failure. Production `render`, `trace` and `stats` all require this contract.
+
 ## Physical topology contract
 
 `validate_final_topology()` runs on the fully injected runtime topology. It requires:
@@ -285,11 +322,12 @@ Before writing `Leader.svg`, the CLI validates:
 7. enemy-shot RAM/snapshot replay;
 8. shield one-bit RAM replay;
 9. enemy-shot ↔ shield cross-device ordering;
-10. required native SVG groups/metadata;
-11. absence of legacy semantic activity / JavaScript;
-12. hard **5,000,000-byte** SVG budget.
+10. canonical memory ownership for every addressed native bus transaction;
+11. required native SVG groups/metadata;
+12. absence of legacy semantic activity / JavaScript;
+13. hard **5,000,000-byte** SVG budget.
 
-The shield-complete generated artifact measured **3,856,346 bytes**, leaving roughly **1.14 MB** of margin.
+The current generated artifact measures **3,805,473 bytes**, leaving roughly **1.19 MB** of margin.
 
 ## Video path
 
@@ -311,4 +349,4 @@ A commit SHA is therefore a natural production seed.
 
 ## Failure policy
 
-Generation fails rather than publishing misleading output if the match misses its frame budget, topology is invalid, CPU physical authority is broken, stack/return bytes disagree, a peripheral event lacks bus/RAM authority, formation movement bypasses cadence, projectile snapshots diverge, a shield write is not a valid one-bit erase, a shield-caused shot clear is orphaned, required native SVG metadata disappears, the artifact exceeds budget, or SVG safety/XML validation fails.
+Generation fails rather than publishing misleading output if the match misses its frame budget, topology is invalid, CPU physical authority is broken, stack/return bytes disagree, a peripheral event lacks bus/RAM authority, formation movement bypasses cadence, projectile snapshots diverge, a shield write is not a valid one-bit erase, a shield-caused shot clear is orphaned, a native bus transaction violates mapped ownership, required native SVG metadata disappears, the artifact exceeds budget, or SVG safety/XML validation fails.
