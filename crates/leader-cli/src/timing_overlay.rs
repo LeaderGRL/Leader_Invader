@@ -1,4 +1,4 @@
-use leader_core::{MatchTrace, PhaseKind, Topology};
+use leader_core::{BusTransactionKind, MatchTrace, MicroPhase, Topology};
 use leader_svg::RenderConfig;
 
 #[must_use]
@@ -14,45 +14,45 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: R
 }
 
 fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
-    let native_count = trace
-        .micro_samples
+    let cpu_stride = (trace.micro_cycles.len() / 260).max(1);
+    let peripheral_count = trace
+        .bus_transactions
         .iter()
-        .filter(|sample| matches!(sample.control.as_str(), "µT0" | "µT1" | "µT2"))
+        .filter(|event| matches!(event.kind, BusTransactionKind::Dma | BusTransactionKind::Scanout))
         .count();
-    let stride = (native_count / 260).max(1);
+    let peripheral_stride = (peripheral_count / 80).max(1);
     let total = config.total();
     let mut out = String::with_capacity(180_000);
     out.push_str("<g id=\"f3-timing\">\n");
 
-    let mut native_index = 0_usize;
-    for sample in &trace.micro_samples {
-        let base = trace_moment(sample.frame, sample.ordinal, trace, config);
-        let native = match sample.control.as_str() {
-            "µT0" => Some(("phase0", "#67d9b3")),
-            "µT1" => Some(("phase1", "#4bc8f3")),
-            "µT2" => Some(("phase2", "#ef7caf")),
-            _ => None,
+    for event in trace.micro_cycles.iter().step_by(cpu_stride) {
+        let moment = trace_moment(event.frame, event.ordinal, trace, config);
+        let (node, color) = match event.phase {
+            MicroPhase::T0 => ("phase0", "#67d9b3"),
+            MicroPhase::T1 => ("phase1", "#4bc8f3"),
+            MicroPhase::T2 => ("phase2", "#ef7caf"),
         };
+        phase_pulse(&mut out, topology, node, moment, total, color);
+    }
 
-        if let Some((node, color)) = native {
-            if native_index % stride == 0 {
-                phase_pulse(&mut out, topology, node, base, total, color);
-            }
-            native_index += 1;
+    let mut peripheral_index = 0usize;
+    for event in &trace.bus_transactions {
+        let (phase_a, phase_b) = match event.kind {
+            BusTransactionKind::Dma => (Some("phase0"), Some("phase1")),
+            BusTransactionKind::Scanout => (Some("phase1"), None),
+            _ => continue,
+        };
+        let take = peripheral_index % peripheral_stride == 0;
+        peripheral_index += 1;
+        if !take {
             continue;
         }
-
-        // DMA and raster scanout are peripheral clocks, not CPU T-states.
-        // Keep them visible as an independent hardware cadence.
-        match sample.phase {
-            PhaseKind::Dma => {
-                phase_pulse(&mut out, topology, "phase0", base, total, "#72d4e7");
-                phase_pulse(&mut out, topology, "phase1", base + 0.024, total, "#72d4e7");
-            }
-            PhaseKind::Scanout => {
-                phase_pulse(&mut out, topology, "phase1", base, total, "#72d4e7");
-            }
-            _ => {}
+        let moment = trace_moment(event.frame, event.ordinal, trace, config);
+        if let Some(node) = phase_a {
+            phase_pulse(&mut out, topology, node, moment, total, "#72d4e7");
+        }
+        if let Some(node) = phase_b {
+            phase_pulse(&mut out, topology, node, moment + 0.024, total, "#72d4e7");
         }
     }
 
@@ -89,11 +89,21 @@ mod tests {
     fn timing_overlay_is_driven_by_native_cpu_t_states() {
         let topology = build_topology();
         let trace = Machine::run_match("timing-overlay", 5000);
-        assert!(trace.micro_samples.iter().any(|sample| sample.control == "µT0"));
-        assert!(trace.micro_samples.iter().any(|sample| sample.control == "µT1"));
-        assert!(trace.micro_samples.iter().any(|sample| sample.control == "µT2"));
+        assert!(trace.micro_cycles.iter().any(|event| event.phase == MicroPhase::T0));
+        assert!(trace.micro_cycles.iter().any(|event| event.phase == MicroPhase::T1));
+        assert!(trace.micro_cycles.iter().any(|event| event.phase == MicroPhase::T2));
         let rendered = render(&topology, &trace, RenderConfig::default());
         assert!(rendered.contains("id=\"f3-timing\""));
         assert!(rendered.len() > 500);
+    }
+
+    #[test]
+    fn timing_overlay_does_not_depend_on_semantic_samples() {
+        let topology = build_topology();
+        let mut trace = Machine::run_match("timing-overlay-native-only", 5000);
+        let config = RenderConfig::default();
+        let baseline = render(&topology, &trace, config);
+        trace.micro_samples.clear();
+        assert_eq!(render(&topology, &trace, config), baseline);
     }
 }
