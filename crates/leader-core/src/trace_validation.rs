@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use crate::{
     control_word_at, microcode::decode as decode_microcode, microcode::internal, microcode::uaddr,
-    BusTransactionKind, MatchTrace, MicroAddressEvent, MicroCycleKind, PcEventKind,
+    BusTransactionKind, ControlLatchKind, MatchTrace, MicroAddressEvent, MicroCycleKind,
+    PcEventKind,
 };
 
 const REGW_BIT: u32 = 1 << 0;
@@ -19,6 +20,7 @@ pub struct NativeTraceValidation {
     pub decode_latches: usize,
     pub alu_events: usize,
     pub flag_events: usize,
+    pub control_latches: usize,
     pub register_writes: usize,
     pub pc_loads: usize,
     pub rom_fetches: usize,
@@ -80,6 +82,20 @@ pub fn validate_native_control_authority(
             "FLAGS_LOAD for native FlagEvent",
         )?;
         validated.flag_events += 1;
+    }
+
+    for event in &trace.control_latch_events {
+        let signal = signal_for_control_latch(event.kind);
+        require_micro_authority(
+            &micro_index,
+            event.frame,
+            event.ordinal,
+            0,
+            Some(event.control),
+            |bits| internal_on(bits, signal),
+            "physical load enable for native ControlLatchEvent",
+        )?;
+        validated.control_latches += 1;
     }
 
     for event in &trace.register_writes {
@@ -194,6 +210,9 @@ pub fn validate_native_control_authority(
     if validated.flag_events == 0 {
         return Err("native trace contains no validated flag latch events".to_owned());
     }
+    if validated.control_latches == 0 {
+        return Err("native trace contains no validated control latch events".to_owned());
+    }
     if validated.register_writes == 0 {
         return Err("native trace contains no validated register writes".to_owned());
     }
@@ -211,6 +230,16 @@ pub fn validate_native_control_authority(
     }
 
     Ok(validated)
+}
+
+const fn signal_for_control_latch(kind: ControlLatchKind) -> u16 {
+    match kind {
+        ControlLatchKind::AddressLo => internal::ADDR_LO_LOAD,
+        ControlLatchKind::AddressHi => internal::ADDR_HI_LOAD,
+        ControlLatchKind::Condition => internal::CONDITION_LOAD,
+        ControlLatchKind::PcSelect => internal::PC_SELECT,
+        ControlLatchKind::RegSelect => internal::REG_SELECT,
+    }
 }
 
 fn index_micro_words(events: &[MicroAddressEvent]) -> MicroIndex<'_> {
@@ -322,6 +351,7 @@ mod tests {
         assert!(validation.decode_latches > 0);
         assert!(validation.alu_events > 0);
         assert!(validation.flag_events > 0);
+        assert!(validation.control_latches > 0);
         assert!(validation.register_writes > 0);
         assert!(validation.pc_loads > 0);
         assert!(validation.rom_fetches > 0);
@@ -361,6 +391,27 @@ mod tests {
         let error = validate_native_control_authority(&trace)
             .expect_err("FLAGS_LOAD corruption must fail");
         assert!(error.contains("FLAGS_LOAD for native FlagEvent"));
+    }
+
+    #[test]
+    fn removing_control_latch_authority_is_detected() {
+        let mut trace = Machine::run_match("f3-control-latch-authority-negative", 120);
+        let latch = *trace
+            .control_latch_events
+            .first()
+            .expect("control latch event");
+        let signal = signal_for_control_latch(latch.kind);
+        for event in trace.micro_addresses.iter_mut().filter(|event| {
+            event.frame == latch.frame
+                && event.ordinal == latch.ordinal
+                && decode_microcode(event.opcode)
+                    .is_some_and(|instruction| instruction.mnemonic == latch.control)
+        }) {
+            event.control_bits &= !((signal as u32) << 8);
+        }
+        let error = validate_native_control_authority(&trace)
+            .expect_err("control latch authority corruption must fail");
+        assert!(error.contains("ControlLatchEvent"));
     }
 
     #[test]
