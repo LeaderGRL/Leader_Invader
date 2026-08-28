@@ -22,6 +22,7 @@ pub mod program;
 pub mod rng;
 pub mod shield_bank;
 pub mod shield_contract;
+pub mod shield_layout;
 pub mod shift_register;
 pub mod shift_register_contract;
 pub mod shift_register_layout;
@@ -74,6 +75,7 @@ pub use shield_bank::{
     SHIELD_TOTAL_BYTES, SHIELD_W, SHIELD_X, SHIELD_Y,
 };
 pub use shield_contract::{validate_shield_bank_contract, ShieldValidation};
+pub use shield_layout::SHIELD_NODES;
 pub use shift_register::{ShiftRegister16, ShiftRegisterEventKind};
 pub use shift_register_contract::{validate_shift_register_contract, ShiftRegisterValidation};
 pub use shift_register_layout::SHIFT_REGISTER_NODES;
@@ -116,5 +118,6 @@ pub fn build_topology() -> Topology {
     shift_register_layout::inject_shift_register(&mut topology);
     formation_cadence_layout::inject_formation_cadence(&mut topology);
     enemy_shot_layout::inject_enemy_shot_bank(&mut topology);
+    shield_layout::inject_shield_bank(&mut topology);
     topology
 }
