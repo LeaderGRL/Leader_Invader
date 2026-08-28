@@ -12,6 +12,7 @@ pub struct EnemyShotValidation {
     pub spawns: usize,
     pub moves: usize,
     pub clears: usize,
+    pub shield_clears: usize,
     pub max_active: usize,
     pub slots_used: usize,
 }
@@ -57,6 +58,7 @@ pub fn validate_enemy_shot_bank_contract(
             let mut writes = 0usize;
             let mut armed_count = 0usize;
             let mut clear_count = 0usize;
+            let mut shield_clear_count = 0usize;
             let mut move_count = 0usize;
 
             for transaction in trace.bus_transactions.iter().filter(|transaction| {
@@ -117,6 +119,30 @@ pub fn validate_enemy_shot_bank_contract(
                             active = false;
                             clear_count += 1;
                         }
+                        (0, "ENEMY_SHOT_SHIELD_CLEAR") => {
+                            if !active {
+                                return Err(format!(
+                                    "slot {slot} is shield-cleared while inactive at frame={}",
+                                    transaction.frame
+                                ));
+                            }
+                            let has_immediate_shield_damage = trace.bus_transactions.iter().any(|candidate| {
+                                candidate.frame == transaction.frame
+                                    && candidate.pc == transaction.pc
+                                    && candidate.kind == BusTransactionKind::Write
+                                    && candidate.control == "SHIELD_DAMAGE_ENEMY"
+                                    && candidate.ordinal.saturating_add(1) == transaction.ordinal
+                            });
+                            if !has_immediate_shield_damage {
+                                return Err(format!(
+                                    "slot {slot} shield clear lacks immediately preceding SHIELD_DAMAGE_ENEMY authority at frame={} ordinal={}",
+                                    transaction.frame, transaction.ordinal
+                                ));
+                            }
+                            active = false;
+                            clear_count += 1;
+                            shield_clear_count += 1;
+                        }
                         _ => {
                             return Err(format!(
                                 "slot {slot} ACTIVE write is invalid: data={data} control={} frame={}",
@@ -146,6 +172,7 @@ pub fn validate_enemy_shot_bank_contract(
             validation.ram_writes += writes;
             validation.spawns += armed_count;
             validation.clears += clear_count;
+            validation.shield_clears += shield_clear_count;
             validation.moves += move_count;
         }
     }
@@ -185,6 +212,7 @@ mod tests {
         assert!(validation.spawns >= ENEMY_SHOT_SLOTS);
         assert!(validation.moves > 0);
         assert!(validation.clears > 0);
+        assert!(validation.shield_clears > 0);
     }
 
     #[test]
@@ -218,5 +246,30 @@ mod tests {
         let error = validate_enemy_shot_bank_contract(&trace)
             .expect_err("missing authority write must fail");
         assert!(error.contains("RAM replay diverges"));
+    }
+
+    #[test]
+    fn shield_clear_without_immediate_damage_authority_is_detected() {
+        let mut trace = Machine::run_match("m3-enemy-shot-shield-negative", 5000);
+        let clear = trace
+            .bus_transactions
+            .iter()
+            .find(|transaction| transaction.control == "ENEMY_SHOT_SHIELD_CLEAR")
+            .copied()
+            .expect("shield-caused enemy shot clear");
+        let index = trace
+            .bus_transactions
+            .iter()
+            .position(|transaction| {
+                transaction.frame == clear.frame
+                    && transaction.pc == clear.pc
+                    && transaction.control == "SHIELD_DAMAGE_ENEMY"
+                    && transaction.ordinal.saturating_add(1) == clear.ordinal
+            })
+            .expect("immediately preceding shield damage write");
+        trace.bus_transactions.remove(index);
+        let error = validate_enemy_shot_bank_contract(&trace)
+            .expect_err("orphan shield clear must fail");
+        assert!(error.contains("lacks immediately preceding SHIELD_DAMAGE_ENEMY authority"));
     }
 }
