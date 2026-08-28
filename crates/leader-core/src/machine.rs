@@ -1,3 +1,4 @@
+use crate::formation_cadence::FormationCadence;
 use crate::game::{Bot, GameState, InputState, Projectile, ALIEN_COLS, ALIEN_H, ALIEN_ROWS, ALIEN_W, PLAYER_Y, SCREEN_H, SCREEN_W};
 use crate::isa::{Bus, Cpu, Flags, MicroCycleKind, MicroPhase, PcSource, Reg, StepOutcome};
 use crate::logic::{AluTrace, Decrement16Trace, PcIncrementTrace};
@@ -28,6 +29,7 @@ pub struct Machine {
     bot: Bot,
     input: InputState,
     shift_register: ShiftRegister16,
+    formation_cadence: FormationCadence,
     trace: MatchTrace,
     ordinal: u16,
     last_vram_checksum: u32,
@@ -52,6 +54,7 @@ impl Machine {
             bot,
             input: InputState::default(),
             shift_register: ShiftRegister16::default(),
+            formation_cadence: FormationCadence::default(),
             trace: MatchTrace::new(seed.to_owned(), hash),
             ordinal: 0,
             last_vram_checksum: 0,
@@ -162,7 +165,9 @@ impl Machine {
     }
 
     fn move_fleet(&mut self, pc: u16) {
-        if self.game.frame % 3 != 0 {
+        let alive = self.game.alive_count().min(u32::from(u8::MAX)) as u8;
+        let cadence = self.formation_cadence.clock(alive);
+        if !cadence.tick {
             return;
         }
         let old = self.traced_read(pc, RAM_BASE + 1, "FLEET_X_READ");
