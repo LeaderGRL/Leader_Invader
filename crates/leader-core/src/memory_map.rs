@@ -80,6 +80,68 @@ pub const DEVICE_ARG0: u16 = 0xA102;
 pub const DEVICE_ARG1: u16 = 0xA103;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MmioAccess {
+    InputOnly,
+    ReadOnly,
+    WriteOnly,
+    ReadWrite,
+}
+
+impl MmioAccess {
+    #[must_use]
+    pub const fn allows_read(self) -> bool {
+        matches!(self, Self::ReadOnly | Self::ReadWrite)
+    }
+
+    #[must_use]
+    pub const fn allows_write(self) -> bool {
+        matches!(self, Self::WriteOnly | Self::ReadWrite)
+    }
+
+    #[must_use]
+    pub const fn allows_input(self) -> bool {
+        matches!(self, Self::InputOnly)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MmioPort {
+    pub name: &'static str,
+    pub address: u16,
+    pub access: MmioAccess,
+}
+
+impl MmioPort {
+    #[must_use]
+    pub const fn new(name: &'static str, address: u16, access: MmioAccess) -> Self {
+        Self {
+            name,
+            address,
+            access,
+        }
+    }
+}
+
+pub const MMIO_PORTS: [MmioPort; 8] = [
+    MmioPort::new("input", INPUT_PORT, MmioAccess::InputOnly),
+    MmioPort::new("shift_data", SHIFT_DATA, MmioAccess::WriteOnly),
+    MmioPort::new("shift_offset", SHIFT_OFFSET, MmioAccess::WriteOnly),
+    MmioPort::new("shift_result", SHIFT_RESULT, MmioAccess::ReadOnly),
+    MmioPort::new("device_cmd", DEVICE_CMD, MmioAccess::WriteOnly),
+    MmioPort::new("device_status", DEVICE_STATUS, MmioAccess::ReadWrite),
+    MmioPort::new("device_arg0", DEVICE_ARG0, MmioAccess::ReadWrite),
+    MmioPort::new("device_arg1", DEVICE_ARG1, MmioAccess::ReadWrite),
+];
+
+#[must_use]
+pub fn mmio_port(address: u16) -> Option<MmioPort> {
+    MMIO_PORTS
+        .iter()
+        .copied()
+        .find(|port| port.address == address)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryOwner {
     Rom,
     Ram,
@@ -139,19 +201,26 @@ mod tests {
     }
 
     #[test]
-    fn all_declared_ports_belong_to_mmio() {
-        for address in [
-            INPUT_PORT,
-            SHIFT_DATA,
-            SHIFT_OFFSET,
-            SHIFT_RESULT,
-            DEVICE_CMD,
-            DEVICE_STATUS,
-            DEVICE_ARG0,
-            DEVICE_ARG1,
-        ] {
-            assert_eq!(owner(address), MemoryOwner::Mmio);
+    fn all_declared_ports_are_unique_and_belong_to_mmio() {
+        for (index, port) in MMIO_PORTS.iter().enumerate() {
+            assert_eq!(owner(port.address), MemoryOwner::Mmio, "{}", port.name);
+            assert!(MMIO_PORTS
+                .iter()
+                .skip(index + 1)
+                .all(|other| other.address != port.address));
+            assert_eq!(mmio_port(port.address), Some(*port));
         }
+        assert_eq!(mmio_port(MMIO_BASE + 1), None);
+    }
+
+    #[test]
+    fn canonical_port_directions_are_explicit() {
+        assert_eq!(mmio_port(INPUT_PORT).unwrap().access, MmioAccess::InputOnly);
+        assert_eq!(mmio_port(SHIFT_DATA).unwrap().access, MmioAccess::WriteOnly);
+        assert_eq!(mmio_port(SHIFT_OFFSET).unwrap().access, MmioAccess::WriteOnly);
+        assert_eq!(mmio_port(SHIFT_RESULT).unwrap().access, MmioAccess::ReadOnly);
+        assert_eq!(mmio_port(DEVICE_CMD).unwrap().access, MmioAccess::WriteOnly);
+        assert_eq!(mmio_port(DEVICE_STATUS).unwrap().access, MmioAccess::ReadWrite);
     }
 
     #[test]
