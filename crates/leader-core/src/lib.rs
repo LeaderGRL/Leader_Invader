@@ -7,6 +7,7 @@ pub mod datapath;
 pub mod decoder_datapath;
 pub mod formation_cadence;
 pub mod formation_cadence_contract;
+pub mod formation_cadence_layout;
 pub mod game;
 pub mod isa;
 pub mod layout;
@@ -42,6 +43,7 @@ pub use formation_cadence::{FormationCadence, FormationCadenceEvent};
 pub use formation_cadence_contract::{
     validate_formation_cadence_contract, FormationCadenceValidation,
 };
+pub use formation_cadence_layout::FORMATION_CADENCE_NODES;
 pub use isa::{Cpu, Flags, MicroCycleKind, MicroPhase, PcSource, Reg, StepOutcome};
 pub use logic::{
     logic_trace, ripple_add, ripple_decrement16, ripple_increment16, ripple_sub, AluOp, AluTrace,
@@ -76,5 +78,6 @@ pub fn build_topology() -> Topology {
     layout::apply_visual_layout(&mut topology);
     control_layout::inject_internal_control_lines(&mut topology);
     shift_register_layout::inject_shift_register(&mut topology);
+    formation_cadence_layout::inject_formation_cadence(&mut topology);
     topology
 }
