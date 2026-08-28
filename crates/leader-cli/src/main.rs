@@ -28,9 +28,10 @@ use std::{
 
 use leader_core::{
     build_topology, validate_call_stack_contract, validate_enemy_shot_bank_contract,
-    validate_final_topology, validate_formation_cadence_contract, validate_native_control_authority,
-    validate_shield_bank_contract, validate_shift_register_contract, validate_sp_event_stream,
-    MatchTrace, MicroCycleKind, Machine, Topology,
+    validate_final_topology, validate_formation_cadence_contract, validate_memory_map_contract,
+    validate_native_control_authority, validate_shield_bank_contract,
+    validate_shift_register_contract, validate_sp_event_stream, MatchTrace, MicroCycleKind, Machine,
+    Topology,
 };
 use leader_svg::{render, RenderConfig};
 
@@ -123,6 +124,7 @@ fn validate_native_trace(
         leader_core::FormationCadenceValidation,
         leader_core::EnemyShotValidation,
         leader_core::ShieldValidation,
+        leader_core::MemoryMapValidation,
     ),
     String,
 > {
@@ -140,6 +142,8 @@ fn validate_native_trace(
         .map_err(|error| format!("native M3 enemy-shot bank invalid: {error}"))?;
     let shields = validate_shield_bank_contract(trace)
         .map_err(|error| format!("native M3 shield bank invalid: {error}"))?;
+    let memory_map = validate_memory_map_contract(trace)
+        .map_err(|error| format!("native memory-map contract invalid: {error}"))?;
     Ok((
         native,
         call_stack,
@@ -148,6 +152,7 @@ fn validate_native_trace(
         cadence,
         enemy_shots,
         shields,
+        memory_map,
     ))
 }
 
@@ -162,7 +167,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
             options.max_frames
         ));
     }
-    let (validation, call_stack, sp_events, shift, cadence, enemy_shots, shields) =
+    let (validation, call_stack, sp_events, shift, cadence, enemy_shots, shields, memory_map) =
         validate_native_trace(&trace)?;
     let config = RenderConfig::default();
     let svg = render_native_base(&topology, &trace, config);
@@ -189,7 +194,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
     println!(
-        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} shift events / {} cadence clocks / {} cadence ticks / {} enemy-shot writes / {} max concurrent shots / {} shield-caused shot clears / {} shield damages / {} shield pixels left / {} native overlays / {} bytes -> {}",
+        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} shift events / {} cadence clocks / {} cadence ticks / {} enemy-shot writes / {} max concurrent shots / {} shield-caused shot clears / {} shield damages / {} shield pixels left / {} mapped bus transactions / {} native overlays / {} bytes -> {}",
         topology_validation.nodes,
         topology_validation.links,
         trace.total_frames,
@@ -208,6 +213,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
         enemy_shots.shield_clears,
         shields.damages,
         shields.pixels_after,
+        memory_map.addressed_transactions,
         svg_validation.overlay_groups,
         svg_validation.bytes,
         options.output.display()
@@ -220,10 +226,11 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
         options.output = PathBuf::from("generated/trace.json");
     }
     let trace = run_native_trace(&options.seed, options.max_frames);
-    let (_, _, _, shift, cadence, enemy_shots, shields) = validate_native_trace(&trace)?;
+    let (_, _, _, shift, cadence, enemy_shots, shields, memory_map) =
+        validate_native_trace(&trace)?;
     write(&options.output, trace.to_json().as_bytes())?;
     println!(
-        "frames={} kills={} flag_events={} control_latch_events={} sp_events={} shift_events={} cadence_clocks={} cadence_ticks={} enemy_shot_spawns={} enemy_shot_moves={} enemy_shot_clears={} enemy_shot_shield_clears={} max_enemy_shots={} shield_damages={} shield_player={} shield_enemy={} clear={}",
+        "frames={} kills={} flag_events={} control_latch_events={} sp_events={} shift_events={} cadence_clocks={} cadence_ticks={} enemy_shot_spawns={} enemy_shot_moves={} enemy_shot_clears={} enemy_shot_shield_clears={} max_enemy_shots={} shield_damages={} shield_player={} shield_enemy={} mapped_bus_transactions={} clear={}",
         trace.total_frames,
         trace.kills.len(),
         trace.flag_events.len(),
@@ -240,6 +247,7 @@ fn trace_cmd(mut options: Options) -> Result<(), String> {
         shields.damages,
         shields.player_damages,
         shields.enemy_damages,
+        memory_map.addressed_transactions,
         trace.finished
     );
     if trace.finished {
@@ -254,7 +262,7 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     let topology_validation = validate_final_topology(&topology)
         .map_err(|error| format!("final topology invalid: {error}"))?;
     let trace = run_native_trace(&options.seed, options.max_frames);
-    let (validation, call_stack, sp_events, shift, cadence, enemy_shots, shields) =
+    let (validation, call_stack, sp_events, shift, cadence, enemy_shots, shields, memory_map) =
         validate_native_trace(&trace)?;
     let decode_latches = trace
         .micro_cycles
@@ -313,6 +321,11 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     println!("trace.shields_damaged={}", shields.shields_damaged);
     println!("trace.shield_pixels_before={}", shields.pixels_before);
     println!("trace.shield_pixels_after={}", shields.pixels_after);
+    println!("trace.memory_map_addressed={}", memory_map.addressed_transactions);
+    println!("trace.memory_map_rom={}", memory_map.rom);
+    println!("trace.memory_map_ram={}", memory_map.ram);
+    println!("trace.memory_map_vram={}", memory_map.vram);
+    println!("trace.memory_map_mmio={}", memory_map.mmio);
     println!("trace.call_pairs={}", call_stack.call_pairs);
     println!("trace.return_pairs={}", call_stack.return_pairs);
     println!("trace.call_stack_bytes={}", call_stack.stack_bytes);
