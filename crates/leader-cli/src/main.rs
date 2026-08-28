@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod alu_overlay;
+mod bus_overlay;
 mod control_state_overlay;
 mod control_word_overlay;
 mod decoder_overlay;
@@ -99,6 +100,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let svg = control_state_overlay::apply(svg, &topology, &trace, config);
     let svg = alu_overlay::apply(svg, &topology, &trace, config);
     let svg = register_overlay::apply(svg, &topology, &trace, config);
+    let svg = bus_overlay::apply(svg, &topology, &trace, config);
     let svg = stack_overlay::apply(svg, &topology, &trace, config);
     let svg = timing_overlay::apply(svg, &topology, &trace, config);
     write(&options.output, svg.as_bytes())?;
