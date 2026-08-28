@@ -15,6 +15,7 @@ pub mod pc_datapath;
 pub mod program;
 pub mod rng;
 pub mod shift_register;
+pub mod shift_register_contract;
 pub mod sp_trace;
 pub mod stack_datapath;
 pub mod topology;
@@ -48,6 +49,9 @@ pub use microcode::{
 };
 pub use pc_datapath::{derive_pc_datapath, PcDatapathEvent, PcDatapathKind};
 pub use shift_register::{ShiftRegister16, ShiftRegisterEventKind};
+pub use shift_register_contract::{
+    validate_shift_register_contract, ShiftRegisterValidation,
+};
 pub use sp_trace::{materialize_sp_events, validate_sp_event_stream};
 pub use stack_datapath::{derive_stack_datapath, StackDatapathEvent, StackDatapathKind};
 pub use topology::{Group, Link, Node, Rect, SignalKind, Topology};
