@@ -21,9 +21,21 @@ fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> Stri
     out.push_str("<g id=\"f3-stack\">\n");
 
     for event in events.iter().step_by(stride) {
-        let (kind, before, after, color) = match event.kind {
-            StackDatapathKind::Push(step) => ("push", step.before, step.after, "#ff9b71"),
-            StackDatapathKind::Pop(step) => ("pop", step.before, step.after, "#67d9b3"),
+        let (kind, before, after, chain, color) = match event.kind {
+            StackDatapathKind::Push(step) => (
+                "push",
+                step.before,
+                step.after,
+                step.borrow_chain,
+                "#ff9b71",
+            ),
+            StackDatapathKind::Pop(step) => (
+                "pop",
+                step.before,
+                step.after,
+                step.carry_chain,
+                "#67d9b3",
+            ),
         };
         let moment = trace_moment(event.frame, event.ordinal, trace, config);
         pulse_group(
@@ -33,6 +45,7 @@ fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> Stri
             kind,
             before,
             after,
+            chain,
             event.address,
             event.data,
             |out| {
@@ -83,6 +96,7 @@ fn pulse_group<F>(
     kind: &str,
     before: u16,
     after: u16,
+    chain: u32,
     address: u16,
     data: u8,
     render: F,
@@ -93,7 +107,7 @@ fn pulse_group<F>(
     let k2 = norm(moment + 0.025, total);
     let k3 = norm(moment + 0.16, total);
     out.push_str(&format!(
-        "<g opacity=\"0\" data-stack-kind=\"{kind}\" data-sp-before=\"{before:04X}\" data-sp-after=\"{after:04X}\" data-stack-address=\"{address:04X}\" data-stack-value=\"{data:02X}\"><animate attributeName=\"opacity\" values=\"0;0;1;0;0\" keyTimes=\"0;{k1:.6};{k2:.6};{k3:.6};1\" dur=\"{total:.3}s\" repeatCount=\"indefinite\"/>"
+        "<g opacity=\"0\" data-stack-kind=\"{kind}\" data-sp-before=\"{before:04X}\" data-sp-after=\"{after:04X}\" data-sp-chain=\"{chain:05X}\" data-stack-address=\"{address:04X}\" data-stack-value=\"{data:02X}\"><animate attributeName=\"opacity\" values=\"0;0;1;0;0\" keyTimes=\"0;{k1:.6};{k2:.6};{k3:.6};1\" dur=\"{total:.3}s\" repeatCount=\"indefinite\"/>"
     ));
     render(out);
     out.push_str("</g>\n");
@@ -119,29 +133,34 @@ fn norm(value: f32, total: f32) -> f32 { (value / total).clamp(0.0, 1.0) }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use leader_core::{build_topology, Machine};
+    use leader_core::{build_topology, materialize_sp_events, Machine};
 
     #[test]
     fn overlay_contains_exact_real_stack_activity() {
         let topology = build_topology();
-        let trace = Machine::run_match("stack-overlay", 5000);
+        let mut trace = Machine::run_match("stack-overlay", 5000);
+        materialize_sp_events(&mut trace);
         let rendered = render(&topology, &trace, RenderConfig::default());
         assert!(rendered.contains("id=\"f3-stack\""));
         assert!(rendered.contains("data-stack-kind=\"push\""));
         assert!(rendered.contains("data-stack-kind=\"pop\""));
         assert!(rendered.contains("data-sp-before=\""));
         assert!(rendered.contains("data-sp-after=\""));
+        assert!(rendered.contains("data-sp-chain=\""));
         assert!(rendered.contains("data-stack-address=\""));
         assert!(topology.node("returnDataMux").is_some());
         assert!(rendered.len() > 500);
     }
 
     #[test]
-    fn stack_overlay_does_not_depend_on_semantic_samples() {
+    fn stack_overlay_survives_without_bus_or_semantic_samples() {
         let topology = build_topology();
-        let mut trace = Machine::run_match("stack-overlay-native-only", 120);
+        let mut trace = Machine::run_match("stack-overlay-sp-only", 120);
+        materialize_sp_events(&mut trace);
         let config = RenderConfig::default();
         let baseline = render(&topology, &trace, config);
+
+        trace.bus_transactions.clear();
         trace.micro_samples.clear();
         assert_eq!(render(&topology, &trace, config), baseline);
     }
