@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 pub mod assembler;
 pub mod datapath;
+pub mod decoder_datapath;
 pub mod game;
 pub mod isa;
 pub mod layout;
@@ -16,10 +17,10 @@ pub mod trace;
 
 pub use datapath::{
     bit16, bit8, derive_alu_datapath, derive_bus_datapath, derive_datapath,
-    derive_decoder_datapath, derive_register_datapath, AluDatapathEvent, BusAddressOwner,
-    BusCycle, BusDataOwner, BusDatapathEvent, DatapathEvent, DatapathState,
-    DecoderDatapathEvent, RegisterDatapathEvent,
+    derive_register_datapath, AluDatapathEvent, BusAddressOwner, BusCycle, BusDataOwner,
+    BusDatapathEvent, DatapathEvent, DatapathState, RegisterDatapathEvent,
 };
+pub use decoder_datapath::{derive_decoder_datapath, DecoderDatapathEvent};
 pub use isa::{Cpu, Flags, MicroCycleKind, MicroPhase, PcSource, Reg, StepOutcome};
 pub use logic::{
     logic_trace, ripple_add, ripple_decrement16, ripple_increment16, ripple_sub, AluOp, AluTrace,
