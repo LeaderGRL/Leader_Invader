@@ -2,8 +2,12 @@ use crate::game::{Bot, GameState, InputState, Projectile, ALIEN_COLS, ALIEN_H, A
 use crate::isa::{Bus, Cpu, Flags, MicroCycleKind, MicroPhase, PcSource, Reg, StepOutcome};
 use crate::logic::{AluTrace, Decrement16Trace, PcIncrementTrace};
 use crate::microcode::MicroAddressTransition;
-use crate::program::{build_game_rom, command, DEVICE_CMD, DEVICE_STATUS, INPUT_PORT, RAM_BASE};
+use crate::program::{
+    build_game_rom, command, DEVICE_CMD, DEVICE_STATUS, INPUT_PORT, RAM_BASE, SHIFT_DATA,
+    SHIFT_OFFSET, SHIFT_RESULT,
+};
 use crate::rng::{hash_seed, DeterministicRng};
+use crate::shift_register::ShiftRegister16;
 use crate::trace::{
     AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind,
     ControlLatchEvent, ControlLatchKind, FlagEvent, FrameState, KillEvent, MatchTrace,
@@ -23,6 +27,7 @@ pub struct Machine {
     rng: DeterministicRng,
     bot: Bot,
     input: InputState,
+    shift_register: ShiftRegister16,
     trace: MatchTrace,
     ordinal: u16,
     last_vram_checksum: u32,
@@ -46,6 +51,7 @@ impl Machine {
             rng,
             bot,
             input: InputState::default(),
+            shift_register: ShiftRegister16::default(),
             trace: MatchTrace::new(seed.to_owned(), hash),
             ordinal: 0,
             last_vram_checksum: 0,
@@ -340,6 +346,41 @@ impl Machine {
         );
     }
 
+    fn shift_result_read(&mut self, pc: u16) -> u8 {
+        let value = self.shift_register.read();
+        self.mem[SHIFT_RESULT as usize] = value;
+        self.record_bus_transaction(
+            pc,
+            Some(SHIFT_RESULT),
+            Some(value),
+            BusAddressSource::Cpu,
+            BusDataSource::Device,
+            BusTransactionKind::Read,
+            "CPU_READ",
+        );
+        self.sample(
+            pc,
+            PhaseKind::MemoryRead,
+            Some(SHIFT_RESULT),
+            Some(value),
+            "CPU_READ",
+        );
+        value
+    }
+
+    fn shift_write(&mut self, address: u16, value: u8) {
+        match address {
+            SHIFT_DATA => {
+                self.shift_register.write_data(value);
+            }
+            SHIFT_OFFSET => {
+                self.shift_register.write_offset(value);
+            }
+            _ => {}
+        }
+        self.mem[SHIFT_RESULT as usize] = self.shift_register.read();
+    }
+
     fn traced_read(&mut self, pc: u16, address: u16, control: &'static str) -> u8 {
         let value = self.mem[address as usize];
         self.record_bus_transaction(
@@ -463,11 +504,18 @@ impl Bus for Machine {
     }
 
     fn read8(&mut self, pc: u16, address: u16) -> u8 {
-        self.traced_read(pc, address, "CPU_READ")
+        if address == SHIFT_RESULT {
+            self.shift_result_read(pc)
+        } else {
+            self.traced_read(pc, address, "CPU_READ")
+        }
     }
 
     fn write8(&mut self, pc: u16, address: u16, value: u8) {
         self.traced_write(pc, address, value, "CPU_WRITE");
+        if matches!(address, SHIFT_DATA | SHIFT_OFFSET) {
+            self.shift_write(address, value);
+        }
         if address == DEVICE_CMD {
             self.device_command(pc, value);
         }
@@ -763,6 +811,15 @@ mod tests {
             event.kind == BusTransactionKind::Input
                 && event.data_source == BusDataSource::Device
         }));
+        assert!(trace.bus_transactions.iter().any(|event| {
+            event.kind == BusTransactionKind::Read
+                && event.address == Some(SHIFT_RESULT)
+                && event.data == Some(0xA0)
+                && event.data_source == BusDataSource::Device
+        }));
+        assert!(trace.bus_transactions.iter().filter(|event| {
+            event.kind == BusTransactionKind::Write && event.address == Some(SHIFT_DATA)
+        }).count() >= 2);
         assert!(trace.micro_addresses.iter().any(|event| event.address == crate::microcode::uaddr::FETCH_T0));
         assert!(trace.micro_addresses.iter().any(|event| event.address >= crate::microcode::uaddr::EXEC_BASE));
         assert!(trace.micro_addresses.iter().any(|event| event.source == crate::microcode::MicroAddressSource::Dispatch));
