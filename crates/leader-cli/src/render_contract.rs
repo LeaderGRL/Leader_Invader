@@ -7,7 +7,7 @@ pub struct NativeSvgValidation {
 
 pub const MAX_NATIVE_SVG_BYTES: usize = 5_000_000;
 
-const REQUIRED_GROUPS: [&str; 14] = [
+const REQUIRED_GROUPS: [&str; 15] = [
     "f3-pc",
     "f3-native-decoder",
     "f3-microcode",
@@ -21,10 +21,11 @@ const REQUIRED_GROUPS: [&str; 14] = [
     "f3-stack",
     "m3-formation-cadence",
     "m3-shift-register",
+    "m3-enemy-shot-bank",
     "f3-timing",
 ];
 
-const REQUIRED_METADATA: [&str; 23] = [
+const REQUIRED_METADATA: [&str; 29] = [
     "data-pc-before=",
     "data-opcode=",
     "data-ucontrol=",
@@ -48,6 +49,12 @@ const REQUIRED_METADATA: [&str; 23] = [
     "data-shift-state=",
     "data-shift-offset=",
     "data-shift-result=",
+    "data-enemy-shot-frame=",
+    "data-enemy-shot-active-count=",
+    "data-enemy-shot-slot=",
+    "data-enemy-shot-active=",
+    "data-enemy-shot-x=",
+    "data-enemy-shot-y=",
 ];
 
 pub fn validate_native_svg_contract(svg: &str) -> Result<NativeSvgValidation, String> {
