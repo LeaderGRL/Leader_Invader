@@ -70,6 +70,8 @@ fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> Stri
         glow_node(&mut out, topology, "opLo", "#4bc8f3");
         glow_node(&mut out, topology, "decA", "#f7ce62");
         glow_node(&mut out, topology, "decB", "#f7ce62");
+        glow_node(&mut out, topology, &format!("decA{hi}"), "#ff9b71");
+        glow_node(&mut out, topology, &format!("decB{lo}"), "#e8e677");
         glow_node(&mut out, topology, "microAddr", "#67d9b3");
 
         out.push_str("</g>\n");
@@ -117,6 +119,8 @@ mod tests {
         assert!(baseline.contains("data-opcode=\""));
         assert!(baseline.contains("data-decode-hi=\""));
         assert!(baseline.contains("data-decode-lo=\""));
+        assert!(baseline.contains("stroke=\"#ff9b71\""));
+        assert!(baseline.contains("stroke=\"#e8e677\""));
 
         trace.micro_samples.clear();
         assert_eq!(render(&topology, &trace, config), baseline);
