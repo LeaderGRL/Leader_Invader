@@ -77,14 +77,6 @@ The visible CPU/control path is production-native and physically authoritative.
 - native exact PC increment/load events;
 - native exact SP PUSH/POP events including ripple chain, address and data;
 - native decoder visualization from IR `DecodeLatch` microcycles;
-- exact PC before/after/source/carry metadata in SVG;
-- exact SP before/after/ripple/address/data metadata in SVG;
-- exact ALU operands/result/carry-chain metadata in SVG;
-- exact Z/C/L flag metadata in SVG;
-- exact visible control-latch kind/value/validity metadata in SVG;
-- exact register before/after write metadata in SVG;
-- exact bus owner/address/data/control metadata in SVG;
-- exact T-state PC/MAR/MDR/IR snapshots in SVG;
 - complete native-only F3 overlay pipeline independent of `micro_samples`.
 
 ### Production contracts
@@ -93,43 +85,76 @@ The visible CPU/control path is production-native and physically authoritative.
 - production CLI receives every required first-class stream directly from `Machine::run_match()`;
 - production no longer calls SP materialization/fallback reconstruction;
 - native control authority validator ties architectural mutations back to physical µROM rows;
-- traced µROM words are compared exactly against `control_word_at(µADDR, opcode).bits24()`;
-- CPU fetch/read/write transactions are tied to their shared physical micro-routines;
 - SP events are cross-checked against exact native stack bus transactions and local ordering;
-- final injected topology validator checks unique/closed nodes and links, group containment and required F3 hardware;
+- final injected topology validator checks unique/closed nodes and links, group containment and required hardware;
 - final SVG contract requires all native overlay/metadata families and rejects legacy coarse activity;
 - GitHub-safe declarative output validation;
 - hard production SVG budget of 5,000,000 bytes;
-- current artifact is roughly 3.3 MB;
 - CI cancels obsolete branch/PR runs and ignores generated-only updates.
 
 ### F3 acceptance — satisfied
 
 F3 required every visible critical CPU datapath/control node to be driven from native same-tick state or a physically justified combinational path, production rendering to contain no semantic fallback activity, and all trace/topology/SVG contracts to remain green.
 
-Those conditions are now enforced in code and CI. Historical reconstruction helpers remain only for backward compatibility with old trace shapes; they are not production dependencies.
+Those conditions are enforced in code and CI. Historical reconstruction helpers remain only for backward compatibility with old trace shapes; they are not production dependencies.
 
-### Post-F3 maintenance
+## M3 — richer arcade hardware 🚧
 
-These are cleanup/optimization tasks, not F3 blockers:
+The F3 physical-authority rule is now being applied to game-specific hardware. Semantics remain complete and unsampled; only cinematic presentation is bounded.
 
-- decide when old `MicroSample`/bus reconstruction helper APIs can be deprecated or removed;
-- continue reducing duplicate presentation work where multiple native overlays cover the same physical nodes, while preserving inspectable metadata;
-- keep the generated artifact comfortably below the 5 MB budget;
-- close any future visible wiring regression discovered by the topology/SVG contracts.
+### Original-arcade-inspired 16-bit shift register ✅
 
-## M3 — richer arcade hardware
+- explicit 16-bit device state with two-byte cascading load;
+- 3-bit offset register and 8-bit shifted read window;
+- memory-mapped `SHIFT_DATA`, `SHIFT_OFFSET`, `SHIFT_RESULT` ports;
+- assembled ROM boot self-test proving `0x12`, `0x34`, offset `3` → `0xA0`;
+- first-class shift-register events tied to same-tick CPU bus transactions;
+- causal state replay contract with corruption tests;
+- visible `SHIFT HI / LO / OFFSET / WINDOW / OUT` hardware path;
+- native SVG metadata and mandatory production overlay.
 
-With F3 closed, move more game-specific peripheral behavior into explicit hardware:
+### Hardware formation cadence ✅
 
-- multiple enemy shots;
-- shields;
-- formation cadence tied to remaining invaders;
-- original-arcade-inspired 16-bit shift-register peripheral;
-- optional 8080-flavoured memory map;
+- old high-level `frame % 3` movement gate removed;
+- persistent hardware counter/divider is now the only fleet movement gate;
+- divisor accelerates `3 → 2 → 1` as the formation thins;
+- native clock stream includes alive count, divisor, counter before/after and tick;
+- validator replays every clock and rejects fleet RAM mutation without `tick=true`;
+- physical alive/divider/counter/tick nodes;
+- bounded overlay preserves all three speed bands and both tick states.
+
+### Three-slot enemy projectile bank ✅
+
+- singleton enemy projectile removed from `GameState` and renderer;
+- explicit `EnemyShotBank` owns three independent projectile slots;
+- round-robin allocator + hardware cooldown state;
+- each slot has authoritative RAM bytes for `X / Y / ACTIVE`;
+- bot avoidance, collision, VRAM and gameplay replay consume all three slots;
+- deterministic match must exercise all three slots and at least two simultaneous projectiles;
+- RAM-authority contract replays every slot write across native snapshot intervals;
+- invalid arm/clear ordering, missing writes and corrupted snapshots fail validation;
+- physical allocator/cooldown plus three visible X/Y/ACTIVE banks;
+- strict 84-frame maximum overlay sampling preserves slot use and concurrency;
+- current generated replay after this slice: **3,767,395 bytes** (< 5 MB).
+
+### Destructible shields ⏭️
+
+Next slice. Target contract:
+
+- explicit shield bitmap memory, not decorative sprites;
+- projectile collision damages bitmap bits causally;
+- both player and enemy projectiles interact with the same shield state;
+- VRAM rasterization consumes shield memory;
+- native mutation stream or exact RAM/bitmap replay contract;
+- corruption tests for wrong shield/bit/address;
+- physical shield RAM / address / damage-mask path;
+- compact presentation to preserve the remaining ~1.23 MB SVG budget.
+
+### Optional follow-ups
+
+- 8080-flavoured memory-map cleanup;
+- richer original-arcade timing/peripheral quirks where they improve inspectability;
 - no proprietary arcade ROM assets.
-
-The first M3 slices should follow the same rule established by F3: a visible peripheral path is backed by real state/control and emits a native event stream before it gains cinematic presentation.
 
 ## M4 — live WASM explorer
 
