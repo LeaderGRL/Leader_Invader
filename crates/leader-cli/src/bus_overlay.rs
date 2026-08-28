@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use leader_core::{
-    memory_owner, BusAddressSource, BusDataSource, BusTransactionKind, MatchTrace, MemoryOwner,
-    Topology,
+    memory_owner, mmio_port, BusAddressSource, BusDataSource, BusTransactionKind, MatchTrace,
+    MemoryOwner, MmioAccess, Topology, MMIO_PORTS,
 };
 use leader_svg::RenderConfig;
 
@@ -32,7 +32,7 @@ pub fn apply(
 fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
     let indices = sampled_indices(trace);
     let total = config.total();
-    let mut out = String::with_capacity(235_000);
+    let mut out = String::with_capacity(238_000);
     out.push_str("<g id=\"f3-native-bus\">\n");
 
     for index in indices {
@@ -47,16 +47,21 @@ fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> Stri
         let memory_owner = event
             .address
             .map_or("none", |address| owner_name(memory_owner(address)));
+        let port = event.address.and_then(mmio_port);
+        let mmio_port_name = port.map_or("none", |port| port.name);
+        let mmio_access = port.map_or("none", |port| access_name(port.access));
         let data = event
             .data
             .map_or_else(|| "none".to_owned(), |value| format!("{value:02X}"));
 
         out.push_str(&format!(
-            "<g opacity=\"0\" data-bus-kind=\"{}\" data-bus-address-source=\"{}\" data-bus-data-source=\"{}\" data-bus-memory-owner=\"{}\" data-bus-address=\"{}\" data-bus-data=\"{}\" data-bus-control=\"{}\"><animate attributeName=\"opacity\" values=\"0;0;1;0;0\" keyTimes=\"0;{k1:.6};{k2:.6};{k3:.6};1\" dur=\"{total:.3}s\" repeatCount=\"indefinite\"/>",
+            "<g opacity=\"0\" data-bus-kind=\"{}\" data-bus-address-source=\"{}\" data-bus-data-source=\"{}\" data-bus-memory-owner=\"{}\" data-bus-mmio-port=\"{}\" data-bus-mmio-access=\"{}\" data-bus-address=\"{}\" data-bus-data=\"{}\" data-bus-control=\"{}\"><animate attributeName=\"opacity\" values=\"0;0;1;0;0\" keyTimes=\"0;{k1:.6};{k2:.6};{k3:.6};1\" dur=\"{total:.3}s\" repeatCount=\"indefinite\"/>",
             event.kind.as_str(),
             event.address_source.as_str(),
             event.data_source.as_str(),
             memory_owner,
+            mmio_port_name,
+            mmio_access,
             address,
             data,
             event.control
@@ -162,6 +167,15 @@ fn sampled_indices(trace: &MatchTrace) -> Vec<usize> {
         }
     }
 
+    for port in MMIO_PORTS {
+        if let Some(index) = events
+            .iter()
+            .position(|event| event.address == Some(port.address))
+        {
+            selected.insert(index);
+        }
+    }
+
     let remaining = MAX_BUS_EVENTS.saturating_sub(selected.len());
     if remaining > 0 {
         let stride = events.len().div_ceil(remaining).max(1);
@@ -183,6 +197,15 @@ const fn owner_name(owner: MemoryOwner) -> &'static str {
         MemoryOwner::Vram => "vram",
         MemoryOwner::Mmio => "mmio",
         MemoryOwner::Unmapped => "unmapped",
+    }
+}
+
+const fn access_name(access: MmioAccess) -> &'static str {
+    match access {
+        MmioAccess::InputOnly => "input_only",
+        MmioAccess::ReadOnly => "read_only",
+        MmioAccess::WriteOnly => "write_only",
+        MmioAccess::ReadWrite => "read_write",
     }
 }
 
@@ -231,6 +254,10 @@ mod tests {
         assert!(baseline.contains("data-bus-memory-owner=\"rom\""));
         assert!(baseline.contains("data-bus-memory-owner=\"ram\""));
         assert!(baseline.contains("data-bus-memory-owner=\"mmio\""));
+        assert!(baseline.contains("data-bus-mmio-port=\"shift_data\""));
+        assert!(baseline.contains("data-bus-mmio-access=\"write_only\""));
+        assert!(baseline.contains("data-bus-mmio-port=\"shift_result\""));
+        assert!(baseline.contains("data-bus-mmio-access=\"read_only\""));
         assert!(baseline.contains("data-bus-address=\""));
         assert!(baseline.contains("data-bus-data=\""));
         assert!(baseline.contains("data-bus-control=\""));
@@ -240,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn bus_sampling_is_bounded_and_preserves_owners_and_kinds() {
+    fn bus_sampling_is_bounded_and_preserves_owners_kinds_and_exercised_ports() {
         let trace = Machine::run_match("m3-bus-owner-sampling", 5000);
         let selected = sampled_indices(&trace);
         assert!(selected.len() <= MAX_BUS_EVENTS);
@@ -276,6 +303,18 @@ mod tests {
                 assert!(selected
                     .iter()
                     .any(|index| trace.bus_transactions[*index].kind == kind));
+            }
+        }
+
+        for port in MMIO_PORTS {
+            if trace
+                .bus_transactions
+                .iter()
+                .any(|event| event.address == Some(port.address))
+            {
+                assert!(selected
+                    .iter()
+                    .any(|index| trace.bus_transactions[*index].address == Some(port.address)));
             }
         }
     }
