@@ -2,6 +2,7 @@
 pub struct NativeSvgValidation {
     pub overlay_groups: usize,
     pub metadata_families: usize,
+    pub bus_coverage_markers: usize,
     pub bytes: usize,
 }
 
@@ -65,6 +66,28 @@ const REQUIRED_METADATA: [&str; 36] = [
     "data-shield-source=",
 ];
 
+const REQUIRED_BUS_COVERAGE: [&str; 19] = [
+    "data-bus-memory-owner=\"rom\"",
+    "data-bus-memory-owner=\"ram\"",
+    "data-bus-memory-owner=\"vram\"",
+    "data-bus-memory-owner=\"mmio\"",
+    "data-bus-kind=\"fetch\"",
+    "data-bus-kind=\"read\"",
+    "data-bus-kind=\"write\"",
+    "data-bus-kind=\"input\"",
+    "data-bus-kind=\"dma\"",
+    "data-bus-kind=\"scanout\"",
+    "data-bus-address-source=\"program_counter\"",
+    "data-bus-address-source=\"cpu\"",
+    "data-bus-address-source=\"dma\"",
+    "data-bus-address-source=\"none\"",
+    "data-bus-data-source=\"rom\"",
+    "data-bus-data-source=\"ram\"",
+    "data-bus-data-source=\"vram\"",
+    "data-bus-data-source=\"cpu\"",
+    "data-bus-data-source=\"device\"",
+];
+
 pub fn validate_native_svg_contract(svg: &str) -> Result<NativeSvgValidation, String> {
     if svg.len() > MAX_NATIVE_SVG_BYTES {
         return Err(format!(
@@ -96,6 +119,15 @@ pub fn validate_native_svg_contract(svg: &str) -> Result<NativeSvgValidation, St
         validation.metadata_families += 1;
     }
 
+    for marker in REQUIRED_BUS_COVERAGE {
+        if !svg.contains(marker) {
+            return Err(format!(
+                "production SVG is missing required native bus coverage marker {marker}"
+            ));
+        }
+        validation.bus_coverage_markers += 1;
+    }
+
     if svg.contains("<script") || svg.contains("javascript:") {
         return Err("production SVG violates declarative-only render contract".to_owned());
     }
@@ -125,5 +157,20 @@ mod tests {
         let svg = "x".repeat(MAX_NATIVE_SVG_BYTES + 1);
         let error = validate_native_svg_contract(&svg).expect_err("oversize SVG must fail");
         assert!(error.contains("exceeds"));
+    }
+
+    #[test]
+    fn generic_bus_metadata_without_concrete_coverage_is_rejected() {
+        let mut svg = String::from("<svg>");
+        for id in REQUIRED_GROUPS {
+            svg.push_str(&format!("<g id=\"{id}\"></g>"));
+        }
+        for marker in REQUIRED_METADATA {
+            svg.push_str(marker);
+        }
+        svg.push_str("</svg>");
+        let error = validate_native_svg_contract(&svg)
+            .expect_err("generic bus metadata must not satisfy concrete coverage");
+        assert!(error.contains("missing required native bus coverage marker"));
     }
 }
