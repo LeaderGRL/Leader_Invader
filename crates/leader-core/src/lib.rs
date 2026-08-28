@@ -14,6 +14,7 @@ pub mod rng;
 pub mod stack_datapath;
 pub mod topology;
 pub mod trace;
+pub mod trace_validation;
 
 pub use datapath::{
     bit16, bit8, derive_alu_datapath, derive_bus_datapath, derive_datapath,
@@ -41,6 +42,7 @@ pub use trace::{
     KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent, PcEventKind,
     PhaseKind, ProjectileSnapshot, RegisterWriteEvent,
 };
+pub use trace_validation::{validate_native_control_authority, NativeTraceValidation};
 
 #[must_use]
 pub fn build_topology() -> Topology {
