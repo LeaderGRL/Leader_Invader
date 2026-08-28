@@ -148,7 +148,7 @@ pub fn validate_call_stack_contract(trace: &MatchTrace) -> Result<CallStackValid
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Machine;
+    use crate::{Machine, SpEventKind};
 
     #[test]
     fn real_match_proves_pc_to_stack_combinational_return_path() {
@@ -160,8 +160,26 @@ mod tests {
     }
 
     #[test]
-    fn corrupting_a_pushed_return_byte_is_detected() {
+    fn corrupting_an_authoritative_pushed_return_byte_is_detected() {
         let mut trace = Machine::run_match("f3-call-stack-negative", 120);
+        let event = trace
+            .sp_events
+            .iter_mut()
+            .find(|event| matches!(event.kind, SpEventKind::Push(_)))
+            .expect("CPU-native stack push");
+        event.data ^= 0x01;
+
+        let error = validate_call_stack_contract(&trace).expect_err("corrupt return byte must fail");
+        assert!(
+            error.contains("CALL high return byte mismatch")
+                || error.contains("CALL low return byte mismatch")
+                || error.contains("CALL return address mismatch")
+        );
+    }
+
+    #[test]
+    fn bus_corruption_cannot_override_first_class_sp_authority() {
+        let mut trace = Machine::run_match("f3-call-stack-bus-shadow", 120);
         let transaction = trace
             .bus_transactions
             .iter_mut()
@@ -172,7 +190,7 @@ mod tests {
             .expect("stack write");
         transaction.data = transaction.data.map(|value| value ^ 0x01);
 
-        let error = validate_call_stack_contract(&trace).expect_err("corrupt return byte must fail");
-        assert!(error.contains("CALL high return byte mismatch") || error.contains("CALL return address mismatch"));
+        validate_call_stack_contract(&trace)
+            .expect("first-class SP stream must remain authoritative over bus fallback");
     }
 }
