@@ -90,6 +90,14 @@ pub fn validate_final_topology(topology: &Topology) -> Result<TopologyValidation
         "enemyShot2X",
         "enemyShot2Y",
         "enemyShot2Active",
+        "shieldAddr",
+        "shieldMask",
+        "shieldWriteEnable",
+        "shieldRam0",
+        "shieldRam1",
+        "shieldRam2",
+        "shieldRam3",
+        "shieldVideoMux",
     ] {
         if topology.node(required).is_none() {
             return Err(format!("final topology missing required node {required}"));
@@ -111,8 +119,8 @@ mod tests {
     fn final_runtime_topology_is_closed_unique_and_inside_groups() {
         let topology = build_topology();
         let validation = validate_final_topology(&topology).expect("valid final topology");
-        assert!(validation.nodes >= 450);
-        assert!(validation.links >= 504);
+        assert!(validation.nodes >= 458);
+        assert!(validation.links >= 520);
     }
 
     #[test]
@@ -126,8 +134,8 @@ mod tests {
     #[test]
     fn missing_m3_peripheral_is_detected() {
         let mut topology = build_topology();
-        topology.nodes.retain(|node| node.id != "enemyShot2Active");
+        topology.nodes.retain(|node| node.id != "shieldRam3");
         let error = validate_final_topology(&topology).expect_err("missing M3 hardware must fail");
-        assert!(error.contains("enemyShot2Active") || error.contains("missing target"));
+        assert!(error.contains("shieldRam3") || error.contains("missing target"));
     }
 }
