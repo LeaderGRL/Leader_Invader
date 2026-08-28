@@ -1,6 +1,6 @@
 use crate::logic::{
     logic_trace, ripple_add, ripple_decrement16, ripple_increment16, ripple_sub, AluOp,
-    AluTrace, PcIncrementTrace,
+    AluTrace, Decrement16Trace, PcIncrementTrace,
 };
 use crate::microcode::{
     control_word_at, decode as decode_microcode, execute_address, internal, uaddr, ControlWord,
@@ -31,6 +31,8 @@ pub trait Bus{
     fn trace_alu_exact(&mut self,pc:u16,trace:AluTrace,control:&'static str){self.trace_alu(pc,trace.result,control)}
     fn trace_flags(&mut self,_pc:u16,_flags:Flags,_control:&'static str){}
     fn trace_control_latch(&mut self,_pc:u16,_kind:ControlLatchKind,_value:u16,_valid:bool,_control:&'static str){}
+    fn trace_sp_push(&mut self,_pc:u16,_step:Decrement16Trace,_address:u16,_data:u8,_control:&'static str){}
+    fn trace_sp_pop(&mut self,_pc:u16,_step:PcIncrementTrace,_address:u16,_data:u8,_control:&'static str){}
     fn trace_register_write(&mut self,_pc:u16,_reg:Reg,_before:u8,_after:u8,_control:&'static str){} fn trace_pc_increment(&mut self,_trace:PcIncrementTrace){} fn trace_pc_load(&mut self,_before:u16,_after:u16,_source:PcSource,_control:&'static str){}
     fn trace_microaddress(&mut self,_transition:MicroAddressTransition,_opcode:u8,_control_bits:u32,_label:&'static str){}
     fn trace_microcycle(&mut self,phase:MicroPhase,_kind:MicroCycleKind,pc:u16,_mar:u16,_mdr:u8,_ir:u8,_control:&'static str){let timing=match phase{MicroPhase::T0=>"µT0",MicroPhase::T1=>"µT1",MicroPhase::T2=>"µT2"};self.trace_control(pc,timing);}
@@ -79,7 +81,7 @@ impl Cpu{
     fn unary_arithmetic<B:Bus>(&mut self,bus:&mut B,pc:u16,opcode:u8,increment:bool)->StepOutcome{let control=if increment{"INC"}else{"DEC"};let Some(reg)=self.next_reg(bus)else{return self.fault(pc,opcode);};self.latch_register_select_traced(bus,pc,reg,control);self.advance_execute(bus,"ALU_CONST_ONE");self.latch_operand_b(1);self.advance_execute(bus,"ALU_SELECT");let operation=if increment{AluOp::Add}else{AluOp::Sub};self.latch_alu_op(operation);self.advance_execute(bus,"ALU_PROPAGATE");let Some(trace)=self.propagate_latched_alu(bus,pc,control,false)else{return self.fault(pc,opcode);};self.advance_execute(bus,"ALU_COMMIT");if !self.write_selected_a(bus,pc,trace.result,control){return self.fault(pc,opcode);}StepOutcome::Continue}
     fn compare_immediate<B:Bus>(&mut self,bus:&mut B,pc:u16,opcode:u8,control:&'static str)->StepOutcome{let Some(reg)=self.next_reg(bus)else{return self.fault(pc,opcode);};self.latch_register_select_traced(bus,pc,reg,control);self.advance_execute(bus,"ALU_OPERAND_B");let rhs=self.next8(bus);self.latch_operand_b(rhs);self.advance_execute(bus,"ALU_SELECT");self.latch_alu_op(AluOp::Compare);self.advance_execute(bus,"ALU_PROPAGATE");let Some(_trace)=self.propagate_latched_alu(bus,pc,control,true)else{return self.fault(pc,opcode);};self.advance_execute(bus,"ALU_COMMIT");StepOutcome::Continue}
     fn latch_arithmetic_flags(&mut self,trace:AluTrace){self.latch_flags(Flags{zero:trace.result==0,carry:trace.final_carry(),less:!trace.final_carry()&&matches!(trace.op,AluOp::Sub)})} fn latch_compare_flags(&mut self,trace:AluTrace){self.latch_flags(Flags{zero:trace.result==0,carry:trace.final_carry(),less:!trace.final_carry()})}
-    fn push<B:Bus>(&mut self,bus:&mut B,pc:u16,value:u8){if !self.active_control().stack_enable{return;}self.sp=ripple_decrement16(self.sp).after;self.write_memory(bus,pc,self.sp,value,"STACK_PUSH")} fn pop<B:Bus>(&mut self,bus:&mut B,pc:u16)->u8{if !self.active_control().stack_enable{return 0;}let value=self.read_memory(bus,pc,self.sp,"STACK_POP");self.sp=ripple_increment16(self.sp).after;value} fn fault(&mut self,pc:u16,opcode:u8)->StepOutcome{self.halted=true;StepOutcome::Fault{pc,opcode}}
+    fn push<B:Bus>(&mut self,bus:&mut B,pc:u16,value:u8){if !self.active_control().stack_enable{return;}let step=ripple_decrement16(self.sp);self.sp=step.after;self.write_memory(bus,pc,self.sp,value,"STACK_PUSH");bus.trace_sp_push(pc,step,self.sp,value,"STACK_PUSH")} fn pop<B:Bus>(&mut self,bus:&mut B,pc:u16)->u8{if !self.active_control().stack_enable{return 0;}let address=self.sp;let value=self.read_memory(bus,pc,address,"STACK_POP");let step=ripple_increment16(self.sp);self.sp=step.after;bus.trace_sp_pop(pc,step,address,value,"STACK_POP");value} fn fault(&mut self,pc:u16,opcode:u8)->StepOutcome{self.halted=true;StepOutcome::Fault{pc,opcode}}
 }
 
 #[must_use]pub const fn mnemonic(value:u8)->&'static str{match decode_microcode(value){Some(instruction)=>instruction.mnemonic,None=>"FAULT"}} #[must_use]pub const fn phase_for_opcode(value:u8)->PhaseKind{match decode_microcode(value){Some(instruction)if instruction.control.mem_read=>PhaseKind::MemoryRead,Some(instruction)if instruction.control.mem_write=>PhaseKind::MemoryWrite,Some(instruction)if instruction.control.alu_enable=>PhaseKind::Alu,_=>PhaseKind::Decode}}
