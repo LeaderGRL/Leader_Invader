@@ -3,8 +3,9 @@ use leader_svg::{render, RenderConfig};
 
 use crate::{
     alu_overlay, bus_overlay, control_state_overlay, control_word_overlay, decoder_overlay,
-    director, flags_overlay, microcode_overlay, microcycle_overlay, pc_overlay, register_overlay,
-    render_native_base, shift_register_overlay, stack_overlay, timing_overlay,
+    director, flags_overlay, formation_cadence_overlay, microcode_overlay, microcycle_overlay,
+    pc_overlay, register_overlay, render_native_base, shift_register_overlay, stack_overlay,
+    timing_overlay,
 };
 
 fn apply_native_pipeline(
@@ -25,6 +26,7 @@ fn apply_native_pipeline(
     let svg = register_overlay::apply(svg, topology, trace, config);
     let svg = bus_overlay::apply(svg, topology, trace, config);
     let svg = stack_overlay::apply(svg, topology, trace, config);
+    let svg = formation_cadence_overlay::apply(svg, topology, trace, config);
     let svg = shift_register_overlay::apply(svg, topology, trace, config);
     timing_overlay::apply(svg, topology, trace, config)
 }
@@ -59,6 +61,7 @@ fn complete_native_overlay_pipeline_is_native_only_without_materialization() {
     assert!(!trace.alu_events.is_empty());
     assert!(!trace.flag_events.is_empty());
     assert!(!trace.control_latch_events.is_empty());
+    assert!(!trace.formation_cadence_events.is_empty());
     assert!(!trace.register_writes.is_empty());
     assert!(!trace.pc_events.is_empty());
     assert!(!trace.sp_events.is_empty());
@@ -74,4 +77,8 @@ fn complete_native_overlay_pipeline_is_native_only_without_materialization() {
     assert_eq!(without_semantic_samples, baseline);
     assert!(baseline.contains("id=\"m3-shift-register\""));
     assert!(baseline.contains("data-shift-result=\"A0\""));
+    assert!(baseline.contains("id=\"m3-formation-cadence\""));
+    assert!(baseline.contains("data-cadence-divisor=\"3\""));
+    assert!(baseline.contains("data-cadence-tick=\"1\""));
+    assert!(baseline.contains("data-cadence-tick=\"0\""));
 }
