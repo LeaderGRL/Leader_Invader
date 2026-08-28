@@ -1,9 +1,8 @@
-use crate::{
-    enemy_shot_bank::ENEMY_SHOT_SLOTS, program::RAM_BASE, BusTransactionKind, MatchTrace,
-    ProjectileSnapshot,
-};
+pub use crate::memory_map::ENEMY_SHOT_RAM_BASE;
 
-pub const ENEMY_SHOT_RAM_BASE: u16 = RAM_BASE + 0x20;
+use crate::{
+    enemy_shot_bank::ENEMY_SHOT_SLOTS, BusTransactionKind, MatchTrace, ProjectileSnapshot,
+};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EnemyShotValidation {
@@ -201,6 +200,12 @@ pub fn validate_enemy_shot_bank_contract(
 mod tests {
     use super::*;
     use crate::Machine;
+
+    #[test]
+    fn enemy_shot_window_is_canonical_memory_map_region() {
+        assert_eq!(ENEMY_SHOT_RAM_BASE, crate::memory_map::ENEMY_SHOT_RAM_REGION.start);
+        assert_eq!(enemy_shot_ram(ENEMY_SHOT_SLOTS - 1, 2), crate::memory_map::ENEMY_SHOT_RAM_REGION.end);
+    }
 
     #[test]
     fn complete_match_has_three_slot_ram_authority() {
