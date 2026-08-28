@@ -98,6 +98,24 @@ SHIELD ADDR -> DAMAGE MASK -> SHIELD WRITE -> RAM 0..3 -> SHIELD VIDEO -> scanou
 
 The CRT itself is driven by the same state: initial shield pixels are drawn from the bitmap and each damaged pixel disappears at the native RAM-write timestamp. No duplicated shield snapshot is needed in `FrameState`.
 
+### Canonical 8080-flavoured memory map ✅
+
+The existing addresses are now centralized without changing the ROM or gameplay:
+
+```text
+0000–1FFF  program ROM       8 KiB
+2000–7FFF  work RAM         24 KiB
+  2020–2028  enemy-shot X/Y/ACTIVE bank
+  2040–207F  64-byte shield bitmap RAM
+  7F00–7FFF  stack page
+8000–87FF  physical VRAM     2 KiB (1536-byte framebuffer in use)
+A000–A1FF  MMIO              input / shift peripheral / game device ports
+```
+
+`memory_map.rs` is the canonical source for regions and public ports. Existing `program::*` constants remain compatibility exports. Tests prove top-level regions are disjoint, RAM subregions do not overlap, all declared ports belong to MMIO and the framebuffer fits VRAM.
+
+`validate_memory_map_contract()` then checks every addressed native bus transaction: fetches must be ROM-backed, reads must use the region owner as data source, writes are CPU-driven, input is MMIO/device-owned and DMA/scanout remain VRAM-owned. Unmapped accesses fail production generation.
+
 ## Native replay streams and contracts
 
 `MatchTrace` records dedicated first-class CPU streams for microcycles, µPC/control words, bus ownership, ALU, flags, control latches, registers, PC and SP. M3 adds native formation-cadence and shift-register events, while enemy-projectile and shield authority is deliberately proven from their exact RAM transactions plus native snapshots where needed.
@@ -121,16 +139,17 @@ Before `Leader.svg` can be written, production validates:
 - all three enemy-shot slots against `X/Y/ACTIVE` RAM authority;
 - shield writes as exact one-bit `1 → 0` mutations;
 - shield-caused enemy-shot clears against immediately preceding shield damage;
+- canonical memory ownership for every addressed native bus transaction;
 - all mandatory native SVG groups and metadata;
 - absence of legacy semantic activity and JavaScript;
 - a hard production SVG budget of **5,000,000 bytes**.
 
-The shield-complete replay measured **3,856,346 bytes**, leaving roughly **1.14 MB** of headroom.
+The current generated replay measures **3,805,473 bytes**, leaving roughly **1.19 MB** of headroom.
 
 ## Determinism and validation
 
 Every semantic source of nondeterminism derives from the explicit seed. There is no wall clock or OS RNG in `leader-core`.
 
-Every source change is gated by workspace tests, Clippy, a complete deterministic match, physical CPU/peripheral corruption tests, topology validation, a full production smoke render, native SVG contract checks and XML/GitHub-safe SVG validation.
+Every source change is gated by workspace tests, Clippy, a complete deterministic match, physical CPU/peripheral corruption tests, memory ownership validation, topology validation, a full production smoke render, native SVG contract checks and XML/GitHub-safe SVG validation.
 
-See [Architecture](docs/ARCHITECTURE.md) for the causal model and [Roadmap](docs/ROADMAP.md) for follow-up hardware cleanup and the live explorer milestone.
+See [Architecture](docs/ARCHITECTURE.md) for the causal model and [Roadmap](docs/ROADMAP.md) for remaining cleanup and the live explorer milestone.
