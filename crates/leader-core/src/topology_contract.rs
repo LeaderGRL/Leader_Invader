@@ -70,9 +70,18 @@ pub fn validate_final_topology(topology: &Topology) -> Result<TopologyValidation
         "returnDataMux",
         "stackRam",
         "display",
+        "shiftHi",
+        "shiftLo",
+        "shiftOffset",
+        "shiftMux",
+        "shiftOut",
+        "formationAlive",
+        "formationDivider",
+        "formationCounter",
+        "formationTick",
     ] {
         if topology.node(required).is_none() {
-            return Err(format!("final F3 topology missing required node {required}"));
+            return Err(format!("final topology missing required node {required}"));
         }
     }
 
@@ -91,8 +100,8 @@ mod tests {
     fn final_runtime_topology_is_closed_unique_and_inside_groups() {
         let topology = build_topology();
         let validation = validate_final_topology(&topology).expect("valid final topology");
-        assert!(validation.nodes >= 430);
-        assert!(validation.links >= 470);
+        assert!(validation.nodes >= 439);
+        assert!(validation.links >= 484);
     }
 
     #[test]
@@ -101,5 +110,13 @@ mod tests {
         topology.nodes.retain(|node| node.id != "addrLoLatch");
         let error = validate_final_topology(&topology).expect_err("broken topology must fail");
         assert!(error.contains("addrLoLatch") || error.contains("missing target"));
+    }
+
+    #[test]
+    fn missing_m3_peripheral_is_detected() {
+        let mut topology = build_topology();
+        topology.nodes.retain(|node| node.id != "formationTick");
+        let error = validate_final_topology(&topology).expect_err("missing M3 hardware must fail");
+        assert!(error.contains("formationTick") || error.contains("missing source"));
     }
 }
