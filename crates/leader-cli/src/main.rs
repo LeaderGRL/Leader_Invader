@@ -3,6 +3,8 @@
 mod decoder_overlay;
 mod director;
 mod microcode_overlay;
+#[cfg(test)]
+mod native_pipeline_tests;
 mod pc_overlay;
 mod stack_overlay;
 mod timing_overlay;
