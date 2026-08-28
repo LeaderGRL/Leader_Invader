@@ -3,9 +3,9 @@ use leader_svg::{render, RenderConfig};
 
 use crate::{
     alu_overlay, bus_overlay, control_state_overlay, control_word_overlay, decoder_overlay,
-    director, flags_overlay, formation_cadence_overlay, microcode_overlay, microcycle_overlay,
-    pc_overlay, register_overlay, render_native_base, shift_register_overlay, stack_overlay,
-    timing_overlay,
+    director, enemy_shot_overlay, flags_overlay, formation_cadence_overlay, microcode_overlay,
+    microcycle_overlay, pc_overlay, register_overlay, render_native_base, shift_register_overlay,
+    stack_overlay, timing_overlay,
 };
 
 fn apply_native_pipeline(
@@ -28,6 +28,7 @@ fn apply_native_pipeline(
     let svg = stack_overlay::apply(svg, topology, trace, config);
     let svg = formation_cadence_overlay::apply(svg, topology, trace, config);
     let svg = shift_register_overlay::apply(svg, topology, trace, config);
+    let svg = enemy_shot_overlay::apply(svg, topology, trace, config);
     timing_overlay::apply(svg, topology, trace, config)
 }
 
@@ -52,7 +53,7 @@ fn production_base_suppresses_only_legacy_semantic_activity() {
 #[test]
 fn complete_native_overlay_pipeline_is_native_only_without_materialization() {
     let topology = build_topology();
-    let trace = Machine::run_match("f3-native-pipeline", 120);
+    let trace = Machine::run_match("f3-native-pipeline", 5000);
     let config = RenderConfig::default();
 
     assert!(!trace.micro_cycles.is_empty());
@@ -66,6 +67,10 @@ fn complete_native_overlay_pipeline_is_native_only_without_materialization() {
     assert!(!trace.pc_events.is_empty());
     assert!(!trace.sp_events.is_empty());
     assert!(!trace.shift_register_events.is_empty());
+    assert!(trace
+        .frames
+        .iter()
+        .any(|frame| frame.enemy_shots.iter().flatten().count() >= 2));
 
     let base = render_native_base(&topology, &trace, config);
     let baseline = apply_native_pipeline(base.clone(), &topology, &trace, config);
@@ -81,4 +86,10 @@ fn complete_native_overlay_pipeline_is_native_only_without_materialization() {
     assert!(baseline.contains("data-cadence-divisor=\"3\""));
     assert!(baseline.contains("data-cadence-tick=\"1\""));
     assert!(baseline.contains("data-cadence-tick=\"0\""));
+    assert!(baseline.contains("id=\"m3-enemy-shot-bank\""));
+    assert!(baseline.contains("data-enemy-shot-slot=\"0\""));
+    assert!(baseline.contains("data-enemy-shot-slot=\"1\""));
+    assert!(baseline.contains("data-enemy-shot-slot=\"2\""));
+    assert!(baseline.contains("data-enemy-shot-active-count=\"2\"")
+        || baseline.contains("data-enemy-shot-active-count=\"3\""));
 }
