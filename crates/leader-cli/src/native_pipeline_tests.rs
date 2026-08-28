@@ -2,8 +2,8 @@ use leader_core::{build_topology, Machine};
 use leader_svg::{render, RenderConfig};
 
 use crate::{
-    control_word_overlay, decoder_overlay, director, microcode_overlay, pc_overlay, stack_overlay,
-    timing_overlay,
+    control_word_overlay, decoder_overlay, director, microcode_overlay, pc_overlay,
+    render_native_base, stack_overlay, timing_overlay,
 };
 
 fn apply_f3_pipeline(
@@ -22,15 +22,30 @@ fn apply_f3_pipeline(
 }
 
 #[test]
+fn production_base_suppresses_only_legacy_semantic_activity() {
+    let topology = build_topology();
+    let trace = Machine::run_match("f3-native-base", 120);
+    let config = RenderConfig::default();
+
+    let with_legacy_activity = render(&topology, &trace, config);
+    let production_base = render_native_base(&topology, &trace, config);
+
+    let mut explicit_native_base = trace.clone();
+    explicit_native_base.micro_samples.clear();
+    let expected = render(&topology, &explicit_native_base, config);
+
+    assert_eq!(production_base, expected);
+    assert_ne!(production_base, with_legacy_activity);
+    assert!(production_base.contains("GAME CLEAR") || production_base.contains("TRACE LIMIT"));
+}
+
+#[test]
 fn complete_f3_overlay_pipeline_is_native_only() {
     let topology = build_topology();
     let trace = Machine::run_match("f3-native-pipeline", 120);
     let config = RenderConfig::default();
 
-    // The base artifact is intentionally rendered once from the complete trace.
-    // This test isolates the F3 overlay stack from leader-svg's legacy coarse
-    // activity layer and verifies that every high-fidelity overlay is native-only.
-    let base = render(&topology, &trace, config);
+    let base = render_native_base(&topology, &trace, config);
     let baseline = apply_f3_pipeline(base.clone(), &topology, &trace, config);
 
     let mut native_only = trace.clone();
