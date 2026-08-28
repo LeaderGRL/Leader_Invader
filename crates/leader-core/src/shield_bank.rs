@@ -1,10 +1,11 @@
+pub use crate::memory_map::SHIELD_RAM_BASE;
+
 pub const SHIELD_COUNT: usize = 4;
 pub const SHIELD_W: usize = 16;
 pub const SHIELD_H: usize = 8;
 pub const SHIELD_BYTES_PER_ROW: usize = SHIELD_W / 8;
 pub const SHIELD_BYTES_PER: usize = SHIELD_BYTES_PER_ROW * SHIELD_H;
 pub const SHIELD_TOTAL_BYTES: usize = SHIELD_COUNT * SHIELD_BYTES_PER;
-pub const SHIELD_RAM_BASE: u16 = crate::program::RAM_BASE + 0x40;
 pub const SHIELD_Y: i16 = 69;
 pub const SHIELD_X: [i16; SHIELD_COUNT] = [7, 38, 70, 101];
 
@@ -171,9 +172,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shield_ram_window_is_reserved_after_game_state() {
-        assert_eq!(SHIELD_RAM_BASE, crate::program::RAM_BASE + 0x40);
-        assert!(SHIELD_RAM_BASE + SHIELD_TOTAL_BYTES as u16 <= crate::program::RAM_BASE + 0x100);
+    fn shield_ram_window_is_canonical_memory_map_region() {
+        assert_eq!(SHIELD_RAM_BASE, crate::memory_map::SHIELD_RAM_REGION.start);
+        assert_eq!(
+            SHIELD_RAM_BASE + SHIELD_TOTAL_BYTES as u16 - 1,
+            crate::memory_map::SHIELD_RAM_REGION.end
+        );
     }
 
     #[test]
