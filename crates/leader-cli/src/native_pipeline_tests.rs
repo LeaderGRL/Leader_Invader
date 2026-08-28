@@ -1,4 +1,4 @@
-use leader_core::{build_topology, materialize_sp_events, Machine};
+use leader_core::{build_topology, Machine};
 use leader_svg::{render, RenderConfig};
 
 use crate::{
@@ -31,8 +31,7 @@ fn apply_f3_pipeline(
 #[test]
 fn production_base_suppresses_only_legacy_semantic_activity() {
     let topology = build_topology();
-    let mut trace = Machine::run_match("f3-native-base", 120);
-    materialize_sp_events(&mut trace);
+    let trace = Machine::run_match("f3-native-base", 120);
     let config = RenderConfig::default();
 
     let with_legacy_activity = render(&topology, &trace, config);
@@ -48,17 +47,23 @@ fn production_base_suppresses_only_legacy_semantic_activity() {
 }
 
 #[test]
-fn complete_f3_overlay_pipeline_is_native_only() {
+fn complete_f3_overlay_pipeline_is_native_only_without_materialization() {
     let topology = build_topology();
-    let mut trace = Machine::run_match("f3-native-pipeline", 120);
-    materialize_sp_events(&mut trace);
+    let trace = Machine::run_match("f3-native-pipeline", 120);
     let config = RenderConfig::default();
+
+    assert!(!trace.micro_cycles.is_empty());
+    assert!(!trace.micro_addresses.is_empty());
+    assert!(!trace.bus_transactions.is_empty());
+    assert!(!trace.alu_events.is_empty());
+    assert!(!trace.flag_events.is_empty());
+    assert!(!trace.control_latch_events.is_empty());
+    assert!(!trace.register_writes.is_empty());
+    assert!(!trace.pc_events.is_empty());
+    assert!(!trace.sp_events.is_empty());
 
     let base = render_native_base(&topology, &trace, config);
     let baseline = apply_f3_pipeline(base.clone(), &topology, &trace, config);
-
-    assert!(!trace.flag_events.is_empty());
-    assert!(!trace.sp_events.is_empty());
 
     let mut native_only = trace.clone();
     native_only.micro_samples.clear();
