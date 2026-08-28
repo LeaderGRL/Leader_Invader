@@ -16,7 +16,7 @@ The README asset is **not a prerecorded GIF and not JavaScript hidden in an SVG*
 2. **Deterministic replay.** Same source + same seed = equivalent simulation semantics.
 3. **GitHub-safe output.** No JavaScript, no event handlers, no remote runtime dependency.
 4. **One engine, two views.** The README is the cinematic replay; a later WASM frontend can expose pan/zoom/inspection over the same core.
-5. **Physical control authority.** Visible F3 control paths must authorize the real architectural mutation, not merely describe it afterward.
+5. **Physical control authority.** Visible F3 control paths authorize the real architectural mutation, rather than describing it afterward.
 
 ## Repository layout
 
@@ -56,13 +56,13 @@ The autonomous game loop lives in assembled ROM bytecode. The CPU owns PC, SP, r
 
 The game state is mirrored through work RAM and rendered into a real 128×96 one-bit VRAM buffer. Input, game-device commands and scanout are memory-mapped hardware interfaces controlled by the ROM program.
 
-### F3 — physical datapath authority: advanced
+### F3 — physical datapath authority: complete
 
 The machine includes a real microsequencer, native T0/T1/T2 cycles and a physical `256 × 24` control-ROM representation.
 
 The complete 24-bit word is materialized as **24 distinct visible output lines**: eight external controls plus sixteen internal enables for MAR/MDR/IR, PC increment, operand/op/flag latches, target-address and condition state, PC/register selection, bus enables and architectural commit. Each output is wired to a physical consumer in the topology.
 
-Visible state now includes dedicated `ADDR LO`, `ADDR HI`, `COND`, `PC SEL`, `REG SEL` latches and a combinational `RETURN BYTE` mux for CALL/RET.
+Visible state includes dedicated `ADDR LO`, `ADDR HI`, `COND`, `PC SEL`, `REG SEL` latches and a combinational `RETURN BYTE` mux for CALL/RET.
 
 Critical causal paths include:
 
@@ -77,18 +77,21 @@ Critical causal paths include:
 - RET bytes restored from the stack through the address latches into the PC;
 - compact LDI/ADDI execution through the same physical latch discipline.
 
-Tests intentionally select incorrect microcode rows or corrupt native trace data and prove forbidden latches, commits or return paths cannot silently succeed.
+Tests intentionally select incorrect microcode rows, remove physical enables, corrupt native values and break return bytes. Forbidden latches, commits, PC/SP mutations or return paths must fail validation instead of being represented as plausible activity.
 
 ## Native replay streams
 
-`MatchTrace` records dedicated native streams for:
+`MatchTrace` records dedicated first-class streams for:
 
 - CPU microcycles and IR decode latches;
 - µPC transitions with the complete 24-bit control word;
 - bus ownership and transactions;
 - exact ALU operations and carry chains;
+- exact architectural flag values;
+- exact `ADDR LO` / `ADDR HI` / `COND` / `PC SEL` / `REG SEL` latch values;
 - register writes;
 - PC increments and loads;
+- SP PUSH/POP mutations with the exact 16-bit ripple chain;
 - deterministic frame/game state.
 
 The production SVG adds inspectable metadata directly to native overlays:
@@ -96,16 +99,17 @@ The production SVG adds inspectable metadata directly to native overlays:
 - PC before/after/source/carry;
 - opcode and one-hot decode selection;
 - full packed 24-bit control word;
-- control-state latch activity;
+- control-state latch kind/value/validity;
 - T-state plus PC/MAR/MDR/IR snapshots;
 - ALU operands/result/carry chain;
+- exact Z/C/L flag state;
 - register write before/after values;
 - bus owner/address/data/control;
-- SP before/after plus stack address/value.
+- SP before/after, ripple chain, stack address and value.
 
-`MicroSample` remains in the trace format only for historical compatibility. **Production rendering clears `micro_samples` before the base SVG is generated**, so the old coarse semantic activity layer is not present in `generated/Leader.svg`.
+`MicroSample` and bus-derived stack reconstruction remain available only as historical library fallbacks for old traces. **Production `render`, `trace` and `stats` do not invoke those fallbacks.** `Machine::run_match()` already returns every first-class stream required by the F3 pipeline.
 
-The complete F3 overlay pipeline is tested byte-for-byte with and without `micro_samples` and must remain identical.
+The base SVG suppresses the historical `MicroSample` activity layer, and the complete F3 overlay pipeline is tested byte-for-byte after `trace.micro_samples.clear()`.
 
 ## Production contracts
 
@@ -114,7 +118,11 @@ Before `Leader.svg` can be written, the CLI validates:
 - final topology closure, unique node/link IDs and group containment;
 - all 24 µROM outputs and their physical wiring;
 - every traced µROM word against `control_word_at(µADDR, opcode).bits24()`;
-- native decode/ALU/register/PC/bus mutations against the required control enables;
+- native decode against `IR_LOAD`;
+- native ALU/flags/control-latch/register mutations against their physical enables;
+- every ripple PC increment against `PC_INC`;
+- every selected PC load against `PCLD + ARCH_COMMIT`;
+- every native SP PUSH/POP against `STACK` and its exact stack bus transaction;
 - CPU fetch/read/write transactions against their shared micro-routine rows;
 - CALL/RET stack bytes against the real PC return stream;
 - presence of all required native SVG overlays and metadata families;
@@ -122,7 +130,7 @@ Before `Leader.svg` can be written, the CLI validates:
 - declarative-only SVG safety;
 - a production SVG size budget of **5,000,000 bytes**.
 
-The current replay remains below that budget while retaining the detailed inspectable hardware paths.
+The current replay is roughly **3.3 MB**, leaving substantial headroom while retaining detailed inspectable hardware paths.
 
 ## Determinism and validation
 
@@ -134,10 +142,10 @@ Every code change is validated with:
 Rust workspace tests
 Clippy
 full deterministic smoke render
-native trace / topology / CALL stack contracts
+native control / SP / topology / CALL stack contracts
 native SVG contract
 SVG safety/XML validation
 full match completion
 ```
 
-See [Architecture](docs/ARCHITECTURE.md) for the causal model and [Roadmap](docs/ROADMAP.md) for the remaining work.
+See [Architecture](docs/ARCHITECTURE.md) for the causal model and [Roadmap](docs/ROADMAP.md) for the next hardware layers.
