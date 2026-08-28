@@ -12,6 +12,7 @@ mod microcycle_overlay;
 mod native_pipeline_tests;
 mod pc_overlay;
 mod register_overlay;
+mod render_contract;
 mod stack_overlay;
 mod timing_overlay;
 
@@ -76,9 +77,6 @@ fn render_native_base(
     trace: &MatchTrace,
     config: RenderConfig,
 ) -> String {
-    // `leader-svg` still contains the historical coarse MicroSample activity
-    // renderer for backward-compatible library callers. Production F3 rendering
-    // deliberately suppresses only that layer, then adds native overlays below.
     let mut native_base = trace.clone();
     native_base.micro_samples.clear();
     render(topology, &native_base, config)
@@ -113,17 +111,20 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let svg = bus_overlay::apply(svg, &topology, &trace, config);
     let svg = stack_overlay::apply(svg, &topology, &trace, config);
     let svg = timing_overlay::apply(svg, &topology, &trace, config);
+    let svg_validation = render_contract::validate_native_svg_contract(&svg)
+        .map_err(|error| format!("native SVG contract invalid: {error}"))?;
     write(&options.output, svg.as_bytes())?;
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
     println!(
-        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} CALL pairs -> {}",
+        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} CALL pairs / {} native overlays -> {}",
         topology.nodes.len(),
         topology.links.len(),
         trace.total_frames,
         trace.kills.len(),
         validation.micro_words,
         call_stack.call_pairs,
+        svg_validation.overlay_groups,
         options.output.display()
     );
     Ok(())
