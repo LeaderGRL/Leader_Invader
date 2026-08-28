@@ -81,6 +81,24 @@ pub struct AluEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlagEvent {
+    pub frame: u32,
+    pub ordinal: u16,
+    pub pc: u16,
+    pub zero: bool,
+    pub carry: bool,
+    pub less: bool,
+    pub control: &'static str,
+}
+
+impl FlagEvent {
+    #[must_use]
+    pub const fn packed(self) -> u8 {
+        (self.zero as u8) | ((self.carry as u8) << 1) | ((self.less as u8) << 2)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegisterWriteEvent {
     pub frame: u32,
     pub ordinal: u16,
@@ -307,6 +325,7 @@ pub struct MatchTrace {
     pub micro_addresses: Vec<MicroAddressEvent>,
     pub bus_transactions: Vec<BusTransactionEvent>,
     pub alu_events: Vec<AluEvent>,
+    pub flag_events: Vec<FlagEvent>,
     pub register_writes: Vec<RegisterWriteEvent>,
     pub pc_events: Vec<PcEvent>,
     pub sp_events: Vec<SpEvent>,
@@ -329,6 +348,7 @@ impl MatchTrace {
             micro_addresses: Vec::new(),
             bus_transactions: Vec::new(),
             alu_events: Vec::new(),
+            flag_events: Vec::new(),
             register_writes: Vec::new(),
             pc_events: Vec::new(),
             sp_events: Vec::new(),
@@ -424,6 +444,14 @@ impl MatchTrace {
                 out.push(',');
             }
             let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"pc\":{},\"op\":\"{}\",\"lhs\":{},\"rhs\":{},\"rhs_effective\":{},\"result\":{},\"carry_chain\":{},\"control\":\"{}\"}}", event.frame, event.ordinal, event.pc, event.trace.op.as_str(), event.trace.lhs, event.trace.rhs, event.trace.rhs_effective, event.trace.result, event.trace.carry_chain, event.control);
+        }
+
+        out.push_str("\n  ],\n  \"flag_events\": [");
+        for (index, event) in self.flag_events.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            let _ = write!(out, "\n    {{\"frame\":{},\"ordinal\":{},\"pc\":{},\"zero\":{},\"carry\":{},\"less\":{},\"packed\":{},\"control\":\"{}\"}}", event.frame, event.ordinal, event.pc, event.zero, event.carry, event.less, event.packed(), event.control);
         }
 
         out.push_str("\n  ],\n  \"register_writes\": [");
