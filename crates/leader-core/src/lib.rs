@@ -74,6 +74,25 @@ pub use trace::{
 };
 pub use trace_validation::{validate_native_control_authority, NativeTraceValidation};
 
+impl PartialEq for FrameState {
+    fn eq(&self, other: &Self) -> bool {
+        self.frame == other.frame
+            && self.player_x == other.player_x
+            && self.fleet_x == other.fleet_x
+            && self.fleet_y == other.fleet_y
+            && self.fleet_dir == other.fleet_dir
+            && self.player_shot == other.player_shot
+            && self.enemy_shots == other.enemy_shots
+            && self.alive_rows == other.alive_rows
+            && self.score == other.score
+            && self.lives == other.lives
+            && self.pc == other.pc
+            && self.vram_checksum == other.vram_checksum
+    }
+}
+
+impl Eq for FrameState {}
+
 #[must_use]
 pub fn build_topology() -> Topology {
     let mut topology = topology::build_topology();
