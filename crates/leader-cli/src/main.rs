@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod control_word_overlay;
 mod decoder_overlay;
 mod director;
 mod microcode_overlay;
@@ -76,6 +77,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let svg = pc_overlay::apply(svg, &topology, &trace, config);
     let svg = decoder_overlay::apply(svg, &topology, &trace, config);
     let svg = microcode_overlay::apply(svg, &topology, &trace, config);
+    let svg = control_word_overlay::apply(svg, &topology, &trace, config);
     let svg = stack_overlay::apply(svg, &topology, &trace, config);
     let svg = timing_overlay::apply(svg, &topology, &trace, config);
     write(&options.output, svg.as_bytes())?;
@@ -129,6 +131,9 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     println!("trace.native_verified_alu_events={}", validation.alu_events);
     println!("trace.native_verified_register_writes={}", validation.register_writes);
     println!("trace.native_verified_pc_loads={}", validation.pc_loads);
+    println!("trace.native_verified_rom_fetches={}", validation.rom_fetches);
+    println!("trace.native_verified_cpu_reads={}", validation.cpu_reads);
+    println!("trace.native_verified_cpu_writes={}", validation.cpu_writes);
     println!("trace.kills={}", trace.kills.len());
     println!("trace.finished={}", trace.finished);
     println!("trace.final_score={}", trace.final_score);
