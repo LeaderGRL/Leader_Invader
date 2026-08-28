@@ -27,7 +27,7 @@ const REQUIRED_GROUPS: [&str; 16] = [
     "f3-timing",
 ];
 
-const REQUIRED_METADATA: [&str; 36] = [
+const REQUIRED_METADATA: [&str; 38] = [
     "data-pc-before=",
     "data-opcode=",
     "data-ucontrol=",
@@ -42,6 +42,8 @@ const REQUIRED_METADATA: [&str; 36] = [
     "data-reg-before=",
     "data-bus-address-source=",
     "data-bus-memory-owner=",
+    "data-bus-mmio-port=",
+    "data-bus-mmio-access=",
     "data-sp-before=",
     "data-sp-chain=",
     "data-cadence-alive=",
@@ -66,7 +68,7 @@ const REQUIRED_METADATA: [&str; 36] = [
     "data-shield-source=",
 ];
 
-const REQUIRED_BUS_COVERAGE: [&str; 19] = [
+const REQUIRED_BUS_COVERAGE: [&str; 29] = [
     "data-bus-memory-owner=\"rom\"",
     "data-bus-memory-owner=\"ram\"",
     "data-bus-memory-owner=\"vram\"",
@@ -86,6 +88,16 @@ const REQUIRED_BUS_COVERAGE: [&str; 19] = [
     "data-bus-data-source=\"vram\"",
     "data-bus-data-source=\"cpu\"",
     "data-bus-data-source=\"device\"",
+    "data-bus-mmio-port=\"input\"",
+    "data-bus-mmio-port=\"shift_data\"",
+    "data-bus-mmio-port=\"shift_offset\"",
+    "data-bus-mmio-port=\"shift_result\"",
+    "data-bus-mmio-port=\"device_cmd\"",
+    "data-bus-mmio-port=\"device_status\"",
+    "data-bus-mmio-access=\"input_only\"",
+    "data-bus-mmio-access=\"read_only\"",
+    "data-bus-mmio-access=\"write_only\"",
+    "data-bus-mmio-access=\"read_write\"",
 ];
 
 pub fn validate_native_svg_contract(svg: &str) -> Result<NativeSvgValidation, String> {
