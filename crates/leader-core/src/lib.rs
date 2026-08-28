@@ -16,6 +16,7 @@ pub mod isa;
 pub mod layout;
 pub mod logic;
 pub mod machine;
+pub mod memory_map;
 pub mod microcode;
 pub mod pc_datapath;
 pub mod program;
@@ -46,9 +47,7 @@ pub use datapath::{
 };
 pub use decoder_datapath::{derive_decoder_datapath, DecoderDatapathEvent};
 pub use enemy_shot_bank::{EnemyShotBank, ENEMY_SHOT_SLOTS};
-pub use enemy_shot_contract::{
-    enemy_shot_ram, validate_enemy_shot_bank_contract, EnemyShotValidation, ENEMY_SHOT_RAM_BASE,
-};
+pub use enemy_shot_contract::{enemy_shot_ram, validate_enemy_shot_bank_contract, EnemyShotValidation};
 pub use enemy_shot_layout::ENEMY_SHOT_NODES;
 pub use formation_cadence::{FormationCadence, FormationCadenceEvent};
 pub use formation_cadence_contract::{
@@ -61,6 +60,13 @@ pub use logic::{
     Decrement16Trace, PcIncrementTrace,
 };
 pub use machine::Machine;
+pub use memory_map::{
+    owner as memory_owner, MemoryOwner, MemoryRegion, DEVICE_ARG0, DEVICE_ARG1, DEVICE_CMD,
+    DEVICE_STATUS, ENEMY_SHOT_RAM_BASE, ENEMY_SHOT_RAM_REGION, FRAMEBUFFER_BYTES, INPUT_PORT,
+    MMIO_BASE, MMIO_END, MMIO_REGION, RAM_BASE, RAM_END, RAM_REGION, ROM_BASE, ROM_CAPACITY,
+    ROM_END, ROM_REGION, SHIFT_DATA, SHIFT_OFFSET, SHIFT_RESULT, SHIELD_RAM_BASE,
+    SHIELD_RAM_REGION, STACK_BASE, STACK_END, STACK_REGION, VRAM_BASE, VRAM_END, VRAM_REGION,
+};
 pub use microcode::{
     control_word, control_word_at, decode as decode_microcode, execute_address,
     execute_control_step, execute_row_kind, execute_step_address, opcode_slot, uaddr, ControlWord,
@@ -71,8 +77,8 @@ pub use pc_datapath::{derive_pc_datapath, PcDatapathEvent, PcDatapathKind};
 pub use shield_bank::{
     bit_address as shield_bit_address, bit_mask as shield_bit_mask,
     byte_offset as shield_byte_offset, locate_world as locate_shield_world, ShieldBank, ShieldDamage,
-    SHIELD_BYTES_PER, SHIELD_BYTES_PER_ROW, SHIELD_COUNT, SHIELD_H, SHIELD_RAM_BASE,
-    SHIELD_TOTAL_BYTES, SHIELD_W, SHIELD_X, SHIELD_Y,
+    SHIELD_BYTES_PER, SHIELD_BYTES_PER_ROW, SHIELD_COUNT, SHIELD_H, SHIELD_TOTAL_BYTES, SHIELD_W,
+    SHIELD_X, SHIELD_Y,
 };
 pub use shield_contract::{validate_shield_bank_contract, ShieldValidation};
 pub use shield_layout::SHIELD_NODES;
