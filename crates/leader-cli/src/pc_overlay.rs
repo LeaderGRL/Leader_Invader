@@ -1,4 +1,4 @@
-use leader_core::{derive_pc_datapath, bit16, MatchTrace, PcDatapathKind, PcSource, Topology};
+use leader_core::{bit16, derive_pc_datapath, MatchTrace, PcDatapathKind, PcSource, Topology};
 use leader_svg::RenderConfig;
 
 #[must_use]
@@ -33,8 +33,6 @@ fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> Stri
         pulse_group(&mut out, moment, total, |out| match event.kind {
             PcDatapathKind::Increment(increment) => {
                 glow_node(out, topology, "pcIncLo", "#67d9b3");
-                // A carry out of the low byte is the physically interesting boundary
-                // shown by the dedicated CARRY node and high-byte incrementer.
                 if increment.low_byte_carry() {
                     glow_node(out, topology, "pcCarry", "#ffe16a");
                     glow_node(out, topology, "pcIncHi", "#67d9b3");
@@ -119,5 +117,15 @@ mod tests {
         let rendered = render(&topology, &trace, RenderConfig::default());
         assert!(rendered.contains("id=\"f3-pc\""));
         assert!(rendered.len() > 1000);
+    }
+
+    #[test]
+    fn pc_overlay_does_not_depend_on_semantic_samples() {
+        let topology = build_topology();
+        let mut trace = Machine::run_match("pc-overlay-native-only", 5000);
+        let config = RenderConfig::default();
+        let baseline = render(&topology, &trace, config);
+        trace.micro_samples.clear();
+        assert_eq!(render(&topology, &trace, config), baseline);
     }
 }
