@@ -7,7 +7,7 @@ pub struct NativeSvgValidation {
 
 pub const MAX_NATIVE_SVG_BYTES: usize = 5_000_000;
 
-const REQUIRED_GROUPS: [&str; 13] = [
+const REQUIRED_GROUPS: [&str; 14] = [
     "f3-pc",
     "f3-native-decoder",
     "f3-microcode",
@@ -19,11 +19,12 @@ const REQUIRED_GROUPS: [&str; 13] = [
     "f3-native-registers",
     "f3-native-bus",
     "f3-stack",
+    "m3-formation-cadence",
     "m3-shift-register",
     "f3-timing",
 ];
 
-const REQUIRED_METADATA: [&str; 19] = [
+const REQUIRED_METADATA: [&str; 23] = [
     "data-pc-before=",
     "data-opcode=",
     "data-ucontrol=",
@@ -39,6 +40,10 @@ const REQUIRED_METADATA: [&str; 19] = [
     "data-bus-address-source=",
     "data-sp-before=",
     "data-sp-chain=",
+    "data-cadence-alive=",
+    "data-cadence-divisor=",
+    "data-cadence-counter=",
+    "data-cadence-tick=",
     "data-shift-kind=",
     "data-shift-state=",
     "data-shift-offset=",
