@@ -1,5 +1,6 @@
 use crate::{
-    control_word_at, microcode::internal, MatchTrace, MicroCycleKind, PcEventKind,
+    control_word_at, microcode::decode as decode_microcode, microcode::internal, MatchTrace,
+    MicroCycleKind, PcEventKind,
 };
 
 const REGW_BIT: u32 = 1 << 0;
@@ -32,10 +33,12 @@ pub fn validate_native_control_authority(
         .iter()
         .filter(|event| event.kind == MicroCycleKind::DecodeLatch)
     {
-        require_micro_word(
+        require_micro_authority(
             trace,
             cycle.frame,
             cycle.ordinal,
+            0,
+            None,
             |bits| internal_on(bits, internal::IR_LOAD),
             "IR_LOAD for native DecodeLatch",
         )?;
@@ -43,10 +46,12 @@ pub fn validate_native_control_authority(
     }
 
     for event in &trace.alu_events {
-        require_micro_word(
+        require_micro_authority(
             trace,
             event.frame,
             event.ordinal,
+            0,
+            Some(event.control),
             |bits| bits & ALU_BIT != 0,
             "ALU enable for native AluEvent",
         )?;
@@ -54,10 +59,14 @@ pub fn validate_native_control_authority(
     }
 
     for event in &trace.register_writes {
-        require_micro_word(
+        // Register write-back follows the ALU trace sample, so its local ordinal
+        // is one step after the execute row that carries REGW + ARCH_COMMIT.
+        require_micro_authority(
             trace,
             event.frame,
             event.ordinal,
+            1,
+            Some(event.control),
             |bits| bits & REGW_BIT != 0 && internal_on(bits, internal::ARCH_COMMIT),
             "REGW + ARCH_COMMIT for native RegisterWriteEvent",
         )?;
@@ -65,13 +74,15 @@ pub fn validate_native_control_authority(
     }
 
     for event in &trace.pc_events {
-        let PcEventKind::Load { .. } = event.kind else {
+        let PcEventKind::Load { control, .. } = event.kind else {
             continue;
         };
-        require_micro_word(
+        require_micro_authority(
             trace,
             event.frame,
             event.ordinal,
+            0,
+            Some(control),
             |bits| bits & PCLD_BIT != 0 && internal_on(bits, internal::ARCH_COMMIT),
             "PCLD + ARCH_COMMIT for native PcEvent::Load",
         )?;
@@ -113,10 +124,12 @@ pub fn validate_native_control_authority(
     Ok(validated)
 }
 
-fn require_micro_word<F>(
+fn require_micro_authority<F>(
     trace: &MatchTrace,
     frame: u32,
     ordinal: u16,
+    max_ordinal_gap: u16,
+    control: Option<&str>,
     predicate: F,
     authority: &str,
 ) -> Result<(), String>
@@ -126,7 +139,14 @@ where
     let candidates = trace
         .micro_addresses
         .iter()
-        .filter(|event| event.frame == frame && event.ordinal == ordinal)
+        .filter(|event| event.frame == frame)
+        .filter(|event| event.ordinal.abs_diff(ordinal) <= max_ordinal_gap)
+        .filter(|event| {
+            control.is_none_or(|expected| {
+                decode_microcode(event.opcode)
+                    .is_some_and(|instruction| instruction.mnemonic == expected)
+            })
+        })
         .collect::<Vec<_>>();
 
     if candidates.iter().any(|event| predicate(event.control_bits)) {
@@ -135,11 +155,16 @@ where
 
     let observed = candidates
         .iter()
-        .map(|event| format!("{:02X}:{:06X}", event.address, event.control_bits))
+        .map(|event| {
+            format!(
+                "{:02X}/{:02X}:{:06X}",
+                event.opcode, event.address, event.control_bits
+            )
+        })
         .collect::<Vec<_>>()
         .join(",");
     Err(format!(
-        "missing {authority} at frame={frame} ordinal={ordinal}; micro_words=[{observed}]"
+        "missing {authority} near frame={frame} ordinal={ordinal} gap={max_ordinal_gap}; micro_words=[{observed}]"
     ))
 }
 
@@ -153,7 +178,7 @@ mod tests {
     use crate::Machine;
 
     #[test]
-    fn native_events_have_same_tick_microcode_authority() {
+    fn native_events_have_local_microcode_authority() {
         let trace = Machine::run_match("f3-native-authority", 120);
         let validation = validate_native_control_authority(&trace).expect("valid F3 trace");
         assert!(validation.micro_words > 0);
@@ -166,14 +191,16 @@ mod tests {
     #[test]
     fn removing_commit_authority_is_detected() {
         let mut trace = Machine::run_match("f3-authority-negative", 120);
-        let register = trace.register_writes.first().expect("register write");
-        let event = trace
-            .micro_addresses
-            .iter_mut()
-            .find(|event| event.frame == register.frame && event.ordinal == register.ordinal)
-            .expect("matching micro word");
-        event.control_bits &= !REGW_BIT;
-        event.control_bits &= !((internal::ARCH_COMMIT as u32) << 8);
+        let register = trace.register_writes.first().expect("register write").clone();
+        for event in trace.micro_addresses.iter_mut().filter(|event| {
+            event.frame == register.frame
+                && event.ordinal.abs_diff(register.ordinal) <= 1
+                && decode_microcode(event.opcode)
+                    .is_some_and(|instruction| instruction.mnemonic == register.control)
+        }) {
+            event.control_bits &= !REGW_BIT;
+            event.control_bits &= !((internal::ARCH_COMMIT as u32) << 8);
+        }
         let error = validate_native_control_authority(&trace).expect_err("authority corruption must fail");
         assert!(error.contains("REGW + ARCH_COMMIT"));
     }
