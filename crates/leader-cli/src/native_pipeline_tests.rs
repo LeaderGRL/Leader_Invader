@@ -1,9 +1,9 @@
-use leader_core::{build_topology, Machine};
+use leader_core::{build_topology, materialize_sp_events, Machine};
 use leader_svg::{render, RenderConfig};
 
 use crate::{
     alu_overlay, bus_overlay, control_state_overlay, control_word_overlay, decoder_overlay,
-    director, microcode_overlay, microcycle_overlay, pc_overlay, register_overlay,
+    director, flags_overlay, microcode_overlay, microcycle_overlay, pc_overlay, register_overlay,
     render_native_base, stack_overlay, timing_overlay,
 };
 
@@ -21,6 +21,7 @@ fn apply_f3_pipeline(
     let svg = control_state_overlay::apply(svg, topology, trace, config);
     let svg = microcycle_overlay::apply(svg, topology, trace, config);
     let svg = alu_overlay::apply(svg, topology, trace, config);
+    let svg = flags_overlay::apply(svg, topology, trace, config);
     let svg = register_overlay::apply(svg, topology, trace, config);
     let svg = bus_overlay::apply(svg, topology, trace, config);
     let svg = stack_overlay::apply(svg, topology, trace, config);
@@ -30,7 +31,8 @@ fn apply_f3_pipeline(
 #[test]
 fn production_base_suppresses_only_legacy_semantic_activity() {
     let topology = build_topology();
-    let trace = Machine::run_match("f3-native-base", 120);
+    let mut trace = Machine::run_match("f3-native-base", 120);
+    materialize_sp_events(&mut trace);
     let config = RenderConfig::default();
 
     let with_legacy_activity = render(&topology, &trace, config);
@@ -48,11 +50,15 @@ fn production_base_suppresses_only_legacy_semantic_activity() {
 #[test]
 fn complete_f3_overlay_pipeline_is_native_only() {
     let topology = build_topology();
-    let trace = Machine::run_match("f3-native-pipeline", 120);
+    let mut trace = Machine::run_match("f3-native-pipeline", 120);
+    materialize_sp_events(&mut trace);
     let config = RenderConfig::default();
 
     let base = render_native_base(&topology, &trace, config);
     let baseline = apply_f3_pipeline(base.clone(), &topology, &trace, config);
+
+    assert!(!trace.flag_events.is_empty());
+    assert!(!trace.sp_events.is_empty());
 
     let mut native_only = trace.clone();
     native_only.micro_samples.clear();
