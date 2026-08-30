@@ -35,6 +35,7 @@ pub mod topology_contract;
 pub mod trace;
 pub mod trace_validation;
 pub mod video_pipeline_contract;
+pub mod video_timing;
 
 pub use call_stack_contract::{validate_call_stack_contract, CallStackValidation};
 pub use control_contract::{
@@ -101,6 +102,10 @@ pub use trace::{
 };
 pub use trace_validation::{validate_native_control_authority, NativeTraceValidation};
 pub use video_pipeline_contract::{validate_video_pipeline_contract, VideoPipelineValidation};
+pub use video_timing::{
+    VBlankAckEvent, VideoScanEvent, VideoTiming, H_BACK_PORCH, H_FRONT_PORCH, H_SYNC, H_TOTAL,
+    H_VISIBLE, V_BACK_PORCH, V_FRONT_PORCH, V_SYNC, V_TOTAL, V_VISIBLE,
+};
 
 impl PartialEq for FrameState {
     fn eq(&self, other: &Self) -> bool {
