@@ -77,6 +77,8 @@ pub fn validate_final_topology(topology: &Topology) -> Result<TopologyValidation
         "scanShift",
         "hsync",
         "vsync",
+        "vblankLatch",
+        "vblankWaitGate",
         "display",
         "shiftHi",
         "shiftLo",
@@ -121,6 +123,11 @@ pub fn validate_final_topology(topology: &Topology) -> Result<TopologyValidation
         ("yCounter", "vsync"),
         ("hsync", "display"),
         ("vsync", "display"),
+        ("vsync", "vblankLatch"),
+        ("reset", "vblankLatch"),
+        ("vblankLatch", "vblankWaitGate"),
+        ("ctrlWait", "vblankWaitGate"),
+        ("vblankWaitGate", "irqLatch"),
     ] {
         if !topology
             .links
@@ -148,8 +155,8 @@ mod tests {
     fn final_runtime_topology_is_closed_unique_and_inside_groups() {
         let topology = build_topology();
         let validation = validate_final_topology(&topology).expect("valid final topology");
-        assert!(validation.nodes >= 458);
-        assert!(validation.links >= 520);
+        assert!(validation.nodes >= 466);
+        assert!(validation.links >= 534);
     }
 
     #[test]
@@ -184,5 +191,15 @@ mod tests {
             .retain(|link| !(link.from == "scanShift" && link.to == "display"));
         let error = validate_final_topology(&topology).expect_err("missing video path must fail");
         assert!(error.contains("scanShift -> display"));
+    }
+
+    #[test]
+    fn missing_vblank_wait_gate_path_is_detected() {
+        let mut topology = build_topology();
+        topology
+            .links
+            .retain(|link| !(link.from == "ctrlWait" && link.to == "vblankWaitGate"));
+        let error = validate_final_topology(&topology).expect_err("missing VBlank wait gate must fail");
+        assert!(error.contains("ctrlWait -> vblankWaitGate"));
     }
 }
