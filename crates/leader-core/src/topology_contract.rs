@@ -112,6 +112,27 @@ pub fn validate_final_topology(topology: &Topology) -> Result<TopologyValidation
         }
     }
 
+    for (from, to) in [
+        ("dmaAddr", "arb"),
+        ("dataBuf", "dmaData"),
+        ("pixelMux", "scanShift"),
+        ("scanShift", "display"),
+        ("xCounter", "hsync"),
+        ("yCounter", "vsync"),
+        ("hsync", "display"),
+        ("vsync", "display"),
+    ] {
+        if !topology
+            .links
+            .iter()
+            .any(|link| link.from == from && link.to == to)
+        {
+            return Err(format!(
+                "final topology missing required video path {from} -> {to}"
+            ));
+        }
+    }
+
     Ok(TopologyValidation {
         nodes: topology.nodes.len(),
         links: topology.links.len(),
@@ -153,5 +174,15 @@ mod tests {
         topology.nodes.retain(|node| node.id != "scanShift");
         let error = validate_final_topology(&topology).expect_err("missing video hardware must fail");
         assert!(error.contains("scanShift") || error.contains("missing target"));
+    }
+
+    #[test]
+    fn missing_video_pipeline_link_is_detected() {
+        let mut topology = build_topology();
+        topology
+            .links
+            .retain(|link| !(link.from == "scanShift" && link.to == "display"));
+        let error = validate_final_topology(&topology).expect_err("missing video path must fail");
+        assert!(error.contains("scanShift -> display"));
     }
 }
