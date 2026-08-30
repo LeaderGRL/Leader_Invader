@@ -1,12 +1,13 @@
 use std::collections::BTreeSet;
 
 use leader_core::{
-    execute_address, BusTransactionEvent, MatchTrace, MicroAddressEvent, Topology, VRAM_BASE,
+    execute_address, BusTransactionEvent, MatchTrace, MicroAddressEvent, Topology,
 };
 use leader_core::isa::op;
 use leader_svg::RenderConfig;
 
-const MAX_PER_STAGE: usize = 24;
+// Presentation density, not an artifact-size constraint. The native trace remains exhaustive.
+const MAX_PER_STAGE: usize = 256;
 const WAIT_BIT: u32 = 1 << 6;
 
 #[must_use]
@@ -53,7 +54,7 @@ fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> Stri
         .filter(|event| event.opcode == op::WAIT_VBLANK && event.address == wait_uaddr)
         .collect::<Vec<_>>();
 
-    let mut out = String::with_capacity(155_000);
+    let mut out = String::with_capacity(1_600_000);
     out.push_str("<g id=\"m3-video-pipeline\">\n");
 
     for index in sampled_positions(raster.len()) {
@@ -226,15 +227,17 @@ mod tests {
     }
 
     #[test]
-    fn each_video_stage_sampling_is_strictly_bounded() {
+    fn video_presentation_is_dense_and_keeps_full_timeline_extremes() {
         let trace = Machine::run_match("video-pipeline-sampling", 5000);
         let raster_count = trace
             .bus_transactions
             .iter()
             .filter(|event| event.control == "VRAM_RASTER_1536_BYTES")
             .count();
-        assert!(sampled_positions(raster_count).len() <= MAX_PER_STAGE);
-        assert_eq!(sampled_positions(500).first(), Some(&0));
-        assert_eq!(sampled_positions(500).last(), Some(&499));
+        let selected = sampled_positions(raster_count);
+        assert!(selected.len() <= MAX_PER_STAGE);
+        assert!(selected.len() >= 240, "full match should expose a dense video replay");
+        assert_eq!(selected.first(), Some(&0));
+        assert_eq!(selected.last(), Some(&(raster_count - 1)));
     }
 }
