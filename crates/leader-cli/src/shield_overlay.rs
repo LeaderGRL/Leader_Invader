@@ -1,12 +1,9 @@
-use std::collections::BTreeSet;
-
 use leader_core::{
     BusTransactionKind, MatchTrace, ShieldBank, Topology, SHIELD_BYTES_PER, SHIELD_COUNT, SHIELD_H,
     SHIELD_RAM_BASE, SHIELD_TOTAL_BYTES, SHIELD_W, SHIELD_X, SHIELD_Y,
 };
 use leader_svg::RenderConfig;
 
-const MAX_SHIELD_EVENTS: usize = 64;
 const SHIELD_PIXEL_COUNT: usize = SHIELD_COUNT * SHIELD_W * SHIELD_H;
 
 #[derive(Debug, Clone, Copy)]
@@ -44,15 +41,14 @@ pub fn apply(
 
 fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
     let events = derive_events(trace);
-    let selected = selected_indices(&events);
     let total = config.total();
-    let mut out = String::with_capacity(selected.len() * 1500 + 90_000);
+    let mut out = String::with_capacity(events.len() * 1500 + 90_000);
     out.push_str("<g id=\"m3-shield-bank\">\n");
 
     render_game_shields(&mut out, topology, trace, config, &events);
 
-    for index in selected {
-        let event = events[index];
+    // Shield damage is sparse enough to present exhaustively. There is no artifact-size sampling here.
+    for event in &events {
         let moment = trace_moment(event.frame, event.ordinal, trace, config);
         let k1 = norm(moment, total);
         let k2 = norm(moment + 0.020, total);
@@ -108,14 +104,14 @@ fn render_game_shields(
         "<g id=\"m3-shield-game\" transform=\"translate({sx:.1} {sy:.1}) scale({scale:.3})\" opacity=\"0\"><animate attributeName=\"opacity\" values=\"0;0;1;1;0;0\" keyTimes=\"0;{show1:.6};{show2:.6};{hide1:.6};{hide2:.6};1\" dur=\"{total:.3}s\" repeatCount=\"indefinite\"/>"
     ));
 
-    for shield in 0..SHIELD_COUNT {
+    for (shield, shield_x) in SHIELD_X.iter().copied().enumerate().take(SHIELD_COUNT) {
         for local_y in 0..SHIELD_H {
             for local_x in 0..SHIELD_W {
                 if !initial.pixel(shield, local_x, local_y) {
                     continue;
                 }
                 let index = pixel_index(shield, local_x, local_y);
-                let x = SHIELD_X[shield] + local_x as i16;
+                let x = shield_x + local_x as i16;
                 let y = SHIELD_Y + local_y as i16;
                 out.push_str(&format!(
                     "<rect data-shield-game-pixel=\"{shield}:{local_x}:{local_y}\" x=\"{x}\" y=\"{y}\" width=\"1\" height=\"1\" fill=\"#b7ff72\""
@@ -148,7 +144,9 @@ fn damage_times(events: &[ShieldVisualEvent]) -> [Option<(u32, u16)>; SHIELD_PIX
         let local_x = byte_col * 8 + bit_in_byte;
         if row < SHIELD_H && local_x < SHIELD_W {
             let index = pixel_index(event.shield, local_x, row);
-            times[index].get_or_insert((event.frame, event.ordinal));
+            if times[index].is_none() {
+                times[index] = Some((event.frame, event.ordinal));
+            }
         }
     }
     times
@@ -194,40 +192,6 @@ fn derive_events(trace: &MatchTrace) -> Vec<ShieldVisualEvent> {
         model[index] = after;
     }
     events
-}
-
-fn selected_indices(events: &[ShieldVisualEvent]) -> Vec<usize> {
-    if events.len() <= MAX_SHIELD_EVENTS {
-        return (0..events.len()).collect();
-    }
-
-    let mut selected = BTreeSet::new();
-    selected.insert(0usize);
-    selected.insert(events.len() - 1);
-
-    for shield in 0..SHIELD_COUNT {
-        if let Some(index) = events.iter().position(|event| event.shield == shield) {
-            selected.insert(index);
-        }
-    }
-    for source in ["player", "enemy"] {
-        if let Some(index) = events.iter().position(|event| event.source == source) {
-            selected.insert(index);
-        }
-    }
-
-    let remaining = MAX_SHIELD_EVENTS.saturating_sub(selected.len());
-    if remaining > 0 {
-        let stride = events.len().div_ceil(remaining).max(1);
-        for index in (0..events.len()).step_by(stride) {
-            if selected.len() >= MAX_SHIELD_EVENTS {
-                break;
-            }
-            selected.insert(index);
-        }
-    }
-
-    selected.into_iter().take(MAX_SHIELD_EVENTS).collect()
 }
 
 fn glow(topology: &Topology, out: &mut String, id: &str, color: &str) {
@@ -283,19 +247,14 @@ mod tests {
     }
 
     #[test]
-    fn shield_sampling_is_strictly_bounded_and_keeps_available_sources() {
-        let trace = Machine::run_match("m3-shield-sampling", 5000);
+    fn shield_presentation_is_exhaustive() {
+        let trace = Machine::run_match("m3-shield-exhaustive", 5000);
         let events = derive_events(&trace);
-        let selected = selected_indices(&events);
-        assert!(selected.len() <= MAX_SHIELD_EVENTS);
+        assert!(!events.is_empty());
+        assert_eq!(events.len(), 147, "reference match should expose every shield mutation");
         for source in ["player", "enemy"] {
             if events.iter().any(|event| event.source == source) {
-                assert!(selected.iter().any(|index| events[*index].source == source));
-            }
-        }
-        for shield in 0..SHIELD_COUNT {
-            if events.iter().any(|event| event.shield == shield) {
-                assert!(selected.iter().any(|index| events[*index].shield == shield));
+                assert!(events.iter().any(|event| event.source == source));
             }
         }
     }
