@@ -6,7 +6,8 @@ use leader_core::{
 };
 use leader_svg::RenderConfig;
 
-const MAX_BUS_EVENTS: usize = 150;
+// Presentation density, not an artifact-size constraint. The native trace remains exhaustive.
+const MAX_BUS_EVENTS: usize = 1024;
 
 #[must_use]
 pub fn apply(
@@ -32,7 +33,7 @@ pub fn apply(
 fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
     let indices = sampled_indices(trace);
     let total = config.total();
-    let mut out = String::with_capacity(238_000);
+    let mut out = String::with_capacity(1_400_000);
     out.push_str("<g id=\"f3-native-bus\">\n");
 
     for index in indices {
@@ -267,10 +268,11 @@ mod tests {
     }
 
     #[test]
-    fn bus_sampling_is_bounded_and_preserves_owners_kinds_and_exercised_ports() {
+    fn bus_presentation_is_deep_and_preserves_owners_kinds_and_exercised_ports() {
         let trace = Machine::run_match("m3-bus-owner-sampling", 5000);
         let selected = sampled_indices(&trace);
         assert!(selected.len() <= MAX_BUS_EVENTS);
+        assert!(selected.len() >= 900, "full match should expose a dense native bus replay");
 
         for owner in [
             MemoryOwner::Rom,
