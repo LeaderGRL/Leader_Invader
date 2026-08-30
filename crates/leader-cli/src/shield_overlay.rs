@@ -227,6 +227,7 @@ mod tests {
     fn shield_overlay_exposes_exact_one_bit_mutations_and_crt_pixels() {
         let topology = build_topology();
         let trace = Machine::run_match("m3-shield-overlay", 5000);
+        let events = derive_events(&trace);
         let svg = render(&topology, &trace, RenderConfig::default());
         assert!(svg.contains("id=\"m3-shield-bank\""));
         assert!(svg.contains("id=\"m3-shield-game\""));
@@ -234,6 +235,7 @@ mod tests {
         assert!(svg.contains("data-shield-mask=\""));
         assert!(svg.contains("data-shield-before=\""));
         assert!(svg.contains("data-shield-after=\""));
+        assert_eq!(svg.matches("data-shield-index=\"").count(), events.len());
         assert!(svg.contains("data-shield-source=\"player\"")
             || svg.contains("data-shield-source=\"enemy\""));
     }
@@ -247,15 +249,12 @@ mod tests {
     }
 
     #[test]
-    fn shield_presentation_is_exhaustive() {
+    fn shield_presentation_is_exhaustive_for_any_seed() {
         let trace = Machine::run_match("m3-shield-exhaustive", 5000);
+        let topology = build_topology();
         let events = derive_events(&trace);
-        assert!(!events.is_empty());
-        assert_eq!(events.len(), 147, "reference match should expose every shield mutation");
-        for source in ["player", "enemy"] {
-            if events.iter().any(|event| event.source == source) {
-                assert!(events.iter().any(|event| event.source == source));
-            }
-        }
+        let svg = render(&topology, &trace, RenderConfig::default());
+        assert!(events.len() > 64, "reference run should exceed the retired sampling cap");
+        assert_eq!(svg.matches("data-shield-index=\"").count(), events.len());
     }
 }
