@@ -131,10 +131,16 @@ fn sampled_frames(frames: &[FrameState]) -> Vec<&FrameState> {
         selected.insert(index);
     }
 
-    let remaining = MAX_PRESENTED_FRAMES.saturating_sub(selected.len());
-    if remaining > 0 {
-        let stride = frames.len().div_ceil(remaining).max(1);
-        for index in (0..frames.len()).step_by(stride) {
+    // Fill remaining presentation slots with evenly distributed unique checkpoints.
+    for slot in 0..MAX_PRESENTED_FRAMES {
+        if selected.len() >= MAX_PRESENTED_FRAMES {
+            break;
+        }
+        let index = slot * (frames.len() - 1) / (MAX_PRESENTED_FRAMES - 1);
+        selected.insert(index);
+    }
+    if selected.len() < MAX_PRESENTED_FRAMES {
+        for index in 0..frames.len() {
             if selected.len() >= MAX_PRESENTED_FRAMES {
                 break;
             }
@@ -197,8 +203,7 @@ mod tests {
     fn shot_bank_presentation_is_dense_and_keeps_hardware_use() {
         let trace = Machine::run_match("m3-shot-sampling", 5000);
         let sampled = sampled_frames(&trace.frames);
-        assert!(sampled.len() <= MAX_PRESENTED_FRAMES);
-        assert!(sampled.len() >= 450, "full match should expose a dense projectile replay");
+        assert_eq!(sampled.len(), MAX_PRESENTED_FRAMES);
         assert!(sampled
             .iter()
             .any(|frame| frame.enemy_shots.iter().flatten().count() >= 2));
