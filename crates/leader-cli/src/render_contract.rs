@@ -6,8 +6,6 @@ pub struct NativeSvgValidation {
     pub bytes: usize,
 }
 
-pub const MAX_NATIVE_SVG_BYTES: usize = 5_000_000;
-
 const REQUIRED_GROUPS: [&str; 17] = [
     "f3-pc",
     "f3-native-decoder",
@@ -113,13 +111,6 @@ const REQUIRED_BUS_COVERAGE: [&str; 33] = [
 ];
 
 pub fn validate_native_svg_contract(svg: &str) -> Result<NativeSvgValidation, String> {
-    if svg.len() > MAX_NATIVE_SVG_BYTES {
-        return Err(format!(
-            "production SVG exceeds {} byte budget: {} bytes",
-            MAX_NATIVE_SVG_BYTES,
-            svg.len()
-        ));
-    }
     if svg.contains("class=\"hot ") {
         return Err("production SVG still contains legacy semantic hot activity".to_owned());
     }
@@ -163,6 +154,21 @@ pub fn validate_native_svg_contract(svg: &str) -> Result<NativeSvgValidation, St
 mod tests {
     use super::*;
 
+    fn valid_contract_fixture() -> String {
+        let mut svg = String::from("<svg>");
+        for id in REQUIRED_GROUPS {
+            svg.push_str(&format!("<g id=\"{id}\"></g>"));
+        }
+        for marker in REQUIRED_METADATA {
+            svg.push_str(marker);
+        }
+        for marker in REQUIRED_BUS_COVERAGE {
+            svg.push_str(marker);
+        }
+        svg.push_str("</svg>");
+        svg
+    }
+
     #[test]
     fn legacy_hot_activity_is_rejected() {
         let error = validate_native_svg_contract("<svg><rect class=\"hot hot-alu\"/></svg>")
@@ -177,10 +183,13 @@ mod tests {
     }
 
     #[test]
-    fn oversize_artifact_is_rejected_before_content_checks() {
-        let svg = "x".repeat(MAX_NATIVE_SVG_BYTES + 1);
-        let error = validate_native_svg_contract(&svg).expect_err("oversize SVG must fail");
-        assert!(error.contains("exceeds"));
+    fn artifact_size_is_observational_not_a_validity_limit() {
+        let mut svg = valid_contract_fixture();
+        svg.push_str(&"x".repeat(5_100_000));
+        let validation = validate_native_svg_contract(&svg)
+            .expect("large native SVG must remain valid when its semantic contract is complete");
+        assert_eq!(validation.bytes, svg.len());
+        assert!(validation.bytes > 5_000_000);
     }
 
     #[test]
