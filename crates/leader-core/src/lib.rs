@@ -19,6 +19,7 @@ pub mod machine;
 pub mod memory_map;
 pub mod memory_map_contract;
 pub mod microcode;
+pub mod navigation;
 pub mod pc_datapath;
 pub mod program;
 pub mod rng;
@@ -78,6 +79,9 @@ pub use microcode::{
     execute_control_step, execute_row_kind, execute_step_address, opcode_slot, uaddr, ControlWord,
     ExecuteRowKind, MicroAddressSource, MicroAddressTransition, MicroInstruction, MicroOp,
     MicroSequencer,
+};
+pub use navigation::{
+    build_navigation, navigation_violations, CameraView, Module, NavigationLevel, NavigationModel,
 };
 pub use pc_datapath::{derive_pc_datapath, PcDatapathEvent, PcDatapathKind};
 pub use shield_bank::{
