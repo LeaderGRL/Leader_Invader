@@ -1,7 +1,8 @@
 use leader_core::{FormationCadenceTraceEvent, MatchTrace, Topology};
 use leader_svg::RenderConfig;
 
-const MAX_PRESENTED_EVENTS: usize = 80;
+// Presentation density only. The native cadence trace remains exhaustive.
+const MAX_PRESENTED_EVENTS: usize = 512;
 
 #[must_use]
 pub fn apply(
@@ -73,17 +74,16 @@ fn sampled_events(events: &[FormationCadenceTraceEvent]) -> Vec<&FormationCadenc
         if first_tick_for_divisor {
             tick_seen[divisor] = true;
         }
-        if index == 0
+        let selected = index == 0
             || index + 1 == events.len()
             || index % stride == 0
             || speed_transition
-            || first_tick_for_divisor
-        {
-            if out.last().is_none_or(|last: &&FormationCadenceTraceEvent| {
-                !std::ptr::eq(*last, event)
-            }) {
-                out.push(event);
-            }
+            || first_tick_for_divisor;
+        let duplicate_last = out
+            .last()
+            .map_or(false, |last: &&FormationCadenceTraceEvent| std::ptr::eq(*last, event));
+        if selected && !duplicate_last {
+            out.push(event);
         }
     }
     out
@@ -132,10 +132,11 @@ mod tests {
     }
 
     #[test]
-    fn cadence_sampling_is_bounded_but_keeps_transitions() {
+    fn cadence_presentation_is_dense_and_keeps_transitions() {
         let trace = Machine::run_match("m3-cadence-sampling", 5000);
         let sampled = sampled_events(&trace.formation_cadence_events);
         assert!(sampled.len() <= MAX_PRESENTED_EVENTS + 8);
+        assert!(sampled.len() >= 450, "full match should expose a dense cadence replay");
         for divisor in [3, 2, 1] {
             assert!(sampled.iter().any(|event| event.event.divisor == divisor));
             assert!(sampled
