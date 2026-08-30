@@ -36,6 +36,7 @@ pub mod trace;
 pub mod trace_validation;
 pub mod video_pipeline_contract;
 pub mod video_timing;
+pub mod video_timing_layout;
 
 pub use call_stack_contract::{validate_call_stack_contract, CallStackValidation};
 pub use control_contract::{
@@ -106,6 +107,7 @@ pub use video_timing::{
     VBlankAckEvent, VideoScanEvent, VideoTiming, H_BACK_PORCH, H_FRONT_PORCH, H_SYNC, H_TOTAL,
     H_VISIBLE, V_BACK_PORCH, V_FRONT_PORCH, V_SYNC, V_TOTAL, V_VISIBLE,
 };
+pub use video_timing_layout::VIDEO_TIMING_NODES;
 
 impl PartialEq for FrameState {
     fn eq(&self, other: &Self) -> bool {
@@ -135,5 +137,6 @@ pub fn build_topology() -> Topology {
     formation_cadence_layout::inject_formation_cadence(&mut topology);
     enemy_shot_layout::inject_enemy_shot_bank(&mut topology);
     shield_layout::inject_shield_bank(&mut topology);
+    video_timing_layout::inject_video_timing(&mut topology);
     topology
 }
