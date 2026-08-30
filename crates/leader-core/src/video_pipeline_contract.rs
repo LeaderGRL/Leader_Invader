@@ -1,6 +1,6 @@
 use crate::{
     isa::op, memory_map::VRAM_BASE, microcode::execute_address, BusAddressSource,
-    BusDataSource, BusTransactionKind, MatchTrace,
+    BusDataSource, BusTransactionKind, MatchTrace, VideoTiming, H_TOTAL, V_TOTAL, V_VISIBLE,
 };
 
 const WAIT_BIT: u32 = 1 << 6;
@@ -11,6 +11,10 @@ pub struct VideoPipelineValidation {
     pub dma_bursts: usize,
     pub scanouts: usize,
     pub waits: usize,
+    pub timing_frames: usize,
+    pub timing_acks: usize,
+    pub timing_overruns: usize,
+    pub pixel_clocks: u64,
 }
 
 pub fn validate_video_pipeline_contract(
@@ -139,11 +143,88 @@ pub fn validate_video_pipeline_contract(
         }
     }
 
+    // Replay a persistent piece of video hardware from the native execution stream.
+    // Scanout arms VBlank; WAIT must acknowledge an already armed latch.
+    let mut timing = VideoTiming::default();
+    let mut timing_frames = 0usize;
+    let mut timing_acks = 0usize;
+    let mut timing_overruns = 0usize;
+    let mut pixel_clocks = 0u64;
+
+    let max_frame = scanout
+        .iter()
+        .map(|(_, event)| event.frame)
+        .chain(waits.iter().map(|event| event.frame))
+        .max()
+        .unwrap_or(0);
+
+    for frame in 0..=max_frame {
+        for ((_, dma_event), (_, scan_event)) in dma
+            .iter()
+            .zip(&scanout)
+            .filter(|((_, _), (_, scan))| scan.frame == frame)
+        {
+            if dma_event.frame != scan_event.frame {
+                return Err(format!(
+                    "timing replay paired DMA frame {} with scanout frame {}",
+                    dma_event.frame, scan_event.frame
+                ));
+            }
+            let checksum = dma_event
+                .data
+                .ok_or_else(|| format!("DMA frame {frame} has no checksum byte"))?;
+            let scan = timing.complete_scanout(checksum);
+            if scan.pixel_clocks != u32::from(H_TOTAL) * u32::from(V_TOTAL)
+                || scan.visible_lines != V_VISIBLE
+                || scan.blank_lines != V_TOTAL - V_VISIBLE
+                || scan.hsync_pulses != V_TOTAL
+            {
+                return Err(format!(
+                    "video timing geometry diverges at frame {frame}: {:?}",
+                    scan
+                ));
+            }
+            timing_frames += 1;
+            pixel_clocks = pixel_clocks.saturating_add(u64::from(scan.pixel_clocks));
+            if scan.vblank_overrun {
+                timing_overruns += 1;
+            }
+        }
+
+        for wait in waits.iter().filter(|event| event.frame == frame) {
+            let ack = timing.acknowledge_vblank().ok_or_else(|| {
+                format!(
+                    "WAIT_VBLANK at frame {} attempted to acknowledge an unarmed VBlank latch",
+                    wait.frame
+                )
+            })?;
+            if ack.frame_counter == 0 {
+                return Err(format!(
+                    "WAIT_VBLANK at frame {} acknowledged frame counter zero",
+                    wait.frame
+                ));
+            }
+            timing_acks += 1;
+        }
+    }
+
+    if timing_frames != scanout.len() || timing_acks != waits.len() {
+        return Err(format!(
+            "video timing replay count mismatch: frames={timing_frames}/{} acks={timing_acks}/{}",
+            scanout.len(),
+            waits.len()
+        ));
+    }
+
     Ok(VideoPipelineValidation {
         raster_writes: raster.len(),
         dma_bursts: dma.len(),
         scanouts: scanout.len(),
         waits: waits.len(),
+        timing_frames,
+        timing_acks,
+        timing_overruns,
+        pixel_clocks,
     })
 }
 
@@ -153,7 +234,7 @@ mod tests {
     use crate::Machine;
 
     #[test]
-    fn complete_match_has_ordered_native_video_pipeline() {
+    fn complete_match_has_ordered_native_video_pipeline_and_causal_vblank() {
         let trace = Machine::run_match("video-pipeline-contract", 5000);
         let validation =
             validate_video_pipeline_contract(&trace).expect("valid native video pipeline");
@@ -162,6 +243,13 @@ mod tests {
         assert_eq!(validation.raster_writes, validation.scanouts);
         assert!(validation.waits > 0);
         assert!(validation.waits < validation.scanouts);
+        assert_eq!(validation.timing_frames, validation.scanouts);
+        assert_eq!(validation.timing_acks, validation.waits);
+        assert_eq!(
+            validation.pixel_clocks,
+            validation.scanouts as u64 * u64::from(H_TOTAL) * u64::from(V_TOTAL)
+        );
+        assert!(validation.timing_overruns > 0);
     }
 
     #[test]
@@ -205,5 +293,21 @@ mod tests {
         let error = validate_video_pipeline_contract(&trace)
             .expect_err("missing WAIT bit must fail");
         assert!(error.contains("lacks physical WAIT bit"));
+    }
+
+    #[test]
+    fn duplicate_wait_ack_is_rejected_by_timing_replay() {
+        let mut trace = Machine::run_match("video-pipeline-double-wait", 5000);
+        let wait_uaddr = execute_address(op::WAIT_VBLANK).expect("WAIT execute address");
+        let index = trace
+            .micro_addresses
+            .iter()
+            .position(|event| event.opcode == op::WAIT_VBLANK && event.address == wait_uaddr)
+            .expect("WAIT_VBLANK execute µword");
+        let duplicate = trace.micro_addresses[index];
+        trace.micro_addresses.insert(index + 1, duplicate);
+        let error = validate_video_pipeline_contract(&trace)
+            .expect_err("second WAIT must not consume an already acknowledged latch");
+        assert!(error.contains("unarmed VBlank latch"));
     }
 }
