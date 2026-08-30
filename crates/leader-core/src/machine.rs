@@ -23,6 +23,7 @@ use crate::trace::{
     KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent, PcEventKind,
     PhaseKind, RegisterWriteEvent, ShiftRegisterEvent, SpEvent, SpEventKind,
 };
+use crate::video_timing::VideoTiming;
 
 const ROM_LIMIT: usize = 0x2000;
 const VRAM: usize = 0x8000;
@@ -41,6 +42,7 @@ pub struct Machine {
     shields: ShieldBank,
     shift_register: ShiftRegister16,
     formation_cadence: FormationCadence,
+    video_timing: VideoTiming,
     trace: MatchTrace,
     ordinal: u16,
     last_vram_checksum: u32,
@@ -70,6 +72,7 @@ impl Machine {
             shields: ShieldBank::default(),
             shift_register: ShiftRegister16::default(),
             formation_cadence: FormationCadence::default(),
+            video_timing: VideoTiming::default(),
             trace: MatchTrace::new(seed.to_owned(), hash),
             ordinal: 0,
             last_vram_checksum: 0,
@@ -95,12 +98,22 @@ impl Machine {
             match outcome {
                 StepOutcome::Continue => {}
                 StepOutcome::WaitVBlank => {
+                    let Some(ack) = machine.video_timing.acknowledge_vblank() else {
+                        machine.sample(
+                            machine.cpu.pc(),
+                            PhaseKind::VBlank,
+                            Some(VRAM as u16),
+                            None,
+                            "VBLANK_UNARMED_FAULT",
+                        );
+                        break;
+                    };
                     machine.sample(
                         machine.cpu.pc(),
                         PhaseKind::VBlank,
                         Some(VRAM as u16),
-                        None,
-                        "VBLANK_IRQ",
+                        Some(ack.checksum),
+                        "VBLANK_ACK",
                     );
                     machine.trace.frames.push(FrameState::from_game(
                         &machine.game,
@@ -481,6 +494,7 @@ impl Machine {
             None,
             "SCANOUT_128x96_1BPP",
         );
+        self.video_timing.complete_scanout(data);
     }
 
     fn check_clear(&mut self, pc: u16) {
@@ -1030,6 +1044,10 @@ mod tests {
             .micro_samples
             .iter()
             .any(|sample| sample.control == "WAIT_VBLANK"));
+        assert!(trace
+            .micro_samples
+            .iter()
+            .any(|sample| sample.control == "VBLANK_ACK"));
         assert!(!trace.micro_cycles.is_empty());
         assert!(!trace.micro_addresses.is_empty());
         assert!(!trace.bus_transactions.is_empty());
@@ -1183,6 +1201,18 @@ mod tests {
             .micro_addresses
             .iter()
             .any(|event| event.source == crate::microcode::MicroAddressSource::RoutineReturn));
+    }
+
+    #[test]
+    fn wait_vblank_without_scanout_faults_causally() {
+        let rom = [crate::isa::op::WAIT_VBLANK, crate::isa::op::HALT];
+        let trace = Machine::run_match_with_rom("unarmed-vblank", 16, &rom);
+        assert!(!trace.finished);
+        assert_eq!(trace.total_frames, 0);
+        assert!(trace
+            .micro_samples
+            .iter()
+            .any(|sample| sample.control == "VBLANK_UNARMED_FAULT"));
     }
 
     #[test]
