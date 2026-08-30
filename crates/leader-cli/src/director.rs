@@ -1,4 +1,4 @@
-use leader_core::{MatchTrace, Rect, Topology};
+use leader_core::{build_navigation, MatchTrace, NavigationModel, Rect, Topology};
 use leader_svg::RenderConfig;
 
 const VIEW_W: f32 = 864.0;
@@ -56,8 +56,8 @@ pub fn apply_camera(
     };
     let old_camera_end = old_camera_start + old_camera_end_rel + 2;
 
-    // All F3 datapath activity now comes from dedicated native overlays. The
-    // director owns camera framing only and closes the shared camera world here.
+    // Native overlays own datapath activity. The director only frames the
+    // physical hierarchy and closes the shared camera world here.
     svg.replace_range(old_camera_start..old_camera_end, "</g>");
     svg
 }
@@ -101,7 +101,11 @@ fn camera_track(
     config: RenderConfig,
 ) -> Vec<(f32, Rect)> {
     let total = config.total();
-    let full = aspect_rect(Rect::new(0.0, 0.0, topology.width, topology.height), 0.0);
+    let navigation = build_navigation(topology);
+    let full = navigation
+        .view(&navigation.default_view)
+        .map(|view| aspect_rect(view.bounds, 0.0))
+        .unwrap_or_else(|| aspect_rect(Rect::new(0.0, 0.0, topology.width, topology.height), 0.0));
     let mut track = vec![(0.0, full)];
     let mut groups = topology.groups.clone();
     groups.sort_by_key(|group| group.assembly_rank);
@@ -111,22 +115,30 @@ fn camera_track(
         if index == 0 {
             track.push((0.55, full));
         }
-        track.push((start + 0.70, focus(group.bounds, 180.0)));
-        track.push((start + span * 0.34, focus(group.bounds, 34.0)));
-        track.push((start + span * 0.78, focus(group.bounds, 34.0)));
-        track.push((start + span * 0.96, focus(group.bounds, 130.0)));
+        let shot = navigation
+            .view_for_module(&group.id)
+            .map(|view| aspect_rect(view.bounds, 0.0))
+            .unwrap_or_else(|| focus(group.bounds, 44.0));
+        track.push((start + 0.70, aspect_rect(shot, 136.0)));
+        track.push((start + span * 0.34, shot));
+        track.push((start + span * 0.78, shot));
+        track.push((start + span * 0.96, aspect_rect(shot, 86.0)));
     }
     track.push((config.assembly_seconds, full));
 
     let boot = config.assembly_seconds;
-    hold_group(&mut track, topology, boot + 0.20, "clk", 22.0, 0.72);
-    hold_group(&mut track, topology, boot + 1.20, "pc", 26.0, 0.78);
-    hold_group(&mut track, topology, boot + 2.25, "romsys", 24.0, 0.82);
-    hold_group(&mut track, topology, boot + 3.35, "decode", 24.0, 0.82);
-    hold_group(&mut track, topology, boot + 4.45, "regs", 28.0, 0.82);
-    hold_group(&mut track, topology, boot + 5.55, "alu", 20.0, 0.82);
-    hold_group(&mut track, topology, boot + 6.65, "ramsys", 40.0, 0.72);
-    hold_group(&mut track, topology, boot + 7.70, "gpu", 28.0, 0.80);
+    hold_view(&mut track, &navigation, boot + 0.20, "clk", 0.72);
+    hold_view(&mut track, &navigation, boot + 1.20, "pc", 0.78);
+    hold_view(&mut track, &navigation, boot + 2.25, "romsys", 0.82);
+    hold_view(&mut track, &navigation, boot + 3.35, "decode", 0.46);
+    hold_view(&mut track, &navigation, boot + 3.88, "decode.microcode", 0.38);
+    hold_view(&mut track, &navigation, boot + 4.45, "regs", 0.48);
+    hold_view(&mut track, &navigation, boot + 4.98, "alu", 0.36);
+    hold_view(&mut track, &navigation, boot + 5.40, "alu.ripple", 0.48);
+    hold_view(&mut track, &navigation, boot + 6.05, "bus", 0.32);
+    hold_view(&mut track, &navigation, boot + 6.43, "bus.stack", 0.38);
+    hold_view(&mut track, &navigation, boot + 6.90, "gpu", 0.28);
+    hold_view(&mut track, &navigation, boot + 7.24, "gpu.scanout", 0.66);
     track.push((config.game_start(), full));
 
     let game = config.game_start();
@@ -148,16 +160,15 @@ fn camera_track(
     track
 }
 
-fn hold_group(
+fn hold_view(
     track: &mut Vec<(f32, Rect)>,
-    topology: &Topology,
+    navigation: &NavigationModel,
     time: f32,
-    id: &str,
-    padding: f32,
+    module_id: &str,
     hold: f32,
 ) {
-    if let Some(group) = topology.group(id) {
-        let shot = focus(group.bounds, padding);
+    if let Some(view) = navigation.view_for_module(module_id) {
+        let shot = aspect_rect(view.bounds, 0.0);
         track.push((time, shot));
         track.push((time + hold, shot));
     }
@@ -214,7 +225,7 @@ fn norm(value: f32, total: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use leader_core::{build_topology, Machine};
+    use leader_core::{build_topology, Machine, NavigationLevel};
 
     #[test]
     fn director_replaces_viewbox_animation_with_css_world_camera_only() {
@@ -235,9 +246,24 @@ mod tests {
     #[test]
     fn closeup_matrix_is_much_larger_than_establishing_shot() {
         let topology = build_topology();
-        let full = aspect_rect(Rect::new(0.0, 0.0, topology.width, topology.height), 0.0);
-        let clock = focus(topology.group("clk").expect("clock group").bounds, 22.0);
-        assert!(view_matrix(clock).scale > view_matrix(full).scale * 4.0);
+        let navigation = build_navigation(&topology);
+        let full = navigation.view("view-machine").expect("machine view").bounds;
+        let microcode = navigation
+            .view_for_module("decode.microcode")
+            .expect("microcode detail view")
+            .bounds;
+        assert!(view_matrix(aspect_rect(microcode, 0.0)).scale > view_matrix(aspect_rect(full, 0.0)).scale * 4.0);
+    }
+
+    #[test]
+    fn director_has_real_nested_detail_views() {
+        let topology = build_topology();
+        let navigation = build_navigation(&topology);
+        for id in ["decode.microcode", "alu.ripple", "bus.stack", "gpu.scanout"] {
+            let view = navigation.view_for_module(id).expect("detail view");
+            assert_eq!(view.level, NavigationLevel::Detail);
+            assert!(view.parent_view.is_some());
+        }
     }
 
     #[test]
