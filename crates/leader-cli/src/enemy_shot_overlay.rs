@@ -3,8 +3,9 @@ use std::collections::BTreeSet;
 use leader_core::{FrameState, MatchTrace, Topology, ENEMY_SHOT_SLOTS};
 use leader_svg::RenderConfig;
 
-const MAX_PRESENTED_FRAMES: usize = 84;
-const MAX_LIFECYCLE_TRANSITIONS: usize = 24;
+// Presentation density only. Every slot state is still present in the exhaustive native trace.
+const MAX_PRESENTED_FRAMES: usize = 512;
+const MAX_LIFECYCLE_TRANSITIONS: usize = 128;
 
 #[must_use]
 pub fn apply(
@@ -100,12 +101,22 @@ fn sampled_frames(frames: &[FrameState]) -> Vec<&FrameState> {
     {
         selected.insert(index);
     }
+    if let Some(index) = frames
+        .iter()
+        .position(|frame| frame.enemy_shots.iter().flatten().count() == ENEMY_SHOT_SLOTS)
+    {
+        selected.insert(index);
+    }
 
     let transitions = (1..frames.len())
         .filter(|index| {
             let before = frames[index - 1].enemy_shots.iter().flatten().count();
             let after = frames[*index].enemy_shots.iter().flatten().count();
             before != after
+                || (0..ENEMY_SHOT_SLOTS).any(|slot| {
+                    frames[index - 1].enemy_shots[slot].is_some()
+                        != frames[*index].enemy_shots[slot].is_some()
+                })
         })
         .collect::<Vec<_>>();
     let transition_stride = transitions
@@ -183,10 +194,11 @@ mod tests {
     }
 
     #[test]
-    fn shot_bank_sampling_is_strictly_bounded_and_keeps_hardware_use() {
+    fn shot_bank_presentation_is_dense_and_keeps_hardware_use() {
         let trace = Machine::run_match("m3-shot-sampling", 5000);
         let sampled = sampled_frames(&trace.frames);
         assert!(sampled.len() <= MAX_PRESENTED_FRAMES);
+        assert!(sampled.len() >= 450, "full match should expose a dense projectile replay");
         assert!(sampled
             .iter()
             .any(|frame| frame.enemy_shots.iter().flatten().count() >= 2));
