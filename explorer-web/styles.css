@@ -41,7 +41,7 @@ button.primary { width: 100%; border-color: #4777af; background: linear-gradient
 #hardware-canvas { display: block; width: 100%; height: 100%; min-height: 480px; touch-action: none; user-select: none; cursor: grab; background-image: linear-gradient(rgba(75, 104, 145, .08) 1px, transparent 1px), linear-gradient(90deg, rgba(75, 104, 145, .08) 1px, transparent 1px); background-size: 24px 24px; }
 #hardware-canvas:active { cursor: grabbing; }
 .canvas-hint { position: absolute; left: 12px; bottom: 12px; padding: 7px 10px; border: 1px solid rgba(75, 93, 123, .45); border-radius: 7px; background: rgba(5, 8, 13, .82); color: #73839a; font-size: 11px; pointer-events: none; backdrop-filter: blur(8px); }
-.hardware-link { fill: none; stroke-width: 3; vector-effect: non-scaling-stroke; opacity: .42; stroke-linecap: round; stroke-linejoin: round; transition: opacity 80ms linear, stroke-width 80ms linear; }
+.hardware-link { fill: none; stroke-width: 3; vector-effect: non-scaling-stroke; opacity: .42; stroke-linecap: round; stroke-linejoin: round; transition: opacity 80ms linear, stroke-width 80ms linear, filter 80ms linear; }
 .signal-address { stroke: #72a7ff; }
 .signal-data { stroke: #62dfc8; }
 .signal-control { stroke: #d991ff; }
@@ -49,6 +49,11 @@ button.primary { width: 100%; border-color: #4777af; background: linear-gradient
 .signal-carry { stroke: #ff8b72; }
 .signal-video { stroke: #8fe46f; }
 .hardware-link.is-active { opacity: 1; stroke-width: 5; stroke-dasharray: 12 8; animation: signal-flow .42s linear infinite; }
+.hardware-link.has-alu-link-value.alu-link-candidate { opacity: .24; stroke-width: 2.5; stroke-dasharray: none; filter: none; }
+.hardware-link.has-alu-link-value.alu-link-selected { opacity: 1; stroke-width: 5.5; stroke-dasharray: 8 6; animation: alu-flow .34s linear infinite; }
+.hardware-link.has-alu-link-value.alu-link-selected.alu-link-one { filter: drop-shadow(0 0 5px rgba(255, 231, 105, .75)); }
+.hardware-link.has-alu-link-value.alu-link-selected.alu-link-zero { opacity: .62; filter: none; }
+.alu-link-value { paint-order: stroke; stroke: #070b10; stroke-width: 4; stroke-linejoin: round; fill: #fff1a0; pointer-events: none; font: 800 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .activity-value { paint-order: stroke; stroke: #070b10; stroke-width: 5; stroke-linejoin: round; pointer-events: none; font: 700 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .signal-value-address { fill: #a9caff; }
 .signal-value-data { fill: #9af2e2; }
@@ -69,9 +74,10 @@ button.primary { width: 100%; border-color: #4777af; background: linear-gradient
 .hardware-node.is-active.bit-to-zero rect { fill: #6b3442; stroke: #ffd0da; }
 .bit-transition-value { paint-order: stroke; stroke: #070b10; stroke-width: 4; stroke-linejoin: round; fill: #f6fbff; pointer-events: none; font: 800 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 @keyframes signal-flow { to { stroke-dashoffset: -20; } }
+@keyframes alu-flow { to { stroke-dashoffset: -14; } }
 .progress-track { height: 5px; margin-top: 12px; overflow: hidden; border-radius: 999px; background: #17202d; }
 #progress-fill { width: 0; height: 100%; background: #6ca8e8; transition: width 80ms linear; }
-@media (prefers-reduced-motion: reduce) { .hardware-link.is-active { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .hardware-link.is-active, .hardware-link.alu-link-selected { animation: none; } }
 @media (max-width: 1050px) {
   .workspace { grid-template-columns: 220px minmax(0, 1fr); }
   .right-panel { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid #1c2535; }
