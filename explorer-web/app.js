@@ -1,9 +1,10 @@
-import init, { Explorer, Playback } from "./pkg/leader_explorer.js";
+import init, { ActivityResolver, Explorer, Playback } from "./pkg/leader_explorer.js";
 
 await init();
 
 const explorer = new Explorer();
 const playback = new Playback();
+const activityResolver = new ActivityResolver();
 const svg = document.querySelector("#hardware-canvas");
 const breadcrumb = document.querySelector("#breadcrumb");
 const childViews = document.querySelector("#child-views");
@@ -123,22 +124,56 @@ function setHighlightedNode(nodeId) {
   }
 }
 
+function signalValueText(link, cameraScale) {
+  if (link.value === null || link.value === undefined || !link.width) return null;
+  const value = Number(link.value);
+  if (cameraScale < 0.9) {
+    return `0b${value.toString(2).padStart(link.width, "0")}`;
+  }
+  return hex(value, Math.ceil(link.width / 4));
+}
+
+function activityLinks(activity) {
+  if (!activity?.phase) return [];
+  const address = activity.address ?? -1;
+  const data = activity.data ?? -1;
+  return parseJson(activityResolver.links_json(activity.phase, address, data)) ?? [];
+}
+
 function applyActivity(activity) {
   svg.querySelectorAll(".is-active").forEach((element) => element.classList.remove("is-active"));
+  svg.querySelectorAll(".activity-value").forEach((element) => element.remove());
   if (!activity?.nodes) {
     delete svg.dataset.activityPhase;
     return;
   }
 
   svg.dataset.activityPhase = activity.phase;
-  const activeNodes = new Set(activity.nodes);
-  for (const nodeId of activeNodes) {
+  for (const nodeId of activity.nodes) {
     svg.querySelector(`[data-node-id="${CSS.escape(nodeId)}"]`)?.classList.add("is-active");
   }
-  for (const link of svg.querySelectorAll("[data-link-id]")) {
-    if (activeNodes.has(link.dataset.fromNode) && activeNodes.has(link.dataset.toNode)) {
-      link.classList.add("is-active");
-    }
+
+  const camera = parseJson(explorer.camera_json());
+  const cameraScale = camera ? camera.w / Math.max(svg.clientWidth, 1) : Number.POSITIVE_INFINITY;
+  const linkLayer = svg.querySelector(".link-layer");
+  for (const link of activityLinks(activity)) {
+    const path = svg.querySelector(`[data-link-id="${CSS.escape(link.id)}"]`);
+    if (!path) continue;
+    path.classList.add("is-active");
+
+    const valueText = signalValueText(link, cameraScale);
+    if (!valueText || !linkLayer || cameraScale >= 2.8) continue;
+    const length = path.getTotalLength();
+    if (!Number.isFinite(length) || length <= 0) continue;
+    const point = path.getPointAtLength(length * 0.5);
+    const label = makeSvg("text", {
+      x: point.x,
+      y: point.y - Math.max(8, cameraScale * 3),
+      class: `activity-value signal-value-${link.signal}`,
+      "text-anchor": "middle",
+    });
+    label.textContent = valueText;
+    linkLayer.append(label);
   }
 }
 
@@ -267,6 +302,7 @@ function renderPlayback() {
   timelineScrubber.value = String(summary.cursor);
   timelineLabel.value = `${summary.cursor} / ${lastCursor}`;
 
+  const links = activityLinks(activity);
   const lines = [
     `seed      ${summary.seed}`,
     `cursor    ${summary.cursor}/${lastCursor}`,
@@ -282,7 +318,7 @@ function renderPlayback() {
     `bus data  ${bus ? hex(bus.data, 2) : "—"}`,
     `addr src  ${bus?.addressSource ?? "—"}`,
     `data src  ${bus?.dataSource ?? "—"}`,
-    `active    ${activity?.nodes?.length ?? 0} nodes`,
+    `active    ${activity?.nodes?.length ?? 0} nodes / ${links.length} links`,
     `score     ${frame?.score ?? "—"}`,
     `lives     ${frame?.lives ?? "—"}`,
   ];
@@ -369,10 +405,6 @@ function finishPointer(event, allowTap) {
 
   if (activePointers.size >= 2) {
     beginPinch();
-  } else if (activePointers.size === 1) {
-    pinchState = null;
-    tapCandidate = null;
-    tapTravel = 0;
   } else {
     pinchState = null;
     tapCandidate = null;
