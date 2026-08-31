@@ -3,7 +3,7 @@ use leader_core::{
     physical_flag_bit_changes, physical_pc_bit_changes, physical_register_bit_changes,
     physical_sp_bit_changes, BusTransactionEvent, BusTransactionKind, FrameState, Machine,
     MatchTrace, MicroCycleEvent, MicroCycleKind, MicroSample, PcEventKind, PhaseKind,
-    PhysicalBitChange,
+    PhysicalBitChange, VramCheckpoint,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -241,6 +241,26 @@ impl Playback {
         self.current_frame_state()
             .map(frame_json)
             .unwrap_or_else(|| "null".to_owned())
+    }
+
+    /// Returns the latest native raster checkpoint at or before the current
+    /// microcycle. Width, height and bit packing are declared by Rust so the
+    /// browser only performs a representation decode, never game reconstruction.
+    #[must_use]
+    pub fn current_vram_json(&self) -> String {
+        let Some(checkpoint) = self.current_vram_checkpoint() else {
+            return "null".to_owned();
+        };
+        let bytes = checkpoint
+            .bytes
+            .iter()
+            .map(u8::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "{{\"frame\":{},\"width\":128,\"height\":96,\"format\":\"1bpp-msb-first-row-major\",\"checksum\":{},\"bytes\":[{}]}}",
+            checkpoint.frame, checkpoint.checksum, bytes
+        )
     }
 
     #[must_use]
@@ -609,6 +629,16 @@ impl Playback {
             .find(|state| state.frame <= frame)
     }
 
+    fn current_vram_checkpoint(&self) -> Option<&VramCheckpoint> {
+        let trace = self.trace.as_ref()?;
+        let frame = self.current_event()?.frame;
+        trace
+            .vram_checkpoints
+            .iter()
+            .rev()
+            .find(|checkpoint| checkpoint.frame <= frame)
+    }
+
     fn next_bus_index_after_cursor(
         &self,
         kind: Option<BusTransactionKind>,
@@ -789,6 +819,21 @@ mod tests {
         let activity = playback.current_activity_json();
         assert!(activity.contains("\"phase\":\"fetch\""));
         assert!(activity.contains("\"pcMuxLo\""));
+    }
+
+    #[test]
+    fn current_vram_comes_from_native_checkpoint_bytes() {
+        let mut playback = Playback::new();
+        assert!(playback.load_match("explorer-vram", 16));
+        let json = playback.current_vram_json();
+        assert!(json.contains("\"frame\":0"));
+        assert!(json.contains("\"width\":128"));
+        assert!(json.contains("\"height\":96"));
+        assert!(json.contains("\"format\":\"1bpp-msb-first-row-major\""));
+        assert!(json.contains("\"checksum\":"));
+        assert!(json.contains("\"bytes\":["));
+        let checkpoint = playback.current_vram_checkpoint().expect("native VRAM checkpoint");
+        assert_eq!(checkpoint.bytes.len(), 128 * 96 / 8);
     }
 
     #[test]
