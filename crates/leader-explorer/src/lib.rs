@@ -1,7 +1,10 @@
 #![forbid(unsafe_code)]
 
+mod activity_adapter;
 pub mod playback;
 mod viewport;
+
+pub use activity_adapter::ActivityResolver;
 
 use leader_core::{
     build_navigation, build_topology, CameraView, ExplorerState, Link, NavigationModel, Node, Rect,
