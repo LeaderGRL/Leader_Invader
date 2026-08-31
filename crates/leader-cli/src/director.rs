@@ -10,14 +10,23 @@ const VIEW_W: f32 = 864.0;
 const VIEW_H: f32 = 484.0;
 const VIEW_ASPECT: f32 = VIEW_W / VIEW_H;
 
+#[derive(Debug, Clone)]
+struct CameraCue {
+    time: f32,
+    rect: Rect,
+    view_id: String,
+    detail_lod: bool,
+}
+
 #[must_use]
 pub fn apply_camera(
     mut svg: String,
     topology: &Topology,
-    trace: &MatchTrace,
+    _trace: &MatchTrace,
     config: RenderConfig,
 ) -> String {
     let navigation = build_navigation(topology);
+    let track = camera_track(&navigation, topology, config);
     annotate_node_membership(&mut svg, &navigation);
 
     let Some(camera_start) = svg.find("<svg class=\"animated\" id=\"camera\"") else {
@@ -53,8 +62,8 @@ pub fn apply_camera(
         .find(background)
         .map_or(open_end, |offset| open_end + offset + background.len());
 
-    let css = camera_css(&navigation, topology, trace, config);
-    let overlay = navigation_overlay(&navigation);
+    let css = camera_css(&navigation, &track, config.total());
+    let overlay = navigation_overlay(&navigation, &track, config.total());
     svg.insert_str(
         world_insert,
         &format!("{css}<g id=\"camera-world\">{overlay}"),
@@ -120,8 +129,12 @@ fn insert_node_attribute(svg: &mut String, node_id: &str, attribute: &str) {
     svg.insert_str(insert_at, attribute);
 }
 
-fn navigation_overlay(navigation: &NavigationModel) -> String {
-    let mut out = String::with_capacity(navigation.views.len() * 360);
+fn navigation_overlay(
+    navigation: &NavigationModel,
+    track: &[CameraCue],
+    total: f32,
+) -> String {
+    let mut out = String::with_capacity(navigation.views.len() * 360 + track.len() * 180);
     let _ = write!(
         out,
         "<g id=\"navigation-hierarchy\" data-default-view=\"{}\" data-view-count=\"{}\" aria-hidden=\"true\">",
@@ -133,6 +146,27 @@ fn navigation_overlay(navigation: &NavigationModel) -> String {
             continue;
         }
         render_view_boundary(&mut out, view);
+    }
+    out.push_str("</g>");
+
+    let _ = write!(
+        out,
+        "<g id=\"navigation-scenes\" data-scene-count=\"{}\" display=\"none\" aria-hidden=\"true\">",
+        track.len()
+    );
+    for cue in track {
+        let _ = write!(
+            out,
+            "<g data-scene-time=\"{:.3}\" data-scene-progress=\"{:.6}\" data-scene-view=\"{}\" data-scene-detail=\"{}\" data-scene-x=\"{:.1}\" data-scene-y=\"{:.1}\" data-scene-w=\"{:.1}\" data-scene-h=\"{:.1}\"/>",
+            cue.time,
+            norm(cue.time, total),
+            xml_escape(&cue.view_id),
+            cue.detail_lod,
+            cue.rect.x,
+            cue.rect.y,
+            cue.rect.w,
+            cue.rect.h
+        );
     }
     out.push_str("</g>");
     out
@@ -163,34 +197,75 @@ fn render_view_boundary(out: &mut String, view: &CameraView) {
     );
 }
 
-fn camera_css(
-    navigation: &NavigationModel,
-    topology: &Topology,
-    trace: &MatchTrace,
-    config: RenderConfig,
-) -> String {
-    let total = config.total();
-    let track = camera_track(navigation, topology, trace, config);
-    let mut rules = String::with_capacity(track.len() * 80);
-    for (time, rect) in track {
-        let percent = norm(time, total) * 100.0;
-        let matrix = view_matrix(rect);
-        rules.push_str(&format!(
+fn camera_css(navigation: &NavigationModel, track: &[CameraCue], total: f32) -> String {
+    let mut camera_rules = String::with_capacity(track.len() * 80);
+    let mut node_kind_rules = String::with_capacity(track.len() * 32);
+    for cue in track {
+        let percent = norm(cue.time, total) * 100.0;
+        let matrix = view_matrix(cue.rect);
+        let node_kind_opacity = if cue.detail_lod { 1.0 } else { 0.16 };
+        camera_rules.push_str(&format!(
             "{percent:.6}%{{transform:matrix({:.7},0,0,{:.7},{:.3},{:.3})}}",
             matrix.scale, matrix.scale, matrix.tx, matrix.ty
         ));
+        node_kind_rules.push_str(&format!(
+            "{percent:.6}%{{opacity:{node_kind_opacity:.2}}}"
+        ));
+    }
+    node_kind_rules.push_str("100%{opacity:.16}");
+
+    let mut focus_css = String::with_capacity(navigation.views.len() * track.len() * 28);
+    for (index, view) in navigation
+        .views
+        .iter()
+        .filter(|view| view.level != NavigationLevel::Machine)
+        .enumerate()
+    {
+        let animation = format!("leaderNavFocus{index}");
+        let mut rules = String::with_capacity(track.len() * 28);
+        for cue in track {
+            let percent = norm(cue.time, total) * 100.0;
+            let opacity = focus_opacity(navigation, view, cue);
+            rules.push_str(&format!("{percent:.6}%{{opacity:{opacity:.2}}}"));
+        }
+        rules.push_str("100%{opacity:.05}");
+        focus_css.push_str(&format!(
+            "@keyframes {animation}{{{rules}}}.nav-boundary[data-view=\"{}\"]{{animation:{animation} {total:.3}s linear infinite}}",
+            xml_escape(&view.id)
+        ));
     }
 
-    let detail_begin = norm((config.assembly_seconds - 0.12).max(0.0), total) * 100.0;
-    let detail_full = norm(config.assembly_seconds + 0.24, total) * 100.0;
-    let detail_fade = norm(config.game_start() + 6.30, total) * 100.0;
-    let detail_end = norm(config.game_start() + 6.85, total) * 100.0;
-    let subsystem_soften = norm(config.assembly_seconds + 0.18, total) * 100.0;
-    let subsystem_restore = norm(config.game_start() + 6.80, total) * 100.0;
-
     format!(
-        "<style>@keyframes leaderCamera{{{rules}}}@keyframes leaderDetailLod{{0%,{detail_begin:.6}%{{opacity:0}}{detail_full:.6}%,{detail_fade:.6}%{{opacity:1}}{detail_end:.6}%,100%{{opacity:0}}}}@keyframes leaderSubsystemLod{{0%,{detail_begin:.6}%{{opacity:1}}{subsystem_soften:.6}%,{detail_fade:.6}%{{opacity:.28}}{subsystem_restore:.6}%,100%{{opacity:.72}}}}@keyframes leaderNodeKindLod{{0%,{detail_begin:.6}%{{opacity:.16}}{detail_full:.6}%,{detail_fade:.6}%{{opacity:1}}{detail_end:.6}%,100%{{opacity:.16}}}}#camera-world{{transform-box:view-box;transform-origin:0 0;animation:leaderCamera {total:.3}s linear infinite}}.nav-boundary{{pointer-events:none}}.nav-boundary rect{{fill:#08131d;fill-opacity:.08;vector-effect:non-scaling-stroke}}.nav-boundary text{{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:2px;vector-effect:non-scaling-stroke}}.nav-subsystem{{animation:leaderSubsystemLod {total:.3}s linear infinite}}.nav-subsystem rect{{stroke:#44677f;stroke-width:2;stroke-dasharray:12 10;opacity:.42}}.nav-subsystem text{{fill:#5f7f95;font-size:13px;font-weight:700;opacity:.56}}.nav-detail{{opacity:0;animation:leaderDetailLod {total:.3}s linear infinite}}.nav-detail rect{{stroke:#80a7bd;stroke-width:1.5;stroke-dasharray:7 7;opacity:.50}}.nav-detail text{{fill:#91b5c7;font-size:11px;font-weight:800;opacity:.68}}.node-kind{{animation:leaderNodeKindLod {total:.3}s linear infinite}}</style>"
+        "<style>@keyframes leaderCamera{{{camera_rules}}}@keyframes leaderNodeKindLod{{{node_kind_rules}}}{focus_css}#camera-world{{transform-box:view-box;transform-origin:0 0;animation:leaderCamera {total:.3}s linear infinite}}.nav-boundary{{pointer-events:none;opacity:.05}}.nav-boundary rect{{fill:#08131d;fill-opacity:.08;vector-effect:non-scaling-stroke}}.nav-boundary text{{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:2px;vector-effect:non-scaling-stroke}}.nav-subsystem rect{{stroke:#44677f;stroke-width:2;stroke-dasharray:12 10}}.nav-subsystem text{{fill:#5f7f95;font-size:13px;font-weight:700}}.nav-detail rect{{stroke:#80a7bd;stroke-width:1.5;stroke-dasharray:7 7}}.nav-detail text{{fill:#91b5c7;font-size:11px;font-weight:800}}.node-kind{{animation:leaderNodeKindLod {total:.3}s linear infinite}}</style>"
     )
+}
+
+fn focus_opacity(navigation: &NavigationModel, view: &CameraView, cue: &CameraCue) -> f32 {
+    let exact = cue.view_id == view.id;
+    let in_lineage = navigation
+        .lineage_for_view(&cue.view_id)
+        .iter()
+        .any(|candidate| candidate.id == view.id);
+
+    if cue.detail_lod {
+        if exact {
+            1.0
+        } else if in_lineage {
+            0.34
+        } else {
+            0.035
+        }
+    } else if view.level == NavigationLevel::Subsystem {
+        if exact {
+            0.76
+        } else if in_lineage {
+            0.20
+        } else {
+            0.05
+        }
+    } else {
+        0.025
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -212,33 +287,59 @@ fn view_matrix(rect: Rect) -> ViewMatrix {
 fn camera_track(
     navigation: &NavigationModel,
     topology: &Topology,
-    _trace: &MatchTrace,
     config: RenderConfig,
-) -> Vec<(f32, Rect)> {
+) -> Vec<CameraCue> {
     let total = config.total();
-    let full = navigation
-        .view(&navigation.default_view)
+    let full_view = navigation.view(&navigation.default_view);
+    let full = full_view
         .map(|view| aspect_rect(view.bounds, 0.0))
         .unwrap_or_else(|| aspect_rect(Rect::new(0.0, 0.0, topology.width, topology.height), 0.0));
-    let mut track = vec![(0.0, full)];
+    let machine_view = full_view
+        .map(|view| view.id.clone())
+        .unwrap_or_else(|| navigation.default_view.clone());
+    let mut track = vec![CameraCue {
+        time: 0.0,
+        rect: full,
+        view_id: machine_view.clone(),
+        detail_lod: false,
+    }];
+
     let mut groups = topology.groups.clone();
     groups.sort_by_key(|group| group.assembly_rank);
     let span = config.assembly_seconds / groups.len().max(1) as f32;
     for (index, group) in groups.iter().enumerate() {
         let start = index as f32 * span;
         if index == 0 {
-            track.push((0.55, full));
+            push_cue(&mut track, 0.55, full, &machine_view, false);
         }
-        let shot = navigation
-            .view_for_module(&group.id)
-            .map(|view| aspect_rect(view.bounds, 0.0))
-            .unwrap_or_else(|| focus(group.bounds, 44.0));
-        track.push((start + 0.70, aspect_rect(shot, 136.0)));
-        track.push((start + span * 0.34, shot));
-        track.push((start + span * 0.78, shot));
-        track.push((start + span * 0.96, aspect_rect(shot, 86.0)));
+        let Some(view) = navigation.view_for_module(&group.id) else {
+            continue;
+        };
+        let shot = aspect_rect(view.bounds, 0.0);
+        push_cue(
+            &mut track,
+            start + 0.70,
+            aspect_rect(shot, 136.0),
+            &view.id,
+            false,
+        );
+        push_cue(&mut track, start + span * 0.34, shot, &view.id, false);
+        push_cue(&mut track, start + span * 0.78, shot, &view.id, false);
+        push_cue(
+            &mut track,
+            start + span * 0.96,
+            aspect_rect(shot, 86.0),
+            &view.id,
+            false,
+        );
     }
-    track.push((config.assembly_seconds, full));
+    push_cue(
+        &mut track,
+        config.assembly_seconds,
+        full,
+        &machine_view,
+        false,
+    );
 
     let boot = config.assembly_seconds;
     hold_view(&mut track, navigation, boot + 0.15, "clk.phases", 0.48);
@@ -256,10 +357,16 @@ fn camera_track(
     hold_view(&mut track, navigation, boot + 7.12, "gpu.dma", 0.42);
     hold_view(&mut track, navigation, boot + 7.64, "gpu.timing", 0.46);
     hold_view(&mut track, navigation, boot + 8.20, "gpu.scanout", 0.66);
-    track.push((config.game_start(), full));
+    push_cue(
+        &mut track,
+        config.game_start(),
+        full,
+        &machine_view,
+        false,
+    );
 
     let game = config.game_start();
-    track.push((game + 0.25, full));
+    push_cue(&mut track, game + 0.25, full, &machine_view, false);
     hold_view(&mut track, navigation, game + 0.72, "io.input_irq", 0.46);
     hold_view(&mut track, navigation, game + 1.30, "io.shift_register", 0.56);
     hold_view(&mut track, navigation, game + 1.98, "io.formation", 0.58);
@@ -270,24 +377,64 @@ fn camera_track(
     hold_view(&mut track, navigation, game + 5.58, "gpu.scanout", 0.64);
 
     let global_observe_end = (game + 6.40).min(config.game_end() - 8.0);
-    track.push((global_observe_end, full));
+    push_cue(&mut track, global_observe_end, full, &machine_view, false);
     if let Some(display) = topology.node("display") {
-        track.push((global_observe_end + 0.40, focus(display.bounds, 210.0)));
-        track.push((global_observe_end + 1.10, focus(display.bounds, 92.0)));
-        track.push((global_observe_end + 1.85, display_screen(display.bounds)));
-        track.push((
+        let display_view = navigation
+            .view_for_module("gpu.scanout")
+            .map(|view| view.id.as_str())
+            .unwrap_or(machine_view.as_str());
+        push_cue(
+            &mut track,
+            global_observe_end + 0.40,
+            focus(display.bounds, 210.0),
+            display_view,
+            false,
+        );
+        push_cue(
+            &mut track,
+            global_observe_end + 1.10,
+            focus(display.bounds, 92.0),
+            display_view,
+            false,
+        );
+        push_cue(
+            &mut track,
+            global_observe_end + 1.85,
+            display_screen(display.bounds),
+            display_view,
+            false,
+        );
+        push_cue(
+            &mut track,
             config.game_end() + config.outro_seconds - 0.20,
             display_screen(display.bounds),
-        ));
+            display_view,
+            false,
+        );
     }
-    track.push((total - 0.05, full));
-    track.sort_by(|left, right| left.0.total_cmp(&right.0));
+    push_cue(&mut track, total - 0.05, full, &machine_view, false);
+    track.sort_by(|left, right| left.time.total_cmp(&right.time));
     dedupe_times(&mut track);
     track
 }
 
+fn push_cue(
+    track: &mut Vec<CameraCue>,
+    time: f32,
+    rect: Rect,
+    view_id: &str,
+    detail_lod: bool,
+) {
+    track.push(CameraCue {
+        time,
+        rect,
+        view_id: view_id.to_owned(),
+        detail_lod,
+    });
+}
+
 fn hold_view(
-    track: &mut Vec<(f32, Rect)>,
+    track: &mut Vec<CameraCue>,
     navigation: &NavigationModel,
     time: f32,
     module_id: &str,
@@ -295,8 +442,9 @@ fn hold_view(
 ) {
     if let Some(view) = navigation.view_for_module(module_id) {
         let shot = aspect_rect(view.bounds, 0.0);
-        track.push((time, shot));
-        track.push((time + hold, shot));
+        let detail_lod = view.level == NavigationLevel::Detail;
+        push_cue(track, time, shot, &view.id, detail_lod);
+        push_cue(track, time + hold, shot, &view.id, detail_lod);
     }
 }
 
@@ -334,13 +482,13 @@ fn aspect_rect(bounds: Rect, padding: f32) -> Rect {
     Rect::new(x, y, w, h)
 }
 
-fn dedupe_times(track: &mut [(f32, Rect)]) {
+fn dedupe_times(track: &mut [CameraCue]) {
     let mut last = -1.0_f32;
-    for (time, _) in track {
-        if *time <= last {
-            *time = last + 0.001;
+    for cue in track {
+        if cue.time <= last {
+            cue.time = last + 0.001;
         }
-        last = *time;
+        last = cue.time;
     }
 }
 
@@ -373,22 +521,46 @@ mod tests {
         assert!(!output.contains("attributeName=\"viewBox\""));
         assert!(output.contains("viewBox=\"0 0 864 484\""));
         assert!(output.contains("@keyframes leaderCamera"));
-        assert!(output.contains("@keyframes leaderDetailLod"));
+        assert!(output.contains("@keyframes leaderNodeKindLod"));
         assert!(output.contains("id=\"camera-world\""));
         assert!(output.contains("id=\"navigation-hierarchy\""));
+        assert!(output.contains("id=\"navigation-scenes\""));
         assert!(!output.contains("id=\"f3-datapath\""));
     }
 
     #[test]
-    fn navigation_overlay_serializes_inspectable_detail_metadata() {
+    fn navigation_overlay_serializes_inspectable_detail_metadata_and_scene_cues() {
         let topology = build_topology();
         let navigation = build_navigation(&topology);
-        let overlay = navigation_overlay(&navigation);
+        let config = RenderConfig::default();
+        let track = camera_track(&navigation, &topology, config);
+        let overlay = navigation_overlay(&navigation, &track, config.total());
         assert!(overlay.contains("data-module=\"decode.microcode\""));
         assert!(overlay.contains("data-module=\"io.shields\""));
         assert!(overlay.contains("data-module=\"gpu.timing\""));
         assert!(overlay.contains("data-density=\"bit_exact\""));
         assert!(overlay.contains("data-parent=\"view-gpu\""));
+        assert!(overlay.contains("data-scene-view=\"view-decode.microcode\""));
+        assert!(overlay.contains("data-scene-view=\"view-io.shields\""));
+        assert!(overlay.contains("data-scene-detail=\"true\""));
+    }
+
+    #[test]
+    fn scene_cues_drive_contextual_focus() {
+        let topology = build_topology();
+        let navigation = build_navigation(&topology);
+        let config = RenderConfig::default();
+        let track = camera_track(&navigation, &topology, config);
+        let microcode = navigation
+            .view_for_module("decode.microcode")
+            .expect("microcode view");
+        let cue = track
+            .iter()
+            .find(|cue| cue.view_id == microcode.id && cue.detail_lod)
+            .expect("microcode detail cue");
+        assert_eq!(focus_opacity(&navigation, microcode, cue), 1.0);
+        let alu = navigation.view_for_module("alu.ripple").expect("alu view");
+        assert!(focus_opacity(&navigation, alu, cue) < 0.1);
     }
 
     #[test]
