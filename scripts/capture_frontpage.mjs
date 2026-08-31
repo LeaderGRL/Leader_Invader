@@ -36,13 +36,24 @@ try {
     throw new Error("Browser SVG timeline seeking is unavailable");
   }
 
-  const staticContract = await page.evaluate(() => ({
-    nodes: document.querySelectorAll("#v2-logic-nodes > g").length,
-    staticWires: document.querySelectorAll("#v2-static-wires > use").length,
-    memoryPages: document.querySelectorAll("#v2-memory-byte-fabric [data-memory-page]").length,
-    particles: document.querySelectorAll("animateMotion").length,
-    cameraAnimations: document.querySelectorAll('animate[attributeName="viewBox"]').length,
-  }));
+  const staticContract = await page.evaluate(() => {
+    const machine = document.querySelector("#v2-machine");
+    const logic = document.querySelector("#v2-logic-nodes");
+    const memory = document.querySelector("#v2-memory-byte-fabric");
+    const machineRect = machine?.getBoundingClientRect();
+    const logicRect = logic?.getBoundingClientRect();
+    const memoryRect = memory?.getBoundingClientRect();
+    return {
+      nodes: document.querySelectorAll("#v2-logic-nodes > g").length,
+      staticWires: document.querySelectorAll("#v2-static-wires > use").length,
+      memoryPages: document.querySelectorAll("#v2-memory-byte-fabric [data-memory-page]").length,
+      particles: document.querySelectorAll("animateMotion").length,
+      cameraAnimations: document.querySelectorAll('animate[attributeName="viewBox"]').length,
+      machineRect: machineRect && { x: machineRect.x, y: machineRect.y, width: machineRect.width, height: machineRect.height },
+      logicRect: logicRect && { x: logicRect.x, y: logicRect.y, width: logicRect.width, height: logicRect.height },
+      memoryRect: memoryRect && { x: memoryRect.x, y: memoryRect.y, width: memoryRect.width, height: memoryRect.height },
+    };
+  });
 
   if (staticContract.nodes === 0 || staticContract.staticWires === 0) {
     throw new Error(`Physical die missing at t=0: ${JSON.stringify(staticContract)}`);
@@ -52,6 +63,12 @@ try {
   }
   if (staticContract.particles !== 0 || staticContract.cameraAnimations !== 0) {
     throw new Error(`V2 must not contain particle/camera motion: ${JSON.stringify(staticContract)}`);
+  }
+  if (!staticContract.logicRect || staticContract.logicRect.width < 850 || staticContract.logicRect.height < 400) {
+    throw new Error(`Physical logic die is cropped or undersized: ${JSON.stringify(staticContract.logicRect)}`);
+  }
+  if (!staticContract.memoryRect || staticContract.memoryRect.width < 400 || staticContract.memoryRect.height < 250) {
+    throw new Error(`Memory fabric is cropped or undersized: ${JSON.stringify(staticContract.memoryRect)}`);
   }
 
   const manifest = [];
