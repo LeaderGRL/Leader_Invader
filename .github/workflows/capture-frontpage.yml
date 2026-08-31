@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Review the committed unclipped physical-die artifact exactly as GitHub will load it.
+      # Review the committed production artifact exactly as GitHub will load it.
       - name: Install Playwright
         run: |
           npm install --no-save playwright@1.58.2
@@ -29,19 +29,29 @@ jobs:
         run: node scripts/capture_frontpage.mjs
 
       - name: Verify captures
+        if: always()
         run: |
-          test -f generated/frontpage-captures/01-power-on-full-die.png
-          test -f generated/frontpage-captures/02-native-bus-propagation.png
-          test -f generated/frontpage-captures/03-ripple-alu-propagation.png
-          test -f generated/frontpage-captures/04-exact-memory-cell.png
-          test -f generated/frontpage-captures/05-native-crt-gameplay.png
+          test -f generated/frontpage-captures/01-overview.png
+          test -f generated/frontpage-captures/02-fetch-decode.png
+          test -f generated/frontpage-captures/03-microcode.png
+          test -f generated/frontpage-captures/04-alu.png
+          test -f generated/frontpage-captures/05-rom.png
+          test -f generated/frontpage-captures/06-ram.png
+          test -f generated/frontpage-captures/07-alu-late.png
+          test -f generated/frontpage-captures/08-vram.png
+          test -f generated/frontpage-captures/09-gpu.png
+          test -f generated/frontpage-captures/10-late-memory.png
+          test -f generated/frontpage-captures/11-outro-overview.png
           test -f generated/frontpage-captures/manifest.json
           ls -lh generated/frontpage-captures
 
+      # Upload partial captures even when a visual assertion fails. A failed
+      # rendering must remain inspectable rather than disappearing with the job.
       - name: Upload frontpage checkpoints
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: leader-physical-die-checkpoints-${{ github.sha }}
           path: generated/frontpage-captures/
           retention-days: 30
-          if-no-files-found: error
+          if-no-files-found: warn
