@@ -3,8 +3,10 @@
 mod activity_adapter;
 pub mod playback;
 mod viewport;
+mod workspace;
 
 pub use activity_adapter::ActivityResolver;
+pub use workspace::WorkspaceLayout;
 
 use leader_core::{
     build_navigation, build_topology, CameraView, ExplorerState, Link, NavigationModel, Node, Rect,
