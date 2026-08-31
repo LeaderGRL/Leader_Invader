@@ -69,6 +69,25 @@ function setHighlightedNode(nodeId) {
   }
 }
 
+function applyActivity(activity) {
+  svg.querySelectorAll(".is-active").forEach((element) => element.classList.remove("is-active"));
+  if (!activity?.nodes) {
+    delete svg.dataset.activityPhase;
+    return;
+  }
+
+  svg.dataset.activityPhase = activity.phase;
+  const activeNodes = new Set(activity.nodes);
+  for (const nodeId of activeNodes) {
+    svg.querySelector(`[data-node-id="${CSS.escape(nodeId)}"]`)?.classList.add("is-active");
+  }
+  for (const link of svg.querySelectorAll("[data-link-id]")) {
+    if (activeNodes.has(link.dataset.fromNode) && activeNodes.has(link.dataset.toNode)) {
+      link.classList.add("is-active");
+    }
+  }
+}
+
 function renderGraph() {
   const graph = parseJson(explorer.current_view_graph_json());
   const camera = parseJson(explorer.camera_json());
@@ -124,6 +143,7 @@ function renderGraph() {
 
   svg.append(linkLayer, nodeLayer);
   renderNavigation(currentView, crumbs, children);
+  applyActivity(parseJson(playback.current_activity_json()));
 }
 
 function renderNavigation(currentView, crumbs, children) {
@@ -172,6 +192,8 @@ function renderInspector(event) {
 
 function renderPlayback() {
   const summary = parseJson(playback.summary_json());
+  const activity = parseJson(playback.current_activity_json());
+  applyActivity(activity);
   if (!summary) {
     playbackState.textContent = "No trace loaded.";
     progressFill.style.width = "0%";
@@ -195,7 +217,8 @@ function renderPlayback() {
     `seed      ${summary.seed}`,
     `cursor    ${summary.cursor}/${lastCursor}`,
     `frame     ${micro?.frame ?? "—"}`,
-    `phase     ${micro?.phase ?? "—"}`,
+    `phase     ${activity?.phase ?? "—"}`,
+    `µphase    ${micro?.phase ?? "—"}`,
     `µkind     ${micro?.kind ?? "—"}`,
     `PC        ${micro ? hex(micro.pc, 4) : "—"}`,
     `MAR       ${micro ? hex(micro.mar, 4) : "—"}`,
@@ -205,6 +228,7 @@ function renderPlayback() {
     `bus data  ${bus ? hex(bus.data, 2) : "—"}`,
     `addr src  ${bus?.addressSource ?? "—"}`,
     `data src  ${bus?.dataSource ?? "—"}`,
+    `active    ${activity?.nodes?.length ?? 0} nodes`,
     `score     ${frame?.score ?? "—"}`,
     `lives     ${frame?.lives ?? "—"}`,
   ];
