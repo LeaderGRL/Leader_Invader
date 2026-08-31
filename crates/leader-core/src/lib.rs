@@ -43,8 +43,9 @@ pub mod video_timing;
 pub mod video_timing_layout;
 
 pub use activity::{
-    physical_activity_nodes, physical_flag_bit_changes, physical_pc_bit_changes,
-    physical_register_bit_changes, physical_sp_bit_changes, PhysicalBitChange,
+    physical_activity_nodes, physical_alu_node_values, physical_flag_bit_changes,
+    physical_pc_bit_changes, physical_register_bit_changes, physical_sp_bit_changes,
+    PhysicalAluNodeValue, PhysicalBitChange,
 };
 pub use call_stack_contract::{validate_call_stack_contract, CallStackValidation};
 pub use control_contract::{
