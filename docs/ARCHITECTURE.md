@@ -2,29 +2,37 @@
 
 Leader Invader is a deterministic simulation + replay compiler, not a hand-authored animation.
 
-GitHub renders README SVGs as images, so the simulation runs before publication and the generated SVG is a self-contained declarative replay.
+GitHub renders the README SVG as an image, so the simulation runs before publication and the generated SVG is a self-contained declarative replay. The same physical machine model is also the authority for the future interactive explorer.
 
 ```text
 seed
   |
   v
-leader-core ----------> MatchTrace ------------> leader-svg base
-  |                         |                         |
-  |                         |                         v
-  |                         +-----------------> leader-cli native overlays
-  |                                                   |
-  |                                                   v
-  +--> ROM + CPU + µROM + RAM + VRAM          generated/Leader.svg
-       + arcade peripherals
-       + canonical memory map
-       + validated physical topology
+leader-core ----------------------> MatchTrace -----------------> leader-svg base
+  |                                     |                              |
+  |                                     |                              v
+  |                                     +-----------------------> leader-cli native overlays
+  |                                                                    |
+  |                                                                    +--> cinematic CameraCue scenes
+  |                                                                    +--> hierarchy metadata
+  |                                                                    +--> interactive node targets
+  |                                                                    |
+  +--> physical topology --> NavigationModel                            v
+       ROM / CPU / µROM / RAM / VRAM                           generated/Leader.svg
+       arcade peripherals
+       canonical memory map
+       physical contracts
 ```
+
+The central rule is simple:
+
+> **There is one physical graph. Navigation, camera framing and interaction reference that graph; they never replace it with a second UI-only topology.**
 
 ## Crates
 
 ### `leader-core`
 
-Owns semantics, determinism and physical/causal contracts.
+Owns semantics, determinism, physical authority and frontend-independent navigation structure.
 
 - repository-owned deterministic RNG;
 - assembled byte-addressed ROM program;
@@ -40,7 +48,9 @@ Owns semantics, determinism and physical/causal contracts.
 - three-slot enemy projectile bank;
 - 64-byte bit-addressed shield bank;
 - topology injection for CPU and arcade peripherals;
-- CPU, stack, topology, memory-map and M3 peripheral validators;
+- CPU, stack, topology, memory-map, video and M3 peripheral validators;
+- hierarchical `NavigationModel` derived from the final physical topology;
+- direct traversal queries for node → view resolution;
 - `MatchTrace`, the contract between simulation and presentation.
 
 ### `leader-svg`
@@ -64,17 +74,20 @@ Owns the reproducible production boundary and high-fidelity native presentation.
 cargo run -p leader-cli -- render --seed <seed> --output generated/Leader.svg
 ```
 
-The production overlay chain is:
+The production presentation chain is conceptually:
 
 ```text
-director
--> PC -> decoder -> µcode -> 24-bit control -> control-state -> microcycles
--> ALU -> flags -> registers -> bus -> stack
--> formation cadence -> shift register -> enemy-shot bank -> shield bank
--> timing
+base SVG
+ -> hierarchical director / LOD
+ -> interactive navigation targets
+ -> PC -> decoder -> µcode -> 24-bit control -> control-state -> microcycles
+ -> ALU -> flags -> registers -> bus -> video pipeline -> stack
+ -> formation cadence -> shift register -> enemy-shot bank -> shield bank
+ -> timing
+ -> SVG contract validation
 ```
 
-`render`, `trace` and `stats` consume the trace returned directly by `Machine::run_match()`. They do not materialize SP and do not depend on `MicroSample` reconstruction.
+`render`, `trace` and `stats` consume the trace returned directly by `Machine::run_match()`. They do not depend on `MicroSample` reconstruction.
 
 ## Fidelity contract
 
@@ -84,9 +97,167 @@ director
 
 **F3 — physical CPU datapath authority — complete.** Every visible critical CPU/control path is driven from native same-tick state or a physically justified combinational path.
 
-**M3 — arcade peripheral authority — core set complete.** The same rule now covers shift hardware, formation timing, multiple enemy projectiles and destructible shields.
+**M3 — arcade peripheral authority — core set complete.** The same rule covers shift hardware, formation timing, multiple enemy projectiles, destructible shields and the native video path.
 
 A visible path is authoritative only if corrupting or removing its backing state/control causes validation to fail. Presentation sampling never changes simulation semantics.
+
+## Physical topology vs navigation hierarchy
+
+`Topology` is the physical source of truth:
+
+```text
+Topology
+  groups[]
+  nodes[]
+  links[]
+```
+
+A node owns physical identity, kind, group and bounds. Links connect real topology node IDs. All later presentation systems reference these exact IDs.
+
+`NavigationModel` is derived from the completed topology after CPU/M3/video layout injection:
+
+```text
+machine
+  -> subsystem
+       -> detail
+```
+
+Examples:
+
+```text
+machine
+  -> decode
+       -> decode.instruction
+       -> decode.microcode
+
+machine
+  -> alu
+       -> alu.ripple
+
+machine
+  -> io
+       -> io.input_irq
+       -> io.shift_register
+       -> io.formation
+       -> io.enemy_shots
+       -> io.shields
+
+machine
+  -> gpu
+       -> gpu.dma
+       -> gpu.scanout
+       -> gpu.timing
+```
+
+A `Module` contains references to physical `node_ids`, never copies of nodes. Its bounds are derived by unioning the bounds of those physical nodes.
+
+A `CameraView` references one module and defines presentation framing plus detail density:
+
+```text
+Overview  -> whole machine
+Native    -> subsystem
+BitExact  -> dense detail module
+```
+
+### Hierarchy invariants
+
+`navigation_violations()` makes hierarchy correctness a production contract:
+
+- the default view exists;
+- every physical node has exactly one subsystem owner matching `node.group`;
+- detail modules reference only existing physical nodes;
+- every detail module contains its referenced node bounds;
+- a physical node has at most one detail owner;
+- all parent/child module links close;
+- all view parent links close;
+- view/module IDs are unique.
+
+This prevents a future UI from silently developing a topology different from the simulated machine.
+
+## Direct node navigation
+
+`NavigationModel` exposes frontend-independent traversal queries:
+
+```text
+child_views(view)
+view_path_for_node(node)
+deepest_view_for_node(node)
+```
+
+For example:
+
+```text
+microRom
+  -> view-machine
+  -> view-decode
+  -> view-decode.microcode
+
+shieldAddr
+  -> view-machine
+  -> view-io
+  -> view-io.shields
+```
+
+A node with no dedicated detail module resolves to its subsystem view. An unknown node has no navigation target.
+
+The production SVG compiles the same resolution directly into each rendered physical node:
+
+```text
+data-subsystem
+data-detail-module
+data-detail-density
+data-target-view
+data-parent-view
+data-view-path
+```
+
+This means a WASM/DOM explorer can implement click, enter, back and breadcrumbs without inferring hierarchy from screen coordinates or CSS classes.
+
+## Deterministic camera scenes and level of detail
+
+The README cannot rely on JavaScript interaction, so the hierarchy already powers an automatic cinematic traversal.
+
+The director builds one ordered `CameraCue` timeline. Each cue contains:
+
+```text
+time
+camera rectangle
+view ID
+detail LOD state
+```
+
+That single source drives all of the following:
+
+- camera matrix animation;
+- active hierarchy boundary emphasis;
+- node kind visibility;
+- node title visibility;
+- base wire opacity;
+- subsystem group opacity;
+- serialized scene metadata for later replay/scrubbing.
+
+The SVG includes a hidden `navigation-scenes` group with deterministic metadata:
+
+```text
+data-scene-time
+data-scene-progress
+data-scene-view
+data-scene-detail
+data-scene-x/y/w/h
+```
+
+The future explorer can therefore reuse the README's cinematic sequence, scrub it, pause it, or replace it with user-controlled navigation without changing simulation semantics.
+
+### Readability policy
+
+The diagram does not use a single visual density everywhere.
+
+- **Machine overview:** topology remains visible, but wires and secondary node text are subdued.
+- **Subsystem view:** local wiring and labels gain contrast.
+- **Bit-exact detail:** wire, node-title and node-kind contrast rises while broad subsystem framing recedes.
+- **Gameplay CRT:** technical framing recedes again so the game remains legible.
+
+Native activity overlays are not attenuated by this readability LOD. Recorded execution remains visually authoritative even when static diagram scaffolding is softened.
 
 ## Physical CPU control ROM
 
@@ -134,7 +305,7 @@ The system deliberately uses the **smallest authoritative representation** for e
 - **Enemy shots:** persistent `EnemyShotBank`, exact `X/Y/ACTIVE` RAM writes and native `FrameState` snapshots.
 - **Shields:** persistent `ShieldBank` plus exact 64-byte RAM mutation stream. Shield bytes are intentionally not duplicated into every `FrameState`.
 
-This distinction matters: “native” means the data comes from the real simulation mutation path, not that every subsystem must allocate a bespoke event type.
+“Native” means the data comes from the real simulation mutation path, not that every subsystem must allocate a bespoke event type.
 
 ## CPU authority
 
@@ -186,13 +357,7 @@ Each native event records alive count, divisor, counter before/after and tick. `
 
 ### Three-slot enemy projectile bank
 
-`EnemyShotBank` owns three independent projectile slots plus allocator/cooldown state.
-
-Per slot RAM:
-
-```text
-X / Y / ACTIVE
-```
+`EnemyShotBank` owns three independent projectile slots plus allocator/cooldown state. Per-slot RAM is `X / Y / ACTIVE`.
 
 The validator replays all writes between native frame checkpoints. It rejects arm-while-active, clear-while-inactive, wrong component controls, missing writes and snapshot divergence. All three slots and concurrent projectile states must be exercised in a complete match.
 
@@ -210,9 +375,9 @@ An orphan shield clear is invalid even if the final projectile snapshot would ot
 
 ### Bit-addressed destructible shields
 
-There are four `16 × 8` shield bitmaps: 512 bits / 64 bytes total. The shield RAM window begins at `RAM_BASE + 0x40`.
+There are four `16 × 8` shield bitmaps: 512 bits / 64 bytes total. The initial silhouette is stored as actual bits.
 
-The initial silhouette is stored as actual bits. World coordinates resolve to:
+World coordinates resolve to:
 
 ```text
 world x/y
@@ -222,22 +387,15 @@ world x/y
  -> one-hot bit mask
 ```
 
-Both projectile directions sweep every intermediate pixel to prevent tunneling. On impact, `ShieldBank::damage` clears exactly one existing bit and returns the byte-level `before / mask / after` mutation. Machine writes the resulting byte to shield RAM with a source-specific control:
+Both projectile directions sweep every intermediate pixel to prevent tunneling. On impact, `ShieldBank::damage` clears exactly one existing bit and returns the byte-level `before / mask / after` mutation.
 
-```text
-SHIELD_DAMAGE_PLAYER
-SHIELD_DAMAGE_ENEMY
-```
-
-`validate_shield_bank_contract()` reconstructs the full bank from the initial bitmap and replays only those RAM writes. A valid mutation must satisfy:
+A valid shield mutation satisfies:
 
 ```text
 after == before & !mask
 mask.count_ones() == 1
 before & mask != 0
 ```
-
-It therefore rejects bit creation, multi-bit destruction, duplicate destruction and invalid control provenance.
 
 Physical path:
 
@@ -257,11 +415,11 @@ RAM0 RAM1 RAM2 RAM3
       scanout
 ```
 
-The CRT overlay starts from the same initial bitmap and attaches a disappearance animation to each damaged bit at the timestamp of its native RAM write. There is no separate decorative shield state.
+The CRT overlay starts from the same initial bitmap and attaches disappearance animation to each damaged bit at the timestamp of its native RAM write. There is no separate decorative shield state.
 
 ## Canonical memory ownership
 
-The project now has one 8080-flavoured address map without changing any existing binary address:
+The project has one 8080-flavoured address map:
 
 ```text
 0000–1FFF  PROGRAM ROM    8 KiB
@@ -273,26 +431,9 @@ The project now has one 8080-flavoured address map without changing any existing
 A000–A1FF  MMIO           input / shift / game device
 ```
 
-`memory_map.rs` owns `MemoryRegion`, `MemoryOwner`, top-level ranges, M3 RAM subregions and all public MMIO ports. `program.rs` re-exports its historical constants from this module, preserving source compatibility while removing duplicate address authority.
+`memory_map.rs` owns `MemoryRegion`, `MemoryOwner`, top-level ranges, M3 RAM subregions and all public MMIO ports. `program.rs` re-exports historical constants from this module.
 
-Static map tests prove:
-
-- ROM/RAM/VRAM/MMIO are disjoint;
-- projectile, shield and stack subregions fit in RAM and do not overlap;
-- every declared port belongs to MMIO;
-- the 1536-byte 128×96 framebuffer fits in the 2 KiB physical VRAM region;
-- all owner boundary transitions are exact.
-
-`validate_memory_map_contract()` then validates the **runtime trace**, not only constants:
-
-- every addressed transaction belongs to a mapped owner;
-- fetches target ROM and are ROM-sourced;
-- reads use `Rom`, `Ram`, `Vram` or `Device` according to the mapped owner;
-- writes are CPU-driven;
-- input transactions remain MMIO/device-owned;
-- DMA and scanout remain VRAM-owned.
-
-Corrupting an address into `0x9000`, moving a fetch into RAM or changing a RAM read to ROM data causes validation failure. Production `render`, `trace` and `stats` all require this contract.
+Static map tests prove region/subregion containment and non-overlap. `validate_memory_map_contract()` then validates the runtime trace: mapped owner, fetch ownership, read data source, CPU writes, MMIO input and VRAM DMA/scanout ownership.
 
 ## Physical topology contract
 
@@ -305,7 +446,8 @@ Corrupting an address into `0x9000`, moving a fetch into RAM or changing a RAM r
 - shift-register hardware;
 - formation cadence hardware;
 - three complete enemy-shot X/Y/ACTIVE banks;
-- shield address/mask/write/RAM/video nodes.
+- shield address/mask/write/RAM/video nodes;
+- physical video timing and scanout nodes.
 
 Generation fails if a required subsystem disappears or escapes its physical group.
 
@@ -313,27 +455,30 @@ Generation fails if a required subsystem disappears or escapes its physical grou
 
 Before writing `Leader.svg`, the CLI validates:
 
-1. final topology;
-2. native CPU/control authority;
-3. first-class SP vs stack bus;
-4. CALL/RET stack contract;
-5. shift-register MMIO authority;
-6. formation cadence and movement gating;
-7. enemy-shot RAM/snapshot replay;
-8. shield one-bit RAM replay;
-9. enemy-shot ↔ shield cross-device ordering;
-10. canonical memory ownership for every addressed native bus transaction;
-11. required native SVG groups/metadata;
-12. absence of legacy semantic activity / JavaScript;
-13. hard **5,000,000-byte** SVG budget.
+1. final physical topology;
+2. hierarchical navigation closure and unique node ownership;
+3. native CPU/control authority;
+4. first-class SP vs stack bus;
+5. CALL/RET stack contract;
+6. shift-register MMIO authority;
+7. formation cadence and movement gating;
+8. enemy-shot RAM/snapshot replay;
+9. shield one-bit RAM replay;
+10. enemy-shot ↔ shield cross-device ordering;
+11. canonical memory ownership for every addressed native bus transaction;
+12. ordered raster/DMA/scanout/WAIT video authority;
+13. required native SVG groups and metadata;
+14. concrete hierarchy, scene and interactive node-target metadata;
+15. absence of legacy semantic activity and JavaScript;
+16. XML/GitHub-safe SVG validation.
 
-The current generated artifact measures **3,805,473 bytes**, leaving roughly **1.19 MB** of margin.
+Artifact size is telemetry, not a semantic validity condition. A large artifact is valid when its causal and inspectability contracts are complete.
 
 ## Video path
 
 Game state is rasterized into simulated 128×96 one-bit VRAM, checksummed and exposed through DMA/scanout activity. Invaders, player, all enemy shots and current shield bits affect the native VRAM image.
 
-For tractable README size, the SVG uses compact vector gameplay elements and bounded native overlay sampling. Shield destruction is still timestamped from exact RAM mutations rather than approximated from frame interpolation.
+The SVG uses compact vector gameplay elements and bounded sampling only for high-frequency presentation families where exhaustive drawing would reduce readability. Underlying simulation and validation remain exhaustive.
 
 ## Determinism
 
@@ -349,4 +494,4 @@ A commit SHA is therefore a natural production seed.
 
 ## Failure policy
 
-Generation fails rather than publishing misleading output if the match misses its frame budget, topology is invalid, CPU physical authority is broken, stack/return bytes disagree, a peripheral event lacks bus/RAM authority, formation movement bypasses cadence, projectile snapshots diverge, a shield write is not a valid one-bit erase, a shield-caused shot clear is orphaned, a native bus transaction violates mapped ownership, required native SVG metadata disappears, the artifact exceeds budget, or SVG safety/XML validation fails.
+Generation fails rather than publishing misleading output if the match misses its frame budget, topology is invalid, navigation ownership is ambiguous, CPU physical authority is broken, stack/return bytes disagree, a peripheral event lacks bus/RAM authority, formation movement bypasses cadence, projectile snapshots diverge, a shield write is not a valid one-bit erase, a shield-caused shot clear is orphaned, a native bus transaction violates mapped ownership, required hierarchy/native metadata disappears, an interactive node target becomes invalid, or SVG safety/XML validation fails.
