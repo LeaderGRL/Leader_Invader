@@ -9,6 +9,7 @@ mod director;
 mod enemy_shot_overlay;
 mod flags_overlay;
 mod formation_cadence_overlay;
+mod frontpage;
 mod microcode_overlay;
 mod microcycle_overlay;
 mod navigation_targets;
@@ -35,7 +36,7 @@ use leader_core::{
     validate_shift_register_contract, validate_sp_event_stream, validate_video_pipeline_contract,
     MatchTrace, MicroCycleKind, Machine, Topology,
 };
-use leader_svg::{render, RenderConfig};
+use leader_svg::RenderConfig;
 
 fn main() {
     if let Err(error) = run() {
@@ -109,12 +110,6 @@ fn run_native_trace(seed: &str, max_frames: u32) -> MatchTrace {
     Machine::run_match(seed, max_frames)
 }
 
-fn render_native_base(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
-    let mut native_base = trace.clone();
-    native_base.micro_samples.clear();
-    render(topology, &native_base, config)
-}
-
 fn validate_navigation(topology: &Topology) -> Result<usize, String> {
     let navigation = build_navigation(topology);
     let violations = navigation_violations(topology, &navigation);
@@ -172,6 +167,35 @@ fn validate_native_trace(
     ))
 }
 
+fn validate_frontpage_svg(svg: &str) -> Result<(), String> {
+    for marker in [
+        "data-frontpage-version=\"observatory-v1\"",
+        "id=\"frontpage-overview\"",
+        "id=\"frontpage-native-bus-pulses\"",
+        "id=\"frontpage-logic-microscope\"",
+        "id=\"frontpage-native-video-replay\"",
+        "id=\"frontpage-native-telemetry\"",
+        "data-bus-address=\"",
+        "data-bus-data=\"",
+        "data-detail-module=\"ramsys.pages\"",
+        "data-vram-frame=\"",
+    ] {
+        if !svg.contains(marker) {
+            return Err(format!("frontpage SVG is missing required marker {marker}"));
+        }
+    }
+    if svg.contains("leaderCamera") || svg.contains("attributeName=\"viewBox\"") {
+        return Err("frontpage SVG must not contain a cinematic camera".to_owned());
+    }
+    if svg.contains("<script") || svg.contains("javascript:") {
+        return Err("frontpage SVG violates the declarative-only GitHub contract".to_owned());
+    }
+    if svg.contains("values=\"0;1;1;0\"") {
+        return Err("frontpage SVG contains accumulating VRAM frame opacity".to_owned());
+    }
+    Ok(())
+}
+
 fn render_cmd(options: Options) -> Result<(), String> {
     let topology = build_topology();
     let topology_validation = validate_final_topology(&topology)
@@ -196,33 +220,13 @@ fn render_cmd(options: Options) -> Result<(), String> {
         video,
     ) = validate_native_trace(&trace)?;
     let config = RenderConfig::default();
-    let svg = render_native_base(&topology, &trace, config);
-    let svg = director::apply_camera(svg, &topology, &trace, config);
-    let svg = navigation_targets::apply(svg, &topology);
-    let svg = pc_overlay::apply(svg, &topology, &trace, config);
-    let svg = decoder_overlay::apply(svg, &topology, &trace, config);
-    let svg = microcode_overlay::apply(svg, &topology, &trace, config);
-    let svg = control_word_overlay::apply(svg, &topology, &trace, config);
-    let svg = control_state_overlay::apply(svg, &topology, &trace, config);
-    let svg = microcycle_overlay::apply(svg, &topology, &trace, config);
-    let svg = alu_overlay::apply(svg, &topology, &trace, config);
-    let svg = flags_overlay::apply(svg, &topology, &trace, config);
-    let svg = register_overlay::apply(svg, &topology, &trace, config);
-    let svg = bus_overlay::apply(svg, &topology, &trace, config);
-    let svg = video_pipeline_overlay::apply(svg, &topology, &trace, config);
-    let svg = stack_overlay::apply(svg, &topology, &trace, config);
-    let svg = formation_cadence_overlay::apply(svg, &topology, &trace, config);
-    let svg = shift_register_overlay::apply(svg, &topology, &trace, config);
-    let svg = enemy_shot_overlay::apply(svg, &topology, &trace, config);
-    let svg = shield_overlay::apply(svg, &topology, &trace, config);
-    let svg = timing_overlay::apply(svg, &topology, &trace, config);
-    let svg_validation = render_contract::validate_native_svg_contract(&svg)
-        .map_err(|error| format!("native SVG contract invalid: {error}"))?;
+    let svg = frontpage::render(&topology, &trace, config);
+    validate_frontpage_svg(&svg)?;
     write(&options.output, svg.as_bytes())?;
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
     println!(
-        "rendered {} nodes / {} links / {} navigation views / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} shift events / {} cadence clocks / {} cadence ticks / {} enemy-shot writes / {} max concurrent shots / {} shield-caused shot clears / {} shield damages / {} shield pixels left / {} mapped bus transactions / video {}/{}/{}/{} / {} native overlays / {} bytes -> {}",
+        "rendered fixed-frontpage {} nodes / {} links / {} navigation views / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} shift events / {} cadence clocks / {} cadence ticks / {} enemy-shot writes / {} max concurrent shots / {} shield-caused shot clears / {} shield damages / {} shield pixels left / {} mapped bus transactions / video {}/{}/{}/{} / {} bytes -> {}",
         topology_validation.nodes,
         topology_validation.links,
         navigation_views,
@@ -247,8 +251,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
         video.dma_bursts,
         video.scanouts,
         video.waits,
-        svg_validation.overlay_groups,
-        svg_validation.bytes,
+        svg.len(),
         options.output.display()
     );
     Ok(())
