@@ -9,10 +9,15 @@ mod bitfabric {
     include!("frontpage_bitfabric.rs");
 }
 
+mod camera {
+    include!("frontpage_camera.rs");
+}
+
 /// Canonical timing for the GitHub front-page artifact.
 ///
 /// The full machine is visible from t=0. Native propagation starts after a
-/// short power-on interval rather than after a cinematic assembly sequence.
+/// short power-on interval, then a deterministic technical camera exposes the
+/// active low-level subsystem at a readable scale.
 #[must_use]
 pub const fn render_config() -> RenderConfig {
     RenderConfig {
@@ -25,12 +30,13 @@ pub const fn render_config() -> RenderConfig {
     }
 }
 
-/// The GitHub front page is not a cinematic assembly sequence. The entire
-/// physical machine exists from t=0, then native activity starts almost
-/// immediately so a repository visitor sees causal hardware propagation within
-/// the first few seconds.
+/// Render the complete physical machine, enrich it with true memory/microcode
+/// bit-cell fabrics, then apply a trace-driven camera without altering the
+/// underlying topology or signal propagation.
 #[must_use]
 pub fn render(topology: &Topology, trace: &MatchTrace, _legacy_config: RenderConfig) -> String {
-    let svg = physical_die::render(topology, trace, render_config());
-    bitfabric::apply(svg, topology, trace)
+    let config = render_config();
+    let svg = physical_die::render(topology, trace, config);
+    let svg = bitfabric::apply(svg, topology, trace);
+    camera::apply(svg, topology, trace, config)
 }
