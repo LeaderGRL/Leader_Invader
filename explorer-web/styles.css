@@ -67,6 +67,12 @@ button.primary { width: 100%; border-color: #4777af; background: linear-gradient
 .hardware-node.is-active rect { fill: #23445d; stroke: #a9d8ff; stroke-width: 2.5; filter: drop-shadow(0 0 7px rgba(126, 194, 255, .55)); }
 .hardware-node.is-highlighted rect { fill: #253d59; stroke: #9bc9ff; stroke-width: 2.5; }
 .hardware-node.is-active.is-highlighted rect { fill: #315675; stroke: #d3ebff; }
+.hardware-node.is-bit-change rect { stroke-width: 3.5; }
+.hardware-node.bit-to-one rect { fill: #244d39; stroke: #7bffc0; filter: drop-shadow(0 0 9px rgba(84, 255, 170, .72)); }
+.hardware-node.bit-to-zero rect { fill: #552b35; stroke: #ff8ea5; filter: drop-shadow(0 0 9px rgba(255, 103, 137, .72)); }
+.hardware-node.is-active.bit-to-one rect { fill: #2c664d; stroke: #c5ffe1; }
+.hardware-node.is-active.bit-to-zero rect { fill: #6b3442; stroke: #ffd0da; }
+.bit-transition-value { paint-order: stroke; stroke: #070b10; stroke-width: 4; stroke-linejoin: round; fill: #f6fbff; pointer-events: none; font: 800 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
 @keyframes signal-flow {
   to { stroke-dashoffset: -20; }
