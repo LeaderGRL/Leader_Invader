@@ -194,7 +194,7 @@ The README remains a zero-JavaScript cinematic artifact, while the same Rust cor
 - follow PC / bus / DMA / VBlank navigates to canonical physical views;
 - PC, MAR, MDR, IR, bus address/data/source and frame state are inspectable in the browser;
 - seed and frame-count selection regenerate deterministic native traces;
-- CI compiles the explorer for `wasm32-unknown-unknown` in addition to native workspace tests and Clippy.
+- CI compiles the explorer for `wasm32-unknown-unknown`, checks browser JavaScript syntax, and runs native workspace tests + Clippy.
 
 ### Live physical activity ✅
 
@@ -202,15 +202,17 @@ The README remains a zero-JavaScript cinematic artifact, while the same Rust cor
 - ALU activity expands to all eight physical ripple slices;
 - addressed ROM/RAM/VRAM activity selects the exact canonical physical page;
 - WASM exposes the current native physical-activity snapshot;
-- the browser illuminates active nodes and animates canonical wires whose endpoints are active;
+- `leader-core` derives a canonical conservative active-link subgraph from the physical topology, so the frontend no longer infers wire activity from active endpoints;
+- address/data values are attached to core-owned active links and rendered as hexadecimal or binary at deep zoom;
+- native register/flag/PC/SP mutations are mapped to exact physical bit nodes and exposed by playback;
+- the browser renders 0→1 and 1→0 mutations independently from generic phase activity, including transition/source inspection;
 - `prefers-reduced-motion` disables signal-flow animation without hiding activity state.
 
 ### Remaining M4 work
 
-- expose exact active **link** authority from the core instead of deriving active wires from two active endpoints;
-- attach bit/byte values directly to active buses and route segments, including binary/hex inspection at deep zoom;
+- refine the conservative active-link subgraph into exact stage-by-stage electrical timing for each native microcycle;
 - animate ordered address → decoder/page → data/control propagation from same-tick native events;
-- expose native register/flag/PC/SP bit changes as dedicated live activity rather than only textual state;
+- expose per-slice ALU A/B/carry/result values and propagation order across all eight ripple stages;
 - replay/scrub deterministic camera scenes in addition to raw microcycle time;
 - add bot-policy selection once multiple deterministic policies are first-class core inputs;
 - expose the real framebuffer/CRT scanout in the live explorer and synchronize it with DMA/scan timing;
