@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod playback;
 mod viewport;
 
 use leader_core::{
