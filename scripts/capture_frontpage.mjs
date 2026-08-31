@@ -7,11 +7,11 @@ const outputDir = path.resolve(process.env.LEADER_FRONT_PAGE_CAPTURE_OUTPUT ?? "
 const svg = await readFile(input, "utf8");
 
 const checkpoints = [
-  { name: "01-assembled-machine", time: 44.0 },
-  { name: "02-microcode-control-rom", time: 58.0 },
-  { name: "03-live-ripple-alu", time: 76.0 },
-  { name: "04-live-work-ram", time: 95.0 },
-  { name: "05-video-scanout-game", time: 126.0 },
+  { name: "01-power-on-full-die", time: 0.0 },
+  { name: "02-native-bus-propagation", time: 58.0 },
+  { name: "03-ripple-alu-propagation", time: 76.0 },
+  { name: "04-exact-memory-cell", time: 95.0 },
+  { name: "05-native-crt-gameplay", time: 126.0 },
 ];
 
 await mkdir(outputDir, { recursive: true });
@@ -23,7 +23,7 @@ const page = await browser.newPage({
 });
 
 try {
-  await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:1200px;height:675px;overflow:hidden;background:#070b11}svg{display:block;width:1200px;height:675px}</style></head><body>${svg}</body></html>`, {
+  await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:1200px;height:675px;overflow:hidden;background:#04080d}svg{display:block;width:1200px;height:675px}</style></head><body>${svg}</body></html>`, {
     waitUntil: "load",
   });
 
@@ -36,6 +36,24 @@ try {
     throw new Error("Browser SVG timeline seeking is unavailable");
   }
 
+  const staticContract = await page.evaluate(() => ({
+    nodes: document.querySelectorAll("#v2-logic-nodes > g").length,
+    staticWires: document.querySelectorAll("#v2-static-wires > use").length,
+    memoryPages: document.querySelectorAll("#v2-memory-byte-fabric [data-memory-page]").length,
+    particles: document.querySelectorAll("animateMotion").length,
+    cameraAnimations: document.querySelectorAll('animate[attributeName="viewBox"]').length,
+  }));
+
+  if (staticContract.nodes === 0 || staticContract.staticWires === 0) {
+    throw new Error(`Physical die missing at t=0: ${JSON.stringify(staticContract)}`);
+  }
+  if (staticContract.memoryPages !== 136) {
+    throw new Error(`Expected 136 physical memory pages, got ${staticContract.memoryPages}`);
+  }
+  if (staticContract.particles !== 0 || staticContract.cameraAnimations !== 0) {
+    throw new Error(`V2 must not contain particle/camera motion: ${JSON.stringify(staticContract)}`);
+  }
+
   const manifest = [];
   for (const checkpoint of checkpoints) {
     await page.evaluate((time) => {
@@ -45,18 +63,32 @@ try {
     }, checkpoint.time);
     await page.waitForTimeout(60);
 
+    const visible = await page.evaluate(() => {
+      const root = document.querySelector("#v2-machine");
+      const node = document.querySelector("#v2-logic-nodes > g");
+      const wire = document.querySelector("#v2-static-wires > use");
+      return {
+        machine: root ? getComputedStyle(root).display !== "none" : false,
+        node: node ? getComputedStyle(node).display !== "none" && getComputedStyle(node).opacity !== "0" : false,
+        wire: wire ? getComputedStyle(wire).display !== "none" && getComputedStyle(wire).opacity !== "0" : false,
+      };
+    });
+    if (!visible.machine || !visible.node || !visible.wire) {
+      throw new Error(`Dangling/hidden physical die at ${checkpoint.time}s: ${JSON.stringify(visible)}`);
+    }
+
     const file = `${checkpoint.name}.png`;
     await root.screenshot({
       path: path.join(outputDir, file),
       animations: "allow",
     });
-    manifest.push({ ...checkpoint, file });
+    manifest.push({ ...checkpoint, file, visible });
     console.log(`captured ${checkpoint.time.toFixed(1)}s -> ${file}`);
   }
 
   await writeFile(
     path.join(outputDir, "manifest.json"),
-    `${JSON.stringify({ source: path.basename(input), checkpoints: manifest }, null, 2)}\n`,
+    `${JSON.stringify({ source: path.basename(input), staticContract, checkpoints: manifest }, null, 2)}\n`,
     "utf8",
   );
 } finally {
