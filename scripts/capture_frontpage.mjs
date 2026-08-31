@@ -8,10 +8,10 @@ const svg = await readFile(input, "utf8");
 
 const checkpoints = [
   { name: "01-power-on-full-die", time: 0.0 },
-  { name: "02-native-bus-propagation", time: 58.0 },
-  { name: "03-ripple-alu-propagation", time: 76.0 },
-  { name: "04-exact-memory-cell", time: 95.0 },
-  { name: "05-native-crt-gameplay", time: 126.0 },
+  { name: "02-native-bus-propagation", time: 4.5 },
+  { name: "03-ripple-alu-propagation", time: 18.0 },
+  { name: "04-exact-memory-cell", time: 34.0 },
+  { name: "05-native-crt-gameplay", time: 50.0 },
 ];
 
 await mkdir(outputDir, { recursive: true });
