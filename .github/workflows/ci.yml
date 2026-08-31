@@ -32,6 +32,16 @@ jobs:
         run: cargo check -p leader-explorer --target wasm32-unknown-unknown
       - name: Check browser shell syntax
         run: node --check explorer-web/app.js
+      - name: Build generated WASM explorer
+        run: |
+          cargo build -p leader-explorer --target wasm32-unknown-unknown --release
+          cargo install wasm-bindgen-cli --version 0.2.106 --locked
+          wasm-bindgen \
+            target/wasm32-unknown-unknown/release/leader_explorer.wasm \
+            --target nodejs \
+            --out-dir /tmp/leader-explorer-wasm
+      - name: Smoke generated WASM API
+        run: node scripts/wasm_smoke.cjs /tmp/leader-explorer-wasm/leader_explorer.js
       - name: Clippy
         run: cargo clippy --workspace --all-targets
       - name: Generate smoke artifact
