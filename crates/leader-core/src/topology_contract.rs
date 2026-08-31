@@ -95,6 +95,7 @@ pub fn validate_final_topology(topology: &Topology) -> Result<TopologyValidation
     }
 
     for bit in 0..8 {
+        let rhs_xor = format!("rhsXor{bit}");
         let xor_a = format!("xorA{bit}");
         let xor_b = format!("xorB{bit}");
         let and_a = format!("andA{bit}");
@@ -105,7 +106,7 @@ pub fn validate_final_topology(topology: &Topology) -> Result<TopologyValidation
         let logic_or = format!("logicOr{bit}");
         let mux_r = format!("muxR{bit}");
 
-        for required in [&pass_r, &logic_and, &logic_or] {
+        for required in [&rhs_xor, &pass_r, &logic_and, &logic_or] {
             if topology.node(required).is_none() {
                 return Err(format!("final topology missing required ALU function node {required}"));
             }
@@ -113,9 +114,11 @@ pub fn validate_final_topology(topology: &Topology) -> Result<TopologyValidation
 
         for (from, to, family) in [
             ("readMuxA", xor_a.as_str(), "ALU adder A"),
-            ("readMuxB", xor_a.as_str(), "ALU adder B"),
+            ("readMuxB", rhs_xor.as_str(), "ALU RHS input"),
+            ("aluSel", rhs_xor.as_str(), "ALU subtraction control"),
+            (rhs_xor.as_str(), xor_a.as_str(), "ALU effective RHS sum"),
             ("readMuxA", and_a.as_str(), "ALU generate A"),
-            ("readMuxB", and_a.as_str(), "ALU generate B"),
+            (rhs_xor.as_str(), and_a.as_str(), "ALU effective RHS generate"),
             (xor_a.as_str(), xor_b.as_str(), "ALU sum"),
             (xor_a.as_str(), and_b.as_str(), "ALU propagate"),
             (and_a.as_str(), or_c.as_str(), "ALU carry generate"),
@@ -187,8 +190,8 @@ mod tests {
     fn final_runtime_topology_is_closed_unique_and_inside_groups() {
         let topology = build_topology();
         let validation = validate_final_topology(&topology).expect("valid final topology");
-        assert!(validation.nodes >= 490);
-        assert!(validation.links >= 860);
+        assert!(validation.nodes >= 498);
+        assert!(validation.links >= 880);
     }
 
     #[test]
@@ -243,6 +246,16 @@ mod tests {
             .retain(|link| !(link.from == "andB3" && link.to == "orC3"));
         let error = validate_final_topology(&topology).expect_err("missing ALU path must fail");
         assert!(error.contains("andB3 -> orC3"));
+    }
+
+    #[test]
+    fn missing_subtraction_conditioning_is_detected() {
+        let mut topology = build_topology();
+        topology
+            .links
+            .retain(|link| !(link.from == "aluSel" && link.to == "rhsXor4"));
+        let error = validate_final_topology(&topology).expect_err("missing SUB condition path must fail");
+        assert!(error.contains("aluSel -> rhsXor4"));
     }
 
     #[test]
