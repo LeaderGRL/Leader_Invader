@@ -1,0 +1,45 @@
+name: capture-frontpage
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/deterministic-svg-engine
+    paths:
+      - 'generated/Leader.svg'
+      - 'scripts/capture_frontpage.mjs'
+      - '.github/workflows/capture-frontpage.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Playwright
+        run: |
+          npm install --no-save playwright@1.58.2
+          npx playwright install --with-deps chromium
+
+      - name: Capture production SVG checkpoints
+        run: node scripts/capture_frontpage.mjs
+
+      - name: Verify captures
+        run: |
+          test -f generated/frontpage-captures/01-assembled-machine.png
+          test -f generated/frontpage-captures/02-microcode-control-rom.png
+          test -f generated/frontpage-captures/03-live-ripple-alu.png
+          test -f generated/frontpage-captures/04-live-work-ram.png
+          test -f generated/frontpage-captures/05-video-scanout-game.png
+          ls -lh generated/frontpage-captures
+
+      - name: Upload frontpage checkpoints
+        uses: actions/upload-artifact@v4
+        with:
+          name: leader-frontpage-checkpoints-${{ github.sha }}
+          path: generated/frontpage-captures/
+          retention-days: 30
+          if-no-files-found: error
