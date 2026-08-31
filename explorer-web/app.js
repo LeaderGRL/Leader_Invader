@@ -471,12 +471,12 @@ function renderGraph() {
   }
   svg.append(linkLayer, nodeLayer);
   renderNavigation(currentView, crumbs, children);
-  const bus = parseJson(playback.current_bus_json());
+  const exactBus = parseJson(playback.current_exact_bus_json());
   applyLiveState(
     parseJson(playback.current_activity_json()),
     currentAluValues(),
     currentAluLinks(),
-    currentBusLinks(bus),
+    currentBusLinks(exactBus),
     currentBitChanges(),
   );
 }
@@ -535,7 +535,8 @@ function renderPlayback() {
   const aluLinks = currentAluLinks();
   const bitChanges = currentBitChanges();
   const bus = parseJson(playback.current_bus_json());
-  const busLinks = currentBusLinks(bus);
+  const exactBus = parseJson(playback.current_exact_bus_json());
+  const busLinks = currentBusLinks(exactBus);
   const vram = currentVram();
   renderCrt(vram);
   applyLiveState(activity, aluValues, aluLinks, busLinks, bitChanges);
