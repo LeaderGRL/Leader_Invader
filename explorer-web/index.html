@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Leader Invader — Live Hardware Explorer</title>
+  <meta name="description" content="Interactive WASM explorer for the deterministic Leader Invader physical topology and native execution trace.">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">LEADER INVADER / M4</p>
+        <h1>Live Hardware Explorer</h1>
+      </div>
+      <div class="topbar-actions">
+        <button id="home-button" type="button">Home</button>
+        <button id="back-button" type="button">Back</button>
+        <button id="fit-button" type="button">Fit view</button>
+      </div>
+    </header>
+
+    <nav id="breadcrumb" class="breadcrumb" aria-label="Hardware hierarchy"></nav>
+
+    <section class="workspace">
+      <aside class="panel left-panel">
+        <div class="panel-section">
+          <h2>Current view</h2>
+          <div id="view-info" class="mono-block"></div>
+          <div id="child-views" class="view-list"></div>
+        </div>
+
+        <div class="panel-section">
+          <h2>Node inspector</h2>
+          <div id="node-inspector" class="mono-block muted">Move the pointer over a physical node.</div>
+        </div>
+      </aside>
+
+      <section class="canvas-panel" aria-label="Interactive hardware graph">
+        <svg id="hardware-canvas" role="img" aria-label="Leader Invader physical hardware topology"></svg>
+        <div class="canvas-hint">Drag to pan · wheel to zoom · click a node to enter its deepest canonical view</div>
+      </section>
+
+      <aside class="panel right-panel">
+        <div class="panel-section">
+          <h2>Native playback</h2>
+          <label class="field">
+            <span>Seed</span>
+            <input id="seed-input" value="live-explorer" autocomplete="off">
+          </label>
+          <label class="field">
+            <span>Frames</span>
+            <input id="frames-input" type="number" min="1" max="1200" value="240">
+          </label>
+          <button id="load-button" class="primary" type="button">Generate native trace</button>
+          <div class="transport-grid">
+            <button id="play-button" type="button">Play</button>
+            <button id="pause-button" type="button">Pause</button>
+            <button id="micro-step-button" type="button">µ-step</button>
+            <button id="instruction-step-button" type="button">Instruction</button>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <h2>Follow authority</h2>
+          <div class="follow-grid">
+            <button id="follow-pc-button" type="button">PC</button>
+            <button id="next-bus-button" type="button">Next bus</button>
+            <button id="next-dma-button" type="button">Next DMA</button>
+            <button id="next-vblank-button" type="button">Next VBlank</button>
+          </div>
+        </div>
+
+        <div class="panel-section grow">
+          <h2>Execution state</h2>
+          <div id="playback-state" class="mono-block muted">No trace loaded.</div>
+          <div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
