@@ -9,6 +9,24 @@ pub enum NavigationLevel {
     Detail,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetailDensity {
+    Overview,
+    Native,
+    BitExact,
+}
+
+impl DetailDensity {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Overview => "overview",
+            Self::Native => "native",
+            Self::BitExact => "bit_exact",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Module {
     pub id: String,
@@ -29,6 +47,7 @@ pub struct CameraView {
     pub bounds: Rect,
     pub parent_view: Option<String>,
     pub level: NavigationLevel,
+    pub density: DetailDensity,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,6 +84,18 @@ impl NavigationModel {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn lineage_for_view(&self, view_id: &str) -> Vec<&CameraView> {
+        let mut lineage = Vec::new();
+        let mut current = self.view(view_id);
+        while let Some(view) = current {
+            lineage.push(view);
+            current = view.parent_view.as_deref().and_then(|parent| self.view(parent));
+        }
+        lineage.reverse();
+        lineage
     }
 }
 
@@ -105,69 +136,138 @@ pub fn build_navigation(topology: &Topology) -> NavigationModel {
         });
     }
 
+    push_detail_module(topology, &mut modules, "clk.phases", "CLOCK / PHASE CHAIN", "clk", |id| {
+        matches!(id, "clock" | "reset" | "clkGate") || id.starts_with("phase")
+    });
+    push_detail_module(topology, &mut modules, "pc.fetch", "PC / MAR FETCH PATH", "pc", |id| {
+        id.starts_with("pcBit")
+            || id.starts_with("marBit")
+            || id.starts_with("pcMux")
+            || id.starts_with("pcInc")
+            || id == "pcCarry"
+    });
+    push_detail_module(
+        topology,
+        &mut modules,
+        "decode.instruction",
+        "IR / OPCODE DECODE",
+        "decode",
+        |id| {
+            id.starts_with("mdrBit")
+                || id.starts_with("irBit")
+                || matches!(id, "opHi" | "opLo" | "decA" | "decB")
+                || id.starts_with("decA")
+                || id.starts_with("decB")
+        },
+    );
     push_detail_module(
         topology,
         &mut modules,
         "decode.microcode",
         "MICROCODE / CONTROL ROM",
         "decode",
-        |id| id == "microAddr" || id == "microRom" || id.starts_with("microAddrBit") || id.starts_with("ctrl"),
-    );
-    push_detail_module(
-        topology,
-        &mut modules,
-        "alu.ripple",
-        "RIPPLE ALU / FLAGS",
-        "alu",
         |id| {
-            id == "aluSel"
-                || id.starts_with("xor")
-                || id.starts_with("and")
-                || id.starts_with("orC")
-                || id.starts_with("muxR")
-                || id.starts_with("flag")
+            id == "microAddr"
+                || id == "microRom"
+                || id.starts_with("microAddrBit")
+                || id.starts_with("ctrl")
         },
     );
     push_detail_module(
         topology,
         &mut modules,
-        "bus.stack",
-        "STACK / SP RIPPLE PATH",
+        "regs.readwrite",
+        "REGISTER READ / WRITEBACK",
+        "regs",
+        |id| id.starts_with("reg") || id.starts_with("readMux") || matches!(id, "writeDec" | "writeBus"),
+    );
+    push_detail_module(topology, &mut modules, "alu.ripple", "RIPPLE ALU / FLAGS", "alu", |id| {
+        id == "aluSel"
+            || id.starts_with("xor")
+            || id.starts_with("and")
+            || id.starts_with("orC")
+            || id.starts_with("muxR")
+            || id.starts_with("flag")
+    });
+    push_detail_module(
+        topology,
+        &mut modules,
+        "romsys.decode",
+        "ROM ADDRESS DECODE",
+        "romsys",
+        |id| matches!(id, "romRowDec" | "romByteDec"),
+    );
+    push_detail_module(topology, &mut modules, "romsys.pages", "ROM PAGE ARRAY", "romsys", |id| {
+        id.starts_with("romPage")
+    });
+    push_detail_module(
+        topology,
+        &mut modules,
+        "ramsys.decode",
+        "RAM ADDRESS DECODE",
+        "ramsys",
+        |id| matches!(id, "ramPageDec" | "ramByteDec"),
+    );
+    push_detail_module(topology, &mut modules, "ramsys.pages", "RAM PAGE ARRAY", "ramsys", |id| {
+        id.starts_with("ramPage")
+    });
+    push_detail_module(
+        topology,
+        &mut modules,
+        "bus.arbitration",
+        "SYSTEM BUS ARBITRATION",
         "bus",
-        |id| id.starts_with("spBit") || matches!(id, "spDec" | "spBorrow" | "spInc" | "stackRam"),
+        |id| matches!(id, "addrBuf" | "dataBuf" | "ctrlBuf" | "arb"),
     );
+    push_detail_module(topology, &mut modules, "bus.stack", "STACK / SP RIPPLE PATH", "bus", |id| {
+        id.starts_with("spBit") || matches!(id, "spDec" | "spBorrow" | "spInc" | "stackRam")
+    });
     push_detail_module(
         topology,
         &mut modules,
-        "gpu.scanout",
-        "VIDEO SCANOUT / VBLANK",
-        "gpu",
-        |id| {
-            matches!(
-                id,
-                "dmaAddr"
-                    | "dmaData"
-                    | "spriteRom"
-                    | "xCounter"
-                    | "yCounter"
-                    | "pixelMux"
-                    | "scanShift"
-                    | "hsync"
-                    | "vsync"
-                    | "vblankLatch"
-                    | "vblankWaitGate"
-                    | "display"
-            )
-        },
+        "vramsys.decode",
+        "VRAM ADDRESS DECODE",
+        "vramsys",
+        |id| matches!(id, "vramPageDec" | "vramByteDec"),
     );
+    push_detail_module(topology, &mut modules, "vramsys.pages", "VRAM PAGE ARRAY", "vramsys", |id| {
+        id.starts_with("vramPage")
+    });
+    push_detail_module(topology, &mut modules, "io.input_irq", "INPUT / TIMER / IRQ", "io", |id| {
+        matches!(id, "kbd" | "inputLatch" | "timer" | "irqAnd" | "irqLatch")
+    });
+    push_detail_module(topology, &mut modules, "io.shift_register", "16-BIT SHIFT REGISTER", "io", |id| {
+        id.starts_with("shift")
+    });
+    push_detail_module(topology, &mut modules, "io.formation", "FORMATION CADENCE", "io", |id| {
+        id.starts_with("formation")
+    });
+    push_detail_module(topology, &mut modules, "io.enemy_shots", "ENEMY SHOT BANK", "io", |id| {
+        id.starts_with("enemyShot")
+    });
+    push_detail_module(topology, &mut modules, "io.shields", "BIT-ADDRESSED SHIELDS", "io", |id| {
+        id.starts_with("shield")
+    });
+    push_detail_module(topology, &mut modules, "gpu.dma", "VIDEO DMA", "gpu", |id| {
+        matches!(id, "dmaAddr" | "dmaData")
+    });
+    push_detail_module(topology, &mut modules, "gpu.scanout", "PIXEL SCANOUT", "gpu", |id| {
+        matches!(id, "spriteRom" | "pixelMux" | "scanShift" | "display")
+    });
+    push_detail_module(topology, &mut modules, "gpu.timing", "VIDEO TIMING / VBLANK", "gpu", |id| {
+        matches!(
+            id,
+            "xCounter" | "yCounter" | "hsync" | "vsync" | "vblankLatch" | "vblankWaitGate"
+        )
+    });
 
     let views = modules
         .iter()
         .map(|module| {
-            let padding = match module.level {
-                NavigationLevel::Machine => 0.0,
-                NavigationLevel::Subsystem => 44.0,
-                NavigationLevel::Detail => 24.0,
+            let (padding, density) = match module.level {
+                NavigationLevel::Machine => (0.0, DetailDensity::Overview),
+                NavigationLevel::Subsystem => (44.0, DetailDensity::Native),
+                NavigationLevel::Detail => (24.0, DetailDensity::BitExact),
             };
             CameraView {
                 id: view_id(&module.id),
@@ -176,6 +276,7 @@ pub fn build_navigation(topology: &Topology) -> NavigationModel {
                 bounds: module.bounds.padded(padding),
                 parent_view: module.parent.as_deref().map(view_id),
                 level: module.level,
+                density,
             }
         })
         .collect();
@@ -260,8 +361,12 @@ pub fn navigation_violations(topology: &Topology, navigation: &NavigationModel) 
             }
         }
         for node_id in &module.node_ids {
-            if topology.node(node_id).is_none() {
+            let Some(node) = topology.node(node_id) else {
                 errors.push(format!("module {} references missing node {node_id}", module.id));
+                continue;
+            };
+            if !contains(module.bounds, node.bounds) {
+                errors.push(format!("module {} does not contain node {node_id}", module.id));
             }
         }
         for child_id in &module.child_modules {
@@ -292,6 +397,13 @@ pub fn navigation_violations(topology: &Topology, navigation: &NavigationModel) 
     errors
 }
 
+fn contains(outer: Rect, inner: Rect) -> bool {
+    inner.x >= outer.x
+        && inner.y >= outer.y
+        && inner.x + inner.w <= outer.x + outer.w
+        && inner.y + inner.h <= outer.y + outer.h
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,16 +424,50 @@ mod tests {
     }
 
     #[test]
-    fn critical_dense_regions_have_detail_views() {
+    fn dense_cpu_memory_and_video_regions_have_detail_views() {
         let topology = crate::build_topology();
         let navigation = build_navigation(&topology);
-        for id in ["decode.microcode", "alu.ripple", "bus.stack", "gpu.scanout"] {
+        for id in [
+            "pc.fetch",
+            "decode.instruction",
+            "decode.microcode",
+            "regs.readwrite",
+            "alu.ripple",
+            "romsys.pages",
+            "ramsys.pages",
+            "bus.stack",
+            "vramsys.pages",
+            "gpu.dma",
+            "gpu.scanout",
+            "gpu.timing",
+        ] {
             let module = navigation.module(id).expect("detail module");
             assert_eq!(module.level, NavigationLevel::Detail);
             assert!(!module.node_ids.is_empty());
             let view = navigation.view_for_module(id).expect("detail view");
-            assert_eq!(view.parent_view.as_deref(), module.parent.as_deref().map(|parent| view_id(parent)).as_deref());
+            assert_eq!(view.density, DetailDensity::BitExact);
         }
+    }
+
+    #[test]
+    fn m3_hardware_has_first_class_navigation_modules() {
+        let topology = crate::build_topology();
+        let navigation = build_navigation(&topology);
+        for id in ["io.shift_register", "io.formation", "io.enemy_shots", "io.shields"] {
+            let module = navigation.module(id).expect("M3 detail module");
+            assert_eq!(module.parent.as_deref(), Some("io"));
+            assert!(!module.node_ids.is_empty());
+        }
+    }
+
+    #[test]
+    fn detail_lineage_walks_machine_to_subsystem_to_detail() {
+        let topology = crate::build_topology();
+        let navigation = build_navigation(&topology);
+        let view = navigation.view_for_module("gpu.timing").expect("timing view");
+        let lineage = navigation.lineage_for_view(&view.id);
+        let ids = lineage.iter().map(|entry| entry.module_id.as_str()).collect::<Vec<_>>();
+        assert_eq!(ids, vec!["machine", "gpu", "gpu.timing"]);
     }
 
     #[test]
