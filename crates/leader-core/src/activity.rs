@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::isa::Reg;
 use crate::topology::{SignalKind, Topology};
 use crate::trace::PhaseKind;
 
@@ -7,6 +8,13 @@ use crate::trace::PhaseKind;
 pub struct PhysicalActivityLink {
     pub id: String,
     pub signal: SignalKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhysicalBitChange {
+    pub node_id: String,
+    pub before: bool,
+    pub after: bool,
 }
 
 /// Returns the physical node ids that participate in a native trace phase.
@@ -116,6 +124,66 @@ pub fn physical_activity_links(
         .collect()
 }
 
+#[must_use]
+pub fn physical_register_bit_changes(reg: Reg, before: u8, after: u8) -> Vec<PhysicalBitChange> {
+    physical_byte_bit_changes(&format!("reg{}", reg.name()), before, after)
+}
+
+#[must_use]
+pub fn physical_pc_bit_changes(before: u16, after: u16) -> Vec<PhysicalBitChange> {
+    physical_word_bit_changes("pcBit", before, after)
+}
+
+#[must_use]
+pub fn physical_sp_bit_changes(before: u16, after: u16) -> Vec<PhysicalBitChange> {
+    physical_word_bit_changes("spBit", before, after)
+}
+
+#[must_use]
+pub fn physical_flag_bit_changes(before: u8, after: u8) -> Vec<PhysicalBitChange> {
+    const FLAGS: [(&str, u8); 3] = [("flagZ", 0), ("flagC", 1), ("flagN", 2)];
+    FLAGS
+        .into_iter()
+        .filter_map(|(node_id, bit)| {
+            let before_bit = before & (1 << bit) != 0;
+            let after_bit = after & (1 << bit) != 0;
+            (before_bit != after_bit).then(|| PhysicalBitChange {
+                node_id: node_id.to_owned(),
+                before: before_bit,
+                after: after_bit,
+            })
+        })
+        .collect()
+}
+
+fn physical_byte_bit_changes(prefix: &str, before: u8, after: u8) -> Vec<PhysicalBitChange> {
+    (0..8)
+        .filter_map(|bit| {
+            let before_bit = before & (1 << bit) != 0;
+            let after_bit = after & (1 << bit) != 0;
+            (before_bit != after_bit).then(|| PhysicalBitChange {
+                node_id: format!("{prefix}{bit}"),
+                before: before_bit,
+                after: after_bit,
+            })
+        })
+        .collect()
+}
+
+fn physical_word_bit_changes(prefix: &str, before: u16, after: u16) -> Vec<PhysicalBitChange> {
+    (0..16)
+        .filter_map(|bit| {
+            let before_bit = before & (1 << bit) != 0;
+            let after_bit = after & (1 << bit) != 0;
+            (before_bit != after_bit).then(|| PhysicalBitChange {
+                node_id: format!("{prefix}{bit}"),
+                before: before_bit,
+                after: after_bit,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,5 +222,29 @@ mod tests {
                 candidate.id == link.id && candidate.signal == link.signal
             })
         }));
+    }
+
+    #[test]
+    fn architectural_register_changes_map_to_final_aligned_register_nodes() {
+        let changes = physical_register_bit_changes(Reg::C, 0b0000_0001, 0b0000_0101);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].node_id, "regC2");
+        assert!(!changes[0].before);
+        assert!(changes[0].after);
+    }
+
+    #[test]
+    fn pc_sp_and_flags_changes_identify_only_flipped_physical_bits() {
+        let pc = physical_pc_bit_changes(0x00ff, 0x0100);
+        assert_eq!(pc.len(), 9);
+        assert!(pc.iter().any(|change| change.node_id == "pcBit8" && change.after));
+
+        let sp = physical_sp_bit_changes(0x7fff, 0x7ffe);
+        assert_eq!(sp.len(), 1);
+        assert_eq!(sp[0].node_id, "spBit0");
+
+        let flags = physical_flag_bit_changes(0b001, 0b110);
+        assert_eq!(flags.len(), 3);
+        assert!(flags.iter().any(|change| change.node_id == "flagN" && change.after));
     }
 }
