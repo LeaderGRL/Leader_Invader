@@ -19,6 +19,7 @@ assert.ok(Array.isArray(topology.links) && topology.links.length > 800, 'canonic
 const playback = new wasm.Playback();
 assert.equal(playback.load_match('ci-wasm-smoke', 24), true, 'native match failed to load');
 assert.equal(playback.is_loaded(), true, 'playback did not retain native trace');
+assert.equal(typeof playback.current_exact_bus_json, 'function', 'exact bus binding missing');
 
 const vram = JSON.parse(playback.current_vram_json());
 assert.equal(vram.width, 128);
@@ -39,4 +40,16 @@ assert.ok(Array.isArray(busLinks) && busLinks.length > 0, 'bus propagation API r
 assert.ok(busLinks.some((link) => link.stage === 'page_select' && link.rank === 4), 'VRAM page selection missing');
 assert.ok(busLinks.some((link) => link.stage === 'dma_data_latch' && link.rank === 6), 'DMA data latch propagation missing');
 
-console.log(`WASM smoke OK: ${topology.nodes.length} nodes, ${topology.links.length} links, VRAM ${vram.width}x${vram.height}, ${busLinks.length} bus stages`);
+assert.equal(playback.seek_next_dma(), true, 'native DMA event missing from smoke trace');
+const exactDma = JSON.parse(playback.current_exact_bus_json());
+assert.equal(exactDma.kind, 'dma');
+const exactDmaLinks = JSON.parse(resolver.bus_links_json(
+  exactDma.address,
+  exactDma.data ?? -1,
+  exactDma.addressSource,
+  exactDma.dataSource,
+  exactDma.kind,
+));
+assert.ok(exactDmaLinks.some((link) => link.stage === 'dma_address_driver'), 'exact DMA did not resolve to bus path');
+
+console.log(`WASM smoke OK: ${topology.nodes.length} nodes, ${topology.links.length} links, VRAM ${vram.width}x${vram.height}, ${exactDmaLinks.length} exact DMA bus stages`);
