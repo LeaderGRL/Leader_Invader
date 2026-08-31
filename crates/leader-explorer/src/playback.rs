@@ -1,6 +1,8 @@
 use leader_core::{
-    physical_activity_nodes, BusTransactionEvent, BusTransactionKind, FrameState, Machine,
-    MatchTrace, MicroCycleEvent, MicroCycleKind, MicroSample, PhaseKind,
+    physical_activity_nodes, physical_flag_bit_changes, physical_pc_bit_changes,
+    physical_register_bit_changes, physical_sp_bit_changes, BusTransactionEvent,
+    BusTransactionKind, FrameState, Machine, MatchTrace, MicroCycleEvent, MicroCycleKind,
+    MicroSample, PcEventKind, PhaseKind, PhysicalBitChange,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -259,6 +261,81 @@ impl Playback {
             data,
             nodes
         )
+    }
+
+    #[must_use]
+    pub fn current_bit_changes_json(&self) -> String {
+        let Some(trace) = &self.trace else {
+            return "[]".to_owned();
+        };
+        let Some(key) = self.current_key() else {
+            return "[]".to_owned();
+        };
+        let mut changes = Vec::new();
+
+        for event in trace
+            .register_writes
+            .iter()
+            .filter(|event| (event.frame, event.ordinal) == key)
+        {
+            append_changes(
+                &mut changes,
+                physical_register_bit_changes(event.reg, event.before, event.after),
+                &format!("reg:{}", event.reg.name()),
+            );
+        }
+
+        for event in trace
+            .pc_events
+            .iter()
+            .filter(|event| (event.frame, event.ordinal) == key)
+        {
+            let (before, after, source) = match event.kind {
+                PcEventKind::Increment(step) => (step.before, step.after, "pc:increment"),
+                PcEventKind::Load {
+                    before,
+                    after,
+                    source,
+                    ..
+                } => (before, after, source.as_str()),
+            };
+            append_changes(
+                &mut changes,
+                physical_pc_bit_changes(before, after),
+                source,
+            );
+        }
+
+        for event in trace
+            .sp_events
+            .iter()
+            .filter(|event| (event.frame, event.ordinal) == key)
+        {
+            append_changes(
+                &mut changes,
+                physical_sp_bit_changes(event.kind.before(), event.kind.after()),
+                event.kind.as_str(),
+            );
+        }
+
+        if let Some((index, event)) = trace
+            .flag_events
+            .iter()
+            .enumerate()
+            .find(|(_, event)| (event.frame, event.ordinal) == key)
+        {
+            let before = index
+                .checked_sub(1)
+                .and_then(|previous| trace.flag_events.get(previous))
+                .map_or(0, |event| event.packed());
+            append_changes(
+                &mut changes,
+                physical_flag_bit_changes(before, event.packed()),
+                "flags",
+            );
+        }
+
+        format!("[{}]", changes.join(","))
     }
 
     #[must_use]
@@ -535,6 +612,18 @@ impl Playback {
     }
 }
 
+fn append_changes(target: &mut Vec<String>, changes: Vec<PhysicalBitChange>, source: &str) {
+    target.extend(changes.into_iter().map(|change| {
+        format!(
+            "{{\"node\":\"{}\",\"before\":{},\"after\":{},\"source\":\"{}\"}}",
+            json_escape(&change.node_id),
+            change.before,
+            change.after,
+            json_escape(source)
+        )
+    }));
+}
+
 fn bus_phase(kind: BusTransactionKind) -> PhaseKind {
     match kind {
         BusTransactionKind::Fetch => PhaseKind::Fetch,
@@ -731,5 +820,26 @@ mod tests {
         assert!(playback.step_microcycle());
         assert!(playback.bus_focus.is_none());
         assert!(playback.vblank_focus.is_none());
+    }
+
+    #[test]
+    fn exact_native_state_changes_resolve_to_physical_bit_nodes() {
+        let mut playback = Playback::new();
+        assert!(playback.load_match("explorer-bit-changes", 64));
+        let count = playback.microcycle_count();
+        let mut found = None;
+        for cursor in 0..count {
+            assert!(playback.seek_cursor(cursor));
+            let json = playback.current_bit_changes_json();
+            if json != "[]" {
+                found = Some(json);
+                break;
+            }
+        }
+        let json = found.expect("native trace contains architectural bit changes");
+        assert!(json.contains("\"node\":"));
+        assert!(json.contains("\"before\":"));
+        assert!(json.contains("\"after\":"));
+        assert!(json.contains("\"source\":"));
     }
 }
