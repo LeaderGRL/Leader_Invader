@@ -140,6 +140,10 @@ function activityLinks(activity) {
   return parseJson(activityResolver.links_json(activity.phase, address, data)) ?? [];
 }
 
+function currentBitChanges() {
+  return parseJson(playback.current_bit_changes_json()) ?? [];
+}
+
 function applyActivity(activity) {
   svg.querySelectorAll(".is-active").forEach((element) => element.classList.remove("is-active"));
   svg.querySelectorAll(".activity-value").forEach((element) => element.remove());
@@ -175,6 +179,54 @@ function applyActivity(activity) {
     label.textContent = valueText;
     linkLayer.append(label);
   }
+}
+
+function clearBitChanges() {
+  svg.querySelectorAll(".is-bit-change").forEach((element) => {
+    element.classList.remove("is-bit-change", "bit-to-one", "bit-to-zero");
+    delete element.dataset.bitTransition;
+    delete element.dataset.bitSource;
+  });
+  svg.querySelectorAll(".bit-transition-value").forEach((element) => element.remove());
+}
+
+function applyBitChanges(changes) {
+  clearBitChanges();
+  if (!Array.isArray(changes) || changes.length === 0) return;
+
+  const camera = parseJson(explorer.camera_json());
+  const cameraScale = camera ? camera.w / Math.max(svg.clientWidth, 1) : Number.POSITIVE_INFINITY;
+  for (const change of changes) {
+    const group = svg.querySelector(`[data-node-id="${CSS.escape(change.node)}"]`);
+    if (!group) continue;
+
+    const before = change.before ? 1 : 0;
+    const after = change.after ? 1 : 0;
+    group.classList.add("is-bit-change", change.after ? "bit-to-one" : "bit-to-zero");
+    group.dataset.bitTransition = `${before}→${after}`;
+    group.dataset.bitSource = change.source ?? "native";
+
+    if (cameraScale >= 1.8) continue;
+    const rect = group.querySelector("rect");
+    if (!rect) continue;
+    const x = Number(rect.getAttribute("x"));
+    const y = Number(rect.getAttribute("y"));
+    const width = Number(rect.getAttribute("width"));
+    const height = Number(rect.getAttribute("height"));
+    const label = makeSvg("text", {
+      x: x + width * 0.5,
+      y: y + height + Math.max(11, cameraScale * 5),
+      class: "bit-transition-value",
+      "text-anchor": "middle",
+    });
+    label.textContent = `${before}→${after}`;
+    group.append(label);
+  }
+}
+
+function applyLiveState(activity, changes) {
+  applyActivity(activity);
+  applyBitChanges(changes);
 }
 
 function renderGraph() {
@@ -232,7 +284,7 @@ function renderGraph() {
 
   svg.append(linkLayer, nodeLayer);
   renderNavigation(currentView, crumbs, children);
-  applyActivity(parseJson(playback.current_activity_json()));
+  applyLiveState(parseJson(playback.current_activity_json()), currentBitChanges());
 }
 
 function renderNavigation(currentView, crumbs, children) {
@@ -276,13 +328,18 @@ function renderInspector(event) {
     return;
   }
   setHighlightedNode(node.id);
-  inspector.textContent = `${node.title}\n${node.kind}\n${node.id}\n${node.subsystem}\n→ ${node.targetView ?? "subsystem"}`;
+  const liveNode = svg.querySelector(`[data-node-id="${CSS.escape(node.id)}"]`);
+  const transition = liveNode?.dataset.bitTransition;
+  const source = liveNode?.dataset.bitSource;
+  const mutation = transition ? `\nflip ${transition}\n${source}` : "";
+  inspector.textContent = `${node.title}\n${node.kind}\n${node.id}\n${node.subsystem}\n→ ${node.targetView ?? "subsystem"}${mutation}`;
 }
 
 function renderPlayback() {
   const summary = parseJson(playback.summary_json());
   const activity = parseJson(playback.current_activity_json());
-  applyActivity(activity);
+  const bitChanges = currentBitChanges();
+  applyLiveState(activity, bitChanges);
   if (!summary) {
     playbackState.textContent = "No trace loaded.";
     progressFill.style.width = "0%";
@@ -303,6 +360,10 @@ function renderPlayback() {
   timelineLabel.value = `${summary.cursor} / ${lastCursor}`;
 
   const links = activityLinks(activity);
+  const mutations = bitChanges
+    .slice(0, 6)
+    .map((change) => `${change.node}:${change.before ? 1 : 0}→${change.after ? 1 : 0}`)
+    .join(" ");
   const lines = [
     `seed      ${summary.seed}`,
     `cursor    ${summary.cursor}/${lastCursor}`,
@@ -319,6 +380,8 @@ function renderPlayback() {
     `addr src  ${bus?.addressSource ?? "—"}`,
     `data src  ${bus?.dataSource ?? "—"}`,
     `active    ${activity?.nodes?.length ?? 0} nodes / ${links.length} links`,
+    `bit flips ${bitChanges.length}`,
+    `mutations ${mutations || "—"}`,
     `score     ${frame?.score ?? "—"}`,
     `lives     ${frame?.lives ?? "—"}`,
   ];
