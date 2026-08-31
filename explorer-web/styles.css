@@ -59,6 +59,9 @@ button.primary { width: 100%; border-color: #4777af; background: linear-gradient
 .signal-carry { stroke: #ff8b72; }
 .signal-video { stroke: #8fe46f; }
 .hardware-link.is-active { opacity: 1; stroke-width: 5; stroke-dasharray: 12 8; animation: signal-flow .42s linear infinite; }
+.activity-value { paint-order: stroke; stroke: #070b10; stroke-width: 5; stroke-linejoin: round; pointer-events: none; font: 700 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.signal-value-address { fill: #a9caff; }
+.signal-value-data { fill: #9af2e2; }
 .hardware-node rect { fill: #111a27; stroke: #4c6080; stroke-width: 1.5; vector-effect: non-scaling-stroke; transition: fill 80ms linear, stroke 80ms linear, filter 80ms linear; }
 .hardware-node text { fill: #d8e4f8; pointer-events: none; font: 700 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .hardware-node.is-active rect { fill: #23445d; stroke: #a9d8ff; stroke-width: 2.5; filter: drop-shadow(0 0 7px rgba(126, 194, 255, .55)); }
