@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::topology::{Rect, Topology};
 
@@ -84,6 +84,22 @@ impl NavigationModel {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn subsystem_for_node(&self, node_id: &str) -> Option<&Module> {
+        self.modules.iter().find(|module| {
+            module.level == NavigationLevel::Subsystem
+                && module.node_ids.iter().any(|candidate| candidate == node_id)
+        })
+    }
+
+    #[must_use]
+    pub fn detail_for_node(&self, node_id: &str) -> Option<&Module> {
+        self.modules.iter().find(|module| {
+            module.level == NavigationLevel::Detail
+                && module.node_ids.iter().any(|candidate| candidate == node_id)
+        })
     }
 
     #[must_use]
@@ -346,9 +362,23 @@ pub fn navigation_violations(topology: &Topology, navigation: &NavigationModel) 
     let mut errors = Vec::new();
     let mut module_ids = HashSet::new();
     let mut view_ids = HashSet::new();
+    let mut detail_owners: HashMap<&str, &str> = HashMap::new();
 
     if navigation.view(&navigation.default_view).is_none() {
         errors.push(format!("missing default view {}", navigation.default_view));
+    }
+
+    for node in &topology.nodes {
+        let Some(subsystem) = navigation.subsystem_for_node(&node.id) else {
+            errors.push(format!("node {} has no subsystem navigation owner", node.id));
+            continue;
+        };
+        if subsystem.id != node.group {
+            errors.push(format!(
+                "node {} belongs to group {} but navigation owner is {}",
+                node.id, node.group, subsystem.id
+            ));
+        }
     }
 
     for module in &navigation.modules {
@@ -367,6 +397,14 @@ pub fn navigation_violations(topology: &Topology, navigation: &NavigationModel) 
             };
             if !contains(module.bounds, node.bounds) {
                 errors.push(format!("module {} does not contain node {node_id}", module.id));
+            }
+            if module.level == NavigationLevel::Detail {
+                if let Some(existing) = detail_owners.insert(node_id.as_str(), module.id.as_str()) {
+                    errors.push(format!(
+                        "node {node_id} has ambiguous detail owners {existing} and {}",
+                        module.id
+                    ));
+                }
             }
         }
         for child_id in &module.child_modules {
@@ -419,6 +457,7 @@ mod tests {
             assert_eq!(module.parent.as_deref(), Some("machine"));
             for node in topology.nodes.iter().filter(|node| node.group == group.id) {
                 assert!(module.node_ids.contains(&node.id));
+                assert_eq!(navigation.subsystem_for_node(&node.id).map(|owner| owner.id.as_str()), Some(group.id.as_str()));
             }
         }
     }
@@ -447,6 +486,35 @@ mod tests {
             let view = navigation.view_for_module(id).expect("detail view");
             assert_eq!(view.density, DetailDensity::BitExact);
         }
+    }
+
+    #[test]
+    fn physical_nodes_have_unambiguous_detail_lookup() {
+        let topology = crate::build_topology();
+        let navigation = build_navigation(&topology);
+        assert_eq!(
+            navigation.detail_for_node("microRom").map(|module| module.id.as_str()),
+            Some("decode.microcode")
+        );
+        assert_eq!(
+            navigation.detail_for_node("shieldAddr").map(|module| module.id.as_str()),
+            Some("io.shields")
+        );
+        assert_eq!(navigation.detail_for_node("dataBuf"), navigation.module("bus.arbitration"));
+    }
+
+    #[test]
+    fn duplicate_detail_ownership_is_rejected() {
+        let topology = crate::build_topology();
+        let mut navigation = build_navigation(&topology);
+        let duplicate = navigation.module("decode.microcode").expect("microcode").clone();
+        let mut duplicate = duplicate;
+        duplicate.id = "decode.microcode.duplicate".to_owned();
+        navigation.modules.push(duplicate);
+        let violations = navigation_violations(&topology, &navigation);
+        assert!(violations
+            .iter()
+            .any(|error| error.contains("ambiguous detail owners")));
     }
 
     #[test]
