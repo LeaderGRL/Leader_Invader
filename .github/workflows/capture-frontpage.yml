@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Capture the exact committed production SVG after the exact-RAM pass.
+      # Capture the exact committed production SVG, including t=0.
       - name: Install Playwright
         run: |
           npm install --no-save playwright@1.58.2
@@ -30,17 +30,18 @@ jobs:
 
       - name: Verify captures
         run: |
-          test -f generated/frontpage-captures/01-assembled-machine.png
-          test -f generated/frontpage-captures/02-microcode-control-rom.png
-          test -f generated/frontpage-captures/03-live-ripple-alu.png
-          test -f generated/frontpage-captures/04-live-work-ram.png
-          test -f generated/frontpage-captures/05-video-scanout-game.png
+          test -f generated/frontpage-captures/01-power-on-full-die.png
+          test -f generated/frontpage-captures/02-native-bus-propagation.png
+          test -f generated/frontpage-captures/03-ripple-alu-propagation.png
+          test -f generated/frontpage-captures/04-exact-memory-cell.png
+          test -f generated/frontpage-captures/05-native-crt-gameplay.png
+          test -f generated/frontpage-captures/manifest.json
           ls -lh generated/frontpage-captures
 
       - name: Upload frontpage checkpoints
         uses: actions/upload-artifact@v4
         with:
-          name: leader-frontpage-checkpoints-${{ github.sha }}
+          name: leader-physical-die-checkpoints-${{ github.sha }}
           path: generated/frontpage-captures/
           retention-days: 30
           if-no-files-found: error
