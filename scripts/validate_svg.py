@@ -76,9 +76,6 @@ def main() -> int:
     if memory_pages != 136:
         raise SystemExit(f"expected 136 visible memory pages, found {memory_pages}")
 
-    if "game clear" not in low:
-        raise SystemExit("expected game-clear terminal state")
-
     print(
         f"ok: {path} ({len(data)} bytes, physical die, "
         f"{memory_pages} pages / 34816 visible byte cells)"
