@@ -23,6 +23,7 @@ pub mod isa;
 pub mod layout;
 pub mod logic;
 pub mod machine;
+pub mod memory_fabric;
 pub mod memory_map;
 pub mod memory_map_contract;
 pub mod microcode;
@@ -85,6 +86,11 @@ pub use logic::{
     Decrement16Trace, PcIncrementTrace,
 };
 pub use machine::Machine;
+pub use memory_fabric::{
+    memory_fabric_specs, page_node_id as memory_page_node_id, resolve_physical_memory_address,
+    resolve_physical_memory_byte, total_memory_bit_cells, total_memory_bytes, MemoryFabricSpec,
+    PhysicalMemoryAddress, PhysicalMemoryByte, BITS_PER_BYTE, BYTES_PER_PAGE, BYTE_GRID_SIDE,
+};
 pub use memory_map::{
     mmio_port, owner as memory_owner, MemoryOwner, MemoryRegion, MmioAccess, MmioPort,
     DEVICE_ARG0, DEVICE_ARG1, DEVICE_CMD, DEVICE_STATUS, ENEMY_SHOT_RAM_BASE,
