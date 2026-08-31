@@ -75,20 +75,31 @@ pub fn physical_alu_link_values(trace: AluTrace) -> Vec<PhysicalAluLinkValue> {
         }
         push(&mut values, bit, carry_rank, "sum", sum, selected_family == "sum", format!("alu-sum-result-{bit}"));
         push(&mut values, bit, carry_rank, "propagate", propagate, true, format!("alu-prop-carry-{bit}"));
-        push(&mut values, bit, carry_rank + 1, "carry_out", carry_out, true, format!("ac{bit}"));
+
+        // Carry-out is represented on the physical link that leaves this slice:
+        // into the next sum XOR, or into the architectural carry flag at bit 7.
+        let carry_link = if bit < 7 {
+            format!("cc{bit}")
+        } else {
+            "alu-carry-flag".to_owned()
+        };
+        push(&mut values, bit, carry_rank + 1, "carry_out", carry_out, true, carry_link);
 
         // Result mux output is authoritative even for COMPARE, but compare does
         // not electrically commit the value to the architectural write bus.
         let result_rank = if selected_family == "sum" { carry_rank + 1 } else { 3 };
-        push(&mut values, bit, result_rank, "result", result, true, format!("alu-result-write-{bit}"));
-        if !writes_back {
-            if let Some(last) = values.last_mut() {
-                last.selected = false;
-            }
-        }
+        push(
+            &mut values,
+            bit,
+            result_rank,
+            "result",
+            result,
+            writes_back,
+            format!("alu-result-write-{bit}"),
+        );
     }
 
-    values.sort_by_key(|value| (value.rank, value.bit));
+    values.sort_by_key(|value| (value.rank, value.bit, value.link_id.clone()));
     values
 }
 
@@ -129,19 +140,35 @@ mod tests {
     #[test]
     fn add_propagation_orders_ripple_carry_before_later_sum() {
         let values = physical_alu_link_values(ripple_add(0x0f, 1, false, AluOp::Add));
-        let carry0 = values.iter().find(|value| value.link_id == "alu-prop-carry-0").unwrap();
-        let carry_into_1 = values.iter().find(|value| value.link_id == "cc0").unwrap();
-        let sum1 = values.iter().find(|value| value.link_id == "alu-sum-result-1").unwrap();
+        let carry0 = values
+            .iter()
+            .find(|value| value.link_id == "cc0" && value.stage == "carry_out")
+            .unwrap();
+        let carry_into_1 = values
+            .iter()
+            .find(|value| value.link_id == "cc0" && value.stage == "carry_in")
+            .unwrap();
+        let sum1 = values
+            .iter()
+            .find(|value| value.link_id == "alu-sum-result-1")
+            .unwrap();
         assert!(carry0.rank < carry_into_1.rank);
         assert_eq!(carry_into_1.rank, sum1.rank);
         assert!(sum1.selected);
+        assert_eq!(carry0.value, carry_into_1.value);
     }
 
     #[test]
     fn subtraction_exposes_native_rhs_conditioning() {
         let values = physical_alu_link_values(ripple_sub(0, 1, AluOp::Sub));
-        let sub = values.iter().find(|value| value.link_id == "alu-sub-rhs-xor-0").unwrap();
-        let effective = values.iter().find(|value| value.link_id == "alu-rhs-xor-sum-0").unwrap();
+        let sub = values
+            .iter()
+            .find(|value| value.link_id == "alu-sub-rhs-xor-0")
+            .unwrap();
+        let effective = values
+            .iter()
+            .find(|value| value.link_id == "alu-rhs-xor-sum-0")
+            .unwrap();
         assert!(sub.value && sub.selected);
         assert!(!effective.value);
     }
@@ -149,16 +176,39 @@ mod tests {
     #[test]
     fn logical_operation_selects_only_its_mux_candidate() {
         let values = physical_alu_link_values(logic_trace(AluOp::Or, 0x80, 0x01, 0x81));
-        assert!(values.iter().any(|value| value.link_id == "alu-or-result-7" && value.selected && value.value));
-        assert!(values.iter().any(|value| value.link_id == "alu-and-result-7" && !value.selected));
-        assert!(values.iter().any(|value| value.link_id == "alu-xor-result-7" && !value.selected));
+        assert!(values
+            .iter()
+            .any(|value| value.link_id == "alu-or-result-7" && value.selected && value.value));
+        assert!(values
+            .iter()
+            .any(|value| value.link_id == "alu-and-result-7" && !value.selected));
+        assert!(values
+            .iter()
+            .any(|value| value.link_id == "alu-xor-result-7" && !value.selected));
     }
 
     #[test]
-    fn compare_reaches_result_mux_without_writeback_selection() {
+    fn compare_reaches_sum_candidate_without_writeback_selection() {
         let values = physical_alu_link_values(ripple_sub(4, 7, AluOp::Compare));
-        assert!(values.iter().filter(|value| value.stage == "sum").all(|value| value.selected));
-        assert!(values.iter().filter(|value| value.stage == "result").all(|value| !value.selected));
+        assert!(values
+            .iter()
+            .filter(|value| value.stage == "sum")
+            .all(|value| value.selected));
+        assert!(values
+            .iter()
+            .filter(|value| value.stage == "result")
+            .all(|value| !value.selected));
+    }
+
+    #[test]
+    fn final_carry_has_a_real_architectural_link() {
+        let values = physical_alu_link_values(ripple_add(0xff, 1, false, AluOp::Add));
+        let carry = values
+            .iter()
+            .find(|value| value.link_id == "alu-carry-flag")
+            .unwrap();
+        assert!(carry.value);
+        assert_eq!(carry.bit, 7);
     }
 
     #[test]
@@ -166,7 +216,11 @@ mod tests {
         let topology = crate::build_topology();
         let values = physical_alu_link_values(ripple_add(0x55, 0xaa, false, AluOp::Add));
         for value in values {
-            assert!(topology.links.iter().any(|link| link.id == value.link_id), "{}", value.link_id);
+            assert!(
+                topology.links.iter().any(|link| link.id == value.link_id),
+                "{}",
+                value.link_id
+            );
         }
     }
 }
