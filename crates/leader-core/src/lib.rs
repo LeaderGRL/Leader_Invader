@@ -17,6 +17,7 @@ pub mod explorer;
 pub mod formation_cadence;
 pub mod formation_cadence_contract;
 pub mod formation_cadence_layout;
+pub mod framebuffer;
 pub mod game;
 pub mod isa;
 pub mod layout;
@@ -75,6 +76,9 @@ pub use formation_cadence_contract::{
     validate_formation_cadence_contract, FormationCadenceValidation,
 };
 pub use formation_cadence_layout::FORMATION_CADENCE_NODES;
+pub use framebuffer::{
+    framebuffer_pixel, FRAMEBUFFER_FORMAT, FRAMEBUFFER_HEIGHT, FRAMEBUFFER_WIDTH,
+};
 pub use isa::{Cpu, Flags, MicroCycleKind, MicroPhase, PcSource, Reg, StepOutcome};
 pub use logic::{
     logic_trace, ripple_add, ripple_decrement16, ripple_increment16, ripple_sub, AluOp, AluTrace,
