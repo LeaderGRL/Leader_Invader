@@ -6,7 +6,8 @@ pub struct NativeSvgValidation {
     pub bytes: usize,
 }
 
-const REQUIRED_GROUPS: [&str; 17] = [
+const REQUIRED_GROUPS: [&str; 18] = [
+    "navigation-hierarchy",
     "f3-pc",
     "f3-native-decoder",
     "f3-microcode",
@@ -26,7 +27,12 @@ const REQUIRED_GROUPS: [&str; 17] = [
     "f3-timing",
 ];
 
-const REQUIRED_METADATA: [&str; 45] = [
+const REQUIRED_METADATA: [&str; 50] = [
+    "data-view=",
+    "data-module=",
+    "data-parent=",
+    "data-density=",
+    "data-default-view=",
     "data-pc-before=",
     "data-opcode=",
     "data-ucontrol=",
@@ -72,6 +78,19 @@ const REQUIRED_METADATA: [&str; 45] = [
     "data-shield-before=",
     "data-shield-after=",
     "data-shield-source=",
+];
+
+const REQUIRED_NAVIGATION_COVERAGE: [&str; 10] = [
+    "data-default-view=\"view-machine\"",
+    "data-module=\"pc.fetch\"",
+    "data-module=\"decode.microcode\"",
+    "data-module=\"alu.ripple\"",
+    "data-module=\"bus.stack\"",
+    "data-module=\"io.shift_register\"",
+    "data-module=\"io.enemy_shots\"",
+    "data-module=\"io.shields\"",
+    "data-module=\"gpu.timing\"",
+    "data-density=\"bit_exact\"",
 ];
 
 const REQUIRED_BUS_COVERAGE: [&str; 33] = [
@@ -134,6 +153,14 @@ pub fn validate_native_svg_contract(svg: &str) -> Result<NativeSvgValidation, St
         validation.metadata_families += 1;
     }
 
+    for marker in REQUIRED_NAVIGATION_COVERAGE {
+        if !svg.contains(marker) {
+            return Err(format!(
+                "production SVG is missing required navigation coverage marker {marker}"
+            ));
+        }
+    }
+
     for marker in REQUIRED_BUS_COVERAGE {
         if !svg.contains(marker) {
             return Err(format!(
@@ -160,6 +187,9 @@ mod tests {
             svg.push_str(&format!("<g id=\"{id}\"></g>"));
         }
         for marker in REQUIRED_METADATA {
+            svg.push_str(marker);
+        }
+        for marker in REQUIRED_NAVIGATION_COVERAGE {
             svg.push_str(marker);
         }
         for marker in REQUIRED_BUS_COVERAGE {
@@ -193,12 +223,24 @@ mod tests {
     }
 
     #[test]
+    fn generic_navigation_metadata_without_real_modules_is_rejected() {
+        let mut svg = valid_contract_fixture();
+        svg = svg.replace("data-module=\"gpu.timing\"", "data-module=\"missing\"");
+        let error = validate_native_svg_contract(&svg)
+            .expect_err("generic navigation metadata must not satisfy concrete coverage");
+        assert!(error.contains("missing required navigation coverage marker"));
+    }
+
+    #[test]
     fn generic_bus_metadata_without_concrete_coverage_is_rejected() {
         let mut svg = String::from("<svg>");
         for id in REQUIRED_GROUPS {
             svg.push_str(&format!("<g id=\"{id}\"></g>"));
         }
         for marker in REQUIRED_METADATA {
+            svg.push_str(marker);
+        }
+        for marker in REQUIRED_NAVIGATION_COVERAGE {
             svg.push_str(marker);
         }
         svg.push_str("</svg>");
