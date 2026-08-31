@@ -182,7 +182,8 @@ The README remains a zero-JavaScript cinematic artifact, while the same Rust cor
 - click-to-enter uses `deepest_view_for_node()` rather than frontend heuristics;
 - breadcrumb, parent, back, home and child-view navigation use canonical hierarchy edges;
 - hover inspection exposes real node id, kind, subsystem, bounds and target path;
-- physical link routes are derived in the core and serialized as canonical orthogonal paths;
+- canonical orthogonal routing now lives in renderer-independent `leader-core::routing`;
+- live navigation consumes that shared router and serializes canonical paths to WASM;
 - the browser renders those routes rather than inventing center-to-center wiring.
 
 ### Native deterministic playback ✅
@@ -199,24 +200,31 @@ The README remains a zero-JavaScript cinematic artifact, while the same Rust cor
 ### Live physical activity ✅
 
 - `leader-core` owns `phase → physical node ids` activity mapping;
-- ALU activity expands to all eight physical ripple slices;
 - addressed ROM/RAM/VRAM activity selects the exact canonical physical page;
 - WASM exposes the current native physical-activity snapshot;
 - `leader-core` derives a canonical conservative active-link subgraph from the physical topology, so the frontend no longer infers wire activity from active endpoints;
 - address/data values are attached to core-owned active links and rendered as hexadecimal or binary at deep zoom;
 - native register/flag/PC/SP mutations are mapped to exact physical bit nodes and exposed by playback;
-- the browser renders 0→1 and 1→0 mutations independently from generic phase activity, including transition/source inspection;
-- `prefers-reduced-motion` disables signal-flow animation without hiding activity state.
+- the browser renders `0→1` and `1→0` mutations independently from generic phase activity, including transition/source inspection;
+- `leader-core` resolves the native `AluTrace` into gate values for every visible XOR/SUM/GEN/PROP/CARRY/RES node across all eight slices;
+- `Playback` exposes those exact 48 gate states for the current microcycle;
+- the browser displays ALU gate `0/1` state, bit/stage metadata and deep-zoom values without reimplementing ALU semantics in JavaScript;
+- the final topology now materializes previously sampled full-adder internal wiring and complete ROM/RAM/VRAM/system-bus page read/write paths;
+- production topology validation requires every full-adder slice and every memory page path to remain connected;
+- `prefers-reduced-motion` disables signal-flow animation without hiding activity state;
+- source commit `0e7bea520277c7aeb0eb3fb49a68300bedbee8e6` passed workspace tests, WASM compilation, JS syntax, Clippy, smoke render and SVG validation in CI #1098.
 
 ### Remaining M4 work
 
-- refine the conservative active-link subgraph into exact stage-by-stage electrical timing for each native microcycle;
-- animate ordered address → decoder/page → data/control propagation from same-tick native events;
-- expose per-slice ALU A/B/carry/result values and propagation order across all eight ripple stages;
+- complete the physical ALU result-selection network for every operation (`PASS`, `AND`, `OR`, `XOR`, arithmetic SUM/COMPARE) before claiming exact dependency propagation for all opcodes;
+- refine the conservative active-link subgraph into dependency-ordered per-stage propagation after those missing physical result paths exist;
+- animate ordered address → decoder/page → data/control propagation from same-tick native bus events;
+- expose carry/control/per-gate values on exact active links in addition to address/data values;
+- add native VRAM checkpoints to `MatchTrace`: frame records currently contain only `vram_checksum`, so the live CRT must not be reconstructed from gameplay in JavaScript;
+- expose checkpointed framebuffer/CRT state through `Playback` and synchronize it with DMA/scan timing;
 - replay/scrub deterministic camera scenes in addition to raw microcycle time;
 - add bot-policy selection once multiple deterministic policies are first-class core inputs;
-- expose the real framebuffer/CRT scanout in the live explorer and synchronize it with DMA/scan timing;
-- migrate the README renderer to consume the same shared orthogonal-route helper so both renderers share one routing implementation;
+- migrate the README renderer from its historical local `orthogonal_path` helper to `leader-core::routing` so both renderers share one route implementation;
 - add browser-level smoke tests for generated WASM package + interactions;
 - optional user-created groups/layout state layered above, never replacing physical topology authority.
 
