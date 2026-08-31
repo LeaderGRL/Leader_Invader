@@ -1,8 +1,8 @@
 use leader_core::{
-    physical_activity_nodes, physical_flag_bit_changes, physical_pc_bit_changes,
-    physical_register_bit_changes, physical_sp_bit_changes, BusTransactionEvent,
-    BusTransactionKind, FrameState, Machine, MatchTrace, MicroCycleEvent, MicroCycleKind,
-    MicroSample, PcEventKind, PhaseKind, PhysicalBitChange,
+    physical_activity_nodes, physical_alu_node_values, physical_flag_bit_changes,
+    physical_pc_bit_changes, physical_register_bit_changes, physical_sp_bit_changes,
+    BusTransactionEvent, BusTransactionKind, FrameState, Machine, MatchTrace, MicroCycleEvent,
+    MicroCycleKind, MicroSample, PcEventKind, PhaseKind, PhysicalBitChange,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -261,6 +261,37 @@ impl Playback {
             data,
             nodes
         )
+    }
+
+    #[must_use]
+    pub fn current_alu_values_json(&self) -> String {
+        let Some(trace) = &self.trace else {
+            return "[]".to_owned();
+        };
+        let Some(key) = self.current_key() else {
+            return "[]".to_owned();
+        };
+        let Some(event) = trace
+            .alu_events
+            .iter()
+            .find(|event| (event.frame, event.ordinal) == key)
+        else {
+            return "[]".to_owned();
+        };
+        let values = physical_alu_node_values(event.trace)
+            .into_iter()
+            .map(|value| {
+                format!(
+                    "{{\"node\":\"{}\",\"bit\":{},\"stage\":\"{}\",\"value\":{}}}",
+                    json_escape(&value.node_id),
+                    value.bit,
+                    json_escape(value.stage),
+                    value.value
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("[{values}]")
     }
 
     #[must_use]
@@ -820,6 +851,27 @@ mod tests {
         assert!(playback.step_microcycle());
         assert!(playback.bus_focus.is_none());
         assert!(playback.vblank_focus.is_none());
+    }
+
+    #[test]
+    fn exact_native_alu_gate_values_resolve_to_physical_slice_nodes() {
+        let mut playback = Playback::new();
+        assert!(playback.load_match("explorer-alu-values", 64));
+        let count = playback.microcycle_count();
+        let mut found = None;
+        for cursor in 0..count {
+            assert!(playback.seek_cursor(cursor));
+            let json = playback.current_alu_values_json();
+            if json != "[]" {
+                found = Some(json);
+                break;
+            }
+        }
+        let json = found.expect("native trace contains ALU activity");
+        assert!(json.contains("\"node\":\"xorA0\""));
+        assert!(json.contains("\"node\":\"orC7\""));
+        assert!(json.contains("\"stage\":\"result\""));
+        assert!(json.contains("\"value\":"));
     }
 
     #[test]
