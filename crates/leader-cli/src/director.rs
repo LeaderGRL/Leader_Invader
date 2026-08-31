@@ -180,8 +180,16 @@ fn camera_css(
             matrix.scale, matrix.scale, matrix.tx, matrix.ty
         ));
     }
+
+    let detail_begin = norm((config.assembly_seconds - 0.12).max(0.0), total) * 100.0;
+    let detail_full = norm(config.assembly_seconds + 0.24, total) * 100.0;
+    let detail_fade = norm(config.game_start() + 6.30, total) * 100.0;
+    let detail_end = norm(config.game_start() + 6.85, total) * 100.0;
+    let subsystem_soften = norm(config.assembly_seconds + 0.18, total) * 100.0;
+    let subsystem_restore = norm(config.game_start() + 6.80, total) * 100.0;
+
     format!(
-        "<style>@keyframes leaderCamera{{{rules}}}#camera-world{{transform-box:view-box;transform-origin:0 0;animation:leaderCamera {total:.3}s linear infinite}}.nav-boundary{{pointer-events:none}}.nav-boundary rect{{fill:#08131d;fill-opacity:.08;vector-effect:non-scaling-stroke}}.nav-boundary text{{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:2px;vector-effect:non-scaling-stroke}}.nav-subsystem rect{{stroke:#44677f;stroke-width:2;stroke-dasharray:12 10;opacity:.42}}.nav-subsystem text{{fill:#5f7f95;font-size:13px;font-weight:700;opacity:.56}}.nav-detail rect{{stroke:#80a7bd;stroke-width:1.5;stroke-dasharray:7 7;opacity:.50}}.nav-detail text{{fill:#91b5c7;font-size:11px;font-weight:800;opacity:.68}}</style>"
+        "<style>@keyframes leaderCamera{{{rules}}}@keyframes leaderDetailLod{{0%,{detail_begin:.6}%{{opacity:0}}{detail_full:.6}%,{detail_fade:.6}%{{opacity:1}}{detail_end:.6}%,100%{{opacity:0}}}}@keyframes leaderSubsystemLod{{0%,{detail_begin:.6}%{{opacity:1}}{subsystem_soften:.6}%,{detail_fade:.6}%{{opacity:.28}}{subsystem_restore:.6}%,100%{{opacity:.72}}}}@keyframes leaderNodeKindLod{{0%,{detail_begin:.6}%{{opacity:.16}}{detail_full:.6}%,{detail_fade:.6}%{{opacity:1}}{detail_end:.6}%,100%{{opacity:.16}}}}#camera-world{{transform-box:view-box;transform-origin:0 0;animation:leaderCamera {total:.3}s linear infinite}}.nav-boundary{{pointer-events:none}}.nav-boundary rect{{fill:#08131d;fill-opacity:.08;vector-effect:non-scaling-stroke}}.nav-boundary text{{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:2px;vector-effect:non-scaling-stroke}}.nav-subsystem{{animation:leaderSubsystemLod {total:.3}s linear infinite}}.nav-subsystem rect{{stroke:#44677f;stroke-width:2;stroke-dasharray:12 10;opacity:.42}}.nav-subsystem text{{fill:#5f7f95;font-size:13px;font-weight:700;opacity:.56}}.nav-detail{{opacity:0;animation:leaderDetailLod {total:.3}s linear infinite}}.nav-detail rect{{stroke:#80a7bd;stroke-width:1.5;stroke-dasharray:7 7;opacity:.50}}.nav-detail text{{fill:#91b5c7;font-size:11px;font-weight:800;opacity:.68}}.node-kind{{animation:leaderNodeKindLod {total:.3}s linear infinite}}</style>"
     )
 }
 
@@ -365,6 +373,7 @@ mod tests {
         assert!(!output.contains("attributeName=\"viewBox\""));
         assert!(output.contains("viewBox=\"0 0 864 484\""));
         assert!(output.contains("@keyframes leaderCamera"));
+        assert!(output.contains("@keyframes leaderDetailLod"));
         assert!(output.contains("id=\"camera-world\""));
         assert!(output.contains("id=\"navigation-hierarchy\""));
         assert!(!output.contains("id=\"f3-datapath\""));
@@ -380,6 +389,20 @@ mod tests {
         assert!(overlay.contains("data-module=\"gpu.timing\""));
         assert!(overlay.contains("data-density=\"bit_exact\""));
         assert!(overlay.contains("data-parent=\"view-gpu\""));
+    }
+
+    #[test]
+    fn physical_nodes_receive_navigation_membership_metadata() {
+        let topology = build_topology();
+        let navigation = build_navigation(&topology);
+        let mut svg = String::from(
+            "<svg><g id=\"node-microRom\"></g><g id=\"node-shieldAddr\"></g></svg>",
+        );
+        annotate_node_membership(&mut svg, &navigation);
+        assert!(svg.contains("id=\"node-microRom\" data-detail-module=\"decode.microcode\""));
+        assert!(svg.contains("data-subsystem=\"decode\""));
+        assert!(svg.contains("id=\"node-shieldAddr\" data-detail-module=\"io.shields\""));
+        assert!(svg.contains("data-subsystem=\"io\""));
     }
 
     #[test]
