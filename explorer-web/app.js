@@ -15,9 +15,10 @@ const timelineScrubber = document.querySelector("#timeline-scrubber");
 const timelineLabel = document.querySelector("#timeline-label");
 const NS = "http://www.w3.org/2000/svg";
 
-let dragging = false;
-let dragDistance = 0;
-let lastPointer = null;
+const activePointers = new Map();
+let tapCandidate = null;
+let tapTravel = 0;
+let pinchState = null;
 let rafHandle = 0;
 let highlightedNode = null;
 
@@ -41,13 +42,17 @@ function routePath(route) {
     .join(" ");
 }
 
-function worldPoint(event) {
+function clientToWorld(clientX, clientY) {
   const camera = parseJson(explorer.camera_json());
   const rect = svg.getBoundingClientRect();
   return {
-    x: camera.x + ((event.clientX - rect.left) / rect.width) * camera.w,
-    y: camera.y + ((event.clientY - rect.top) / rect.height) * camera.h,
+    x: camera.x + ((clientX - rect.left) / rect.width) * camera.w,
+    y: camera.y + ((clientY - rect.top) / rect.height) * camera.h,
   };
+}
+
+function worldPoint(event) {
+  return clientToWorld(event.clientX, event.clientY);
 }
 
 function makeSvg(tag, attributes = {}) {
@@ -56,6 +61,55 @@ function makeSvg(tag, attributes = {}) {
     element.setAttribute(name, String(value));
   }
   return element;
+}
+
+function pointerPair() {
+  return [...activePointers.values()].slice(0, 2);
+}
+
+function midpoint(left, right) {
+  return {
+    x: (left.x + right.x) * 0.5,
+    y: (left.y + right.y) * 0.5,
+  };
+}
+
+function pointerDistance(left, right) {
+  return Math.hypot(right.x - left.x, right.y - left.y);
+}
+
+function beginPinch() {
+  if (activePointers.size < 2) {
+    pinchState = null;
+    return;
+  }
+  const [left, right] = pointerPair();
+  pinchState = {
+    distance: Math.max(pointerDistance(left, right), 1),
+    midpoint: midpoint(left, right),
+  };
+  tapCandidate = null;
+}
+
+function updatePinch() {
+  if (activePointers.size < 2 || !pinchState) return false;
+  const [left, right] = pointerPair();
+  const nextMidpoint = midpoint(left, right);
+  const nextDistance = Math.max(pointerDistance(left, right), 1);
+  const camera = parseJson(explorer.camera_json());
+  const rect = svg.getBoundingClientRect();
+
+  const dx = nextMidpoint.x - pinchState.midpoint.x;
+  const dy = nextMidpoint.y - pinchState.midpoint.y;
+  explorer.pan_camera(-(dx / rect.width) * camera.w, -(dy / rect.height) * camera.h);
+
+  const anchor = clientToWorld(nextMidpoint.x, nextMidpoint.y);
+  const factor = Math.max(0.5, Math.min(2, nextDistance / pinchState.distance));
+  explorer.zoom_camera_at(anchor.x, anchor.y, factor);
+
+  pinchState = { distance: nextDistance, midpoint: nextMidpoint };
+  renderGraph();
+  return true;
 }
 
 function setHighlightedNode(nodeId) {
@@ -261,44 +315,73 @@ function ensurePlaybackLoop() {
 }
 
 svg.addEventListener("pointerdown", (event) => {
-  dragging = true;
-  dragDistance = 0;
-  lastPointer = { x: event.clientX, y: event.clientY };
+  activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   svg.setPointerCapture(event.pointerId);
+
+  if (activePointers.size === 1) {
+    tapCandidate = event.pointerId;
+    tapTravel = 0;
+    pinchState = null;
+  } else {
+    beginPinch();
+  }
 });
 
 svg.addEventListener("pointermove", (event) => {
-  if (dragging && lastPointer) {
-    const camera = parseJson(explorer.camera_json());
-    const rect = svg.getBoundingClientRect();
-    const dx = event.clientX - lastPointer.x;
-    const dy = event.clientY - lastPointer.y;
-    dragDistance += Math.abs(dx) + Math.abs(dy);
-    explorer.pan_camera(-(dx / rect.width) * camera.w, -(dy / rect.height) * camera.h);
-    lastPointer = { x: event.clientX, y: event.clientY };
-    renderGraph();
+  const previous = activePointers.get(event.pointerId);
+  if (!previous) {
+    if (activePointers.size === 0) renderInspector(event);
     return;
   }
-  renderInspector(event);
+
+  activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (activePointers.size >= 2) {
+    updatePinch();
+    return;
+  }
+
+  const camera = parseJson(explorer.camera_json());
+  const rect = svg.getBoundingClientRect();
+  const dx = event.clientX - previous.x;
+  const dy = event.clientY - previous.y;
+  tapTravel += Math.abs(dx) + Math.abs(dy);
+  if (tapTravel >= 5) tapCandidate = null;
+  explorer.pan_camera(-(dx / rect.width) * camera.w, -(dy / rect.height) * camera.h);
+  renderGraph();
 });
 
 svg.addEventListener("pointerleave", () => {
-  if (!dragging) {
+  if (activePointers.size === 0) {
     setHighlightedNode(null);
     inspector.textContent = "Move the pointer over a physical node.";
   }
 });
 
-svg.addEventListener("pointerup", (event) => {
-  if (!dragging) return;
-  dragging = false;
-  lastPointer = null;
-  if (dragDistance < 5) {
+function finishPointer(event, allowTap) {
+  const isTap = allowTap && tapCandidate === event.pointerId && activePointers.size === 1;
+  activePointers.delete(event.pointerId);
+
+  if (isTap) {
     const point = worldPoint(event);
     explorer.focus_at(point.x, point.y);
     renderGraph();
   }
-});
+
+  if (activePointers.size >= 2) {
+    beginPinch();
+  } else if (activePointers.size === 1) {
+    pinchState = null;
+    tapCandidate = null;
+    tapTravel = 0;
+  } else {
+    pinchState = null;
+    tapCandidate = null;
+    tapTravel = 0;
+  }
+}
+
+svg.addEventListener("pointerup", (event) => finishPointer(event, true));
+svg.addEventListener("pointercancel", (event) => finishPointer(event, false));
 
 svg.addEventListener("wheel", (event) => {
   event.preventDefault();
