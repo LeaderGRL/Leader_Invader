@@ -1,4 +1,13 @@
+use std::collections::HashSet;
+
+use crate::topology::{SignalKind, Topology};
 use crate::trace::PhaseKind;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhysicalActivityLink {
+    pub id: String,
+    pub signal: SignalKind,
+}
 
 /// Returns the physical node ids that participate in a native trace phase.
 ///
@@ -79,6 +88,34 @@ pub fn physical_activity_nodes(phase: PhaseKind, address: Option<u16>) -> Vec<St
     ids
 }
 
+/// Returns the canonical physical links that connect participating activity nodes.
+///
+/// This is a conservative activity subgraph: a link is active only when both of
+/// its physical endpoint nodes participate in the same native activity snapshot.
+/// More precise electrical stage timing can refine this contract later without
+/// requiring frontend-side topology inference.
+#[must_use]
+pub fn physical_activity_links(
+    topology: &Topology,
+    phase: PhaseKind,
+    address: Option<u16>,
+) -> Vec<PhysicalActivityLink> {
+    let nodes = physical_activity_nodes(phase, address);
+    let active = nodes.iter().map(String::as_str).collect::<HashSet<_>>();
+
+    topology
+        .links
+        .iter()
+        .filter(|link| {
+            active.contains(link.from.as_str()) && active.contains(link.to.as_str())
+        })
+        .map(|link| PhysicalActivityLink {
+            id: link.id.clone(),
+            signal: link.signal,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,5 +141,18 @@ mod tests {
 
         let vram = physical_activity_nodes(PhaseKind::Dma, Some(0x83fe));
         assert!(vram.contains(&"vramPage3".to_owned()));
+    }
+
+    #[test]
+    fn activity_links_are_derived_from_the_canonical_topology() {
+        let topology = crate::build_topology();
+        let links = physical_activity_links(&topology, PhaseKind::Scanout, None);
+        assert!(links.iter().any(|link| link.id == "g-spriteRom-pixelMux"));
+        assert!(links.iter().any(|link| link.id == "g-scanShift-display"));
+        assert!(links.iter().all(|link| {
+            topology.links.iter().any(|candidate| {
+                candidate.id == link.id && candidate.signal == link.signal
+            })
+        }));
     }
 }
