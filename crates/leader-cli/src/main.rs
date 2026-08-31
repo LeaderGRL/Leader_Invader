@@ -20,6 +20,7 @@ mod flags_overlay;
 mod formation_cadence_overlay;
 mod frontpage;
 mod frontpage_finalize;
+mod frontpage_live;
 #[cfg(test)]
 mod microcode_overlay;
 #[cfg(test)]
@@ -196,10 +197,14 @@ fn validate_frontpage_svg(svg: &str) -> Result<(), String> {
         "id=\"frontpage-logic-microscope\"",
         "id=\"frontpage-native-video-replay\"",
         "id=\"frontpage-native-telemetry\"",
+        "id=\"frontpage-readable-native-state\"",
         "data-bus-address=\"",
         "data-bus-data=\"",
         "data-detail-module=\"ramsys.pages\"",
         "data-vram-frame=\"",
+        "data-held-ucontrol=\"",
+        "data-held-ram-page=\"",
+        "data-held-alu-result=\"",
     ] {
         if !svg.contains(marker) {
             return Err(format!("frontpage SVG is missing required marker {marker}"));
@@ -243,6 +248,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let config = RenderConfig::default();
     let svg = frontpage::render(&topology, &trace, config);
     let svg = frontpage_finalize::apply(svg);
+    let svg = frontpage_live::apply(svg, &topology, &trace, config);
     validate_frontpage_svg(&svg)?;
     write(&options.output, svg.as_bytes())?;
     let trace_path = options.output.with_file_name("trace.json");
