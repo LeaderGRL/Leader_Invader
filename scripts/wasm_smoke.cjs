@@ -10,11 +10,23 @@ const wasm = require(path.resolve(generatedModule));
 assert.equal(typeof wasm.Explorer, 'function', 'Explorer export missing');
 assert.equal(typeof wasm.Playback, 'function', 'Playback export missing');
 assert.equal(typeof wasm.ActivityResolver, 'function', 'ActivityResolver export missing');
+assert.equal(typeof wasm.WorkspaceLayout, 'function', 'WorkspaceLayout export missing');
 
 const explorer = new wasm.Explorer();
 const topology = JSON.parse(explorer.topology_json());
 assert.ok(Array.isArray(topology.nodes) && topology.nodes.length > 400, 'canonical topology missing');
 assert.ok(Array.isArray(topology.links) && topology.links.length > 800, 'canonical links missing');
+
+const workspace = new wasm.WorkspaceLayout();
+const canonicalMicroRom = JSON.parse(workspace.node_layout_json('microRom'));
+assert.equal(workspace.move_node_to('microRom', canonicalMicroRom.canonical.x + 32, canonicalMicroRom.canonical.y - 16), true);
+const movedMicroRom = JSON.parse(workspace.node_layout_json('microRom'));
+assert.equal(movedMicroRom.offset.x, 32);
+assert.equal(movedMicroRom.offset.y, -16);
+assert.deepEqual(movedMicroRom.canonical, canonicalMicroRom.canonical, 'workspace edit mutated canonical bounds');
+assert.equal(workspace.create_group('ci-cluster', 'CI cluster'), true);
+assert.equal(workspace.add_node_to_group('ci-cluster', 'microRom'), true);
+assert.equal(JSON.parse(workspace.node_layout_json('microRom')).group, 'ci-cluster');
 
 const playback = new wasm.Playback();
 assert.equal(playback.load_match('ci-wasm-smoke', 24), true, 'native match failed to load');
@@ -52,4 +64,4 @@ const exactDmaLinks = JSON.parse(resolver.bus_links_json(
 ));
 assert.ok(exactDmaLinks.some((link) => link.stage === 'dma_address_driver'), 'exact DMA did not resolve to bus path');
 
-console.log(`WASM smoke OK: ${topology.nodes.length} nodes, ${topology.links.length} links, VRAM ${vram.width}x${vram.height}, ${exactDmaLinks.length} exact DMA bus stages`);
+console.log(`WASM smoke OK: ${topology.nodes.length} nodes, ${topology.links.length} links, VRAM ${vram.width}x${vram.height}, ${exactDmaLinks.length} exact DMA bus stages, workspace r${workspace.revision()}`);
