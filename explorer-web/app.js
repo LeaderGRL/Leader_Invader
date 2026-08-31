@@ -138,6 +138,10 @@ function currentAluValues() {
   return parseJson(playback.current_alu_values_json()) ?? [];
 }
 
+function currentAluLinks() {
+  return parseJson(playback.current_alu_links_json()) ?? [];
+}
+
 function applyActivity(activity) {
   svg.querySelectorAll(".is-active").forEach((element) => element.classList.remove("is-active"));
   svg.querySelectorAll(".activity-value").forEach((element) => element.remove());
@@ -168,6 +172,66 @@ function applyActivity(activity) {
       "text-anchor": "middle",
     });
     label.textContent = valueText;
+    linkLayer.append(label);
+  }
+}
+
+function clearAluLinks() {
+  svg.querySelectorAll(".has-alu-link-value").forEach((path) => {
+    path.classList.remove(
+      "has-alu-link-value",
+      "alu-link-selected",
+      "alu-link-candidate",
+      "alu-link-one",
+      "alu-link-zero",
+    );
+    delete path.dataset.aluRank;
+    delete path.dataset.aluStage;
+    delete path.dataset.aluValue;
+    delete path.dataset.aluSelected;
+    delete path.dataset.aluBit;
+  });
+  svg.querySelectorAll(".alu-link-value").forEach((element) => element.remove());
+}
+
+function applyAluLinks(values) {
+  clearAluLinks();
+  if (!Array.isArray(values) || values.length === 0) return;
+  const camera = parseJson(explorer.camera_json());
+  const cameraScale = camera ? camera.w / Math.max(svg.clientWidth, 1) : Number.POSITIVE_INFINITY;
+  const linkLayer = svg.querySelector(".link-layer");
+  const byLink = new Map();
+  for (const state of values) {
+    // A ripple carry link can appear once as the source slice's carry-out and
+    // once as the next slice's carry-in. Keep the later dependency rank for the
+    // visual annotation while preserving the identical core-owned bit value.
+    const previous = byLink.get(state.link);
+    if (!previous || state.rank >= previous.rank) byLink.set(state.link, state);
+  }
+  for (const state of byLink.values()) {
+    const path = svg.querySelector(`[data-link-id="${CSS.escape(state.link)}"]`);
+    if (!path) continue;
+    path.classList.add(
+      "has-alu-link-value",
+      state.selected ? "alu-link-selected" : "alu-link-candidate",
+      state.value ? "alu-link-one" : "alu-link-zero",
+    );
+    path.dataset.aluRank = String(state.rank);
+    path.dataset.aluStage = state.stage;
+    path.dataset.aluValue = state.value ? "1" : "0";
+    path.dataset.aluSelected = state.selected ? "true" : "false";
+    path.dataset.aluBit = String(state.bit);
+    if (!state.selected || !linkLayer || cameraScale >= 1.25) continue;
+    const length = path.getTotalLength();
+    if (!Number.isFinite(length) || length <= 0) continue;
+    const point = path.getPointAtLength(length * 0.5);
+    const label = makeSvg("text", {
+      x: point.x,
+      y: point.y + Math.max(12, cameraScale * 5),
+      class: "alu-link-value",
+      "text-anchor": "middle",
+    });
+    label.textContent = `${state.value ? 1 : 0} · r${state.rank}`;
     linkLayer.append(label);
   }
 }
@@ -244,8 +308,9 @@ function applyBitChanges(changes) {
   }
 }
 
-function applyLiveState(activity, aluValues, changes) {
+function applyLiveState(activity, aluValues, aluLinks, changes) {
   applyActivity(activity);
+  applyAluLinks(aluLinks);
   applyAluValues(aluValues);
   applyBitChanges(changes);
 }
@@ -300,7 +365,12 @@ function renderGraph() {
   }
   svg.append(linkLayer, nodeLayer);
   renderNavigation(currentView, crumbs, children);
-  applyLiveState(parseJson(playback.current_activity_json()), currentAluValues(), currentBitChanges());
+  applyLiveState(
+    parseJson(playback.current_activity_json()),
+    currentAluValues(),
+    currentAluLinks(),
+    currentBitChanges(),
+  );
 }
 
 function renderNavigation(currentView, crumbs, children) {
@@ -354,8 +424,9 @@ function renderPlayback() {
   const summary = parseJson(playback.summary_json());
   const activity = parseJson(playback.current_activity_json());
   const aluValues = currentAluValues();
+  const aluLinks = currentAluLinks();
   const bitChanges = currentBitChanges();
-  applyLiveState(activity, aluValues, bitChanges);
+  applyLiveState(activity, aluValues, aluLinks, bitChanges);
   if (!summary) {
     playbackState.textContent = "No trace loaded.";
     progressFill.style.width = "0%";
@@ -378,6 +449,8 @@ function renderPlayback() {
     .map((change) => `${change.node}:${change.before ? 1 : 0}→${change.after ? 1 : 0}`)
     .join(" ");
   const aluOnes = aluValues.filter((state) => state.value).length;
+  const selectedAluLinks = aluLinks.filter((state) => state.selected);
+  const maxAluRank = selectedAluLinks.reduce((max, state) => Math.max(max, state.rank), 0);
   const lines = [
     `seed      ${summary.seed}`,
     `cursor    ${summary.cursor}/${lastCursor}`,
@@ -395,6 +468,7 @@ function renderPlayback() {
     `data src  ${bus?.dataSource ?? "—"}`,
     `active    ${activity?.nodes?.length ?? 0} nodes / ${links.length} links`,
     `ALU gates ${aluValues.length ? `${aluOnes}/${aluValues.length} high` : "—"}`,
+    `ALU path  ${aluLinks.length ? `${selectedAluLinks.length}/${aluLinks.length} selected · rank ${maxAluRank}` : "—"}`,
     `bit flips ${bitChanges.length}`,
     `mutations ${mutations || "—"}`,
     `score     ${frame?.score ?? "—"}`,
