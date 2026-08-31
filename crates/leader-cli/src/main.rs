@@ -1,27 +1,48 @@
 #![forbid(unsafe_code)]
 
+#[cfg(test)]
 mod alu_overlay;
+#[cfg(test)]
 mod bus_overlay;
+#[cfg(test)]
 mod control_state_overlay;
+#[cfg(test)]
 mod control_word_overlay;
+#[cfg(test)]
 mod decoder_overlay;
+#[cfg(test)]
 mod director;
+#[cfg(test)]
 mod enemy_shot_overlay;
+#[cfg(test)]
 mod flags_overlay;
+#[cfg(test)]
 mod formation_cadence_overlay;
 mod frontpage;
+mod frontpage_finalize;
+#[cfg(test)]
 mod microcode_overlay;
+#[cfg(test)]
 mod microcycle_overlay;
+#[cfg(test)]
 mod navigation_targets;
 #[cfg(test)]
 mod native_pipeline_tests;
+#[cfg(test)]
 mod pc_overlay;
+#[cfg(test)]
 mod register_overlay;
+#[cfg(test)]
 mod render_contract;
+#[cfg(test)]
 mod shield_overlay;
+#[cfg(test)]
 mod shift_register_overlay;
+#[cfg(test)]
 mod stack_overlay;
+#[cfg(test)]
 mod timing_overlay;
+#[cfg(test)]
 mod video_pipeline_overlay;
 
 use std::{
@@ -221,6 +242,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     ) = validate_native_trace(&trace)?;
     let config = RenderConfig::default();
     let svg = frontpage::render(&topology, &trace, config);
+    let svg = frontpage_finalize::apply(svg);
     validate_frontpage_svg(&svg)?;
     write(&options.output, svg.as_bytes())?;
     let trace_path = options.output.with_file_name("trace.json");
