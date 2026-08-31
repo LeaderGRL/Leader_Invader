@@ -3,8 +3,8 @@ use crate::logic::{AluOp, AluTrace};
 /// One authoritative one-bit value travelling over a physical ALU link.
 ///
 /// `rank` is a dependency order, not an analog delay. Equal ranks may settle in
-/// parallel. `selected` distinguishes the function path chosen by the native
-/// ALU operation from other simultaneously-computable candidate results.
+/// parallel. `selected` marks links that participate in the native operation;
+/// unselected entries remain valid combinational candidate values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhysicalAluLinkValue {
     pub link_id: String,
@@ -23,6 +23,8 @@ pub fn physical_alu_link_values(trace: AluTrace) -> Vec<PhysicalAluLinkValue> {
     let mut values = Vec::with_capacity(192);
     let is_sub = matches!(trace.op, AluOp::Sub | AluOp::Compare);
     let selected_family = selected_family(trace.op);
+    let uses_adder = selected_family == "sum";
+    let uses_xor_path = uses_adder || selected_family == "xor";
     let writes_back = trace.op != AluOp::Compare;
 
     for bit in 0..8_u8 {
@@ -41,53 +43,42 @@ pub fn physical_alu_link_values(trace: AluTrace) -> Vec<PhysicalAluLinkValue> {
         let logical_or = lhs | rhs;
         let result = trace.result & (1 << shift) != 0;
 
-        // Operand fan-out and subtraction control are available first.
-        push(&mut values, bit, 0, "operand_a", lhs, true, format!("alu-a-xor-{bit}"));
-        push(&mut values, bit, 0, "operand_a", lhs, true, format!("alu-a-gen-{bit}"));
-        push(&mut values, bit, 0, "operand_b", rhs, true, format!("alu-b-rhs-xor-{bit}"));
-        push(&mut values, bit, 0, "sub_control", is_sub, is_sub, format!("alu-sub-rhs-xor-{bit}"));
+        push(&mut values, bit, 0, "operand_a", lhs, uses_xor_path, format!("alu-a-xor-{bit}"));
+        push(&mut values, bit, 0, "operand_a", lhs, uses_adder, format!("alu-a-gen-{bit}"));
+        push(&mut values, bit, 0, "operand_b", rhs, uses_xor_path, format!("alu-b-rhs-xor-{bit}"));
+        push(&mut values, bit, 0, "sub_control", is_sub, uses_xor_path, format!("alu-sub-rhs-xor-{bit}"));
         push(&mut values, bit, 0, "pass_input", lhs, selected_family == "pass", format!("alu-a-pass-{bit}"));
         push(&mut values, bit, 0, "and_input_a", lhs, selected_family == "and", format!("alu-a-and-logic-{bit}"));
         push(&mut values, bit, 0, "and_input_b", rhs, selected_family == "and", format!("alu-b-and-logic-{bit}"));
         push(&mut values, bit, 0, "or_input_a", lhs, selected_family == "or", format!("alu-a-or-logic-{bit}"));
         push(&mut values, bit, 0, "or_input_b", rhs, selected_family == "or", format!("alu-b-or-logic-{bit}"));
 
-        // RHS conditioning and parallel candidate logic settle next.
-        push(&mut values, bit, 1, "rhs_effective", rhs_effective, true, format!("alu-rhs-xor-sum-{bit}"));
-        push(&mut values, bit, 1, "rhs_effective", rhs_effective, true, format!("alu-rhs-gen-{bit}"));
+        push(&mut values, bit, 1, "rhs_effective", rhs_effective, uses_xor_path, format!("alu-rhs-xor-sum-{bit}"));
+        push(&mut values, bit, 1, "rhs_effective", rhs_effective, uses_adder, format!("alu-rhs-gen-{bit}"));
         push(&mut values, bit, 1, "pass", pass, selected_family == "pass", format!("alu-pass-result-{bit}"));
         push(&mut values, bit, 1, "logical_and", logical_and, selected_family == "and", format!("alu-and-result-{bit}"));
         push(&mut values, bit, 1, "logical_or", logical_or, selected_family == "or", format!("alu-or-result-{bit}"));
 
-        // XOR/GEN can settle in parallel before the ripple carry reaches a bit.
-        push(&mut values, bit, 2, "xor_ab", xor_ab, true, format!("alu-xor-sum-{bit}"));
-        push(&mut values, bit, 2, "xor_ab", xor_ab, true, format!("alu-xor-prop-{bit}"));
+        push(&mut values, bit, 2, "xor_ab", xor_ab, uses_adder, format!("alu-xor-sum-{bit}"));
+        push(&mut values, bit, 2, "xor_ab", xor_ab, uses_adder, format!("alu-xor-prop-{bit}"));
         push(&mut values, bit, 2, "logical_xor", xor_ab, selected_family == "xor", format!("alu-xor-result-{bit}"));
-        push(&mut values, bit, 2, "generate", generate, true, format!("ac{bit}"));
+        push(&mut values, bit, 2, "generate", generate, uses_adder, format!("ac{bit}"));
 
         let carry_rank = 3 + bit.saturating_mul(2);
         if bit == 0 {
-            push(&mut values, bit, carry_rank, "carry_in", carry_in, true, "alu-cin-sum-0".to_owned());
-            push(&mut values, bit, carry_rank, "carry_in", carry_in, true, "alu-cin-prop-0".to_owned());
+            push(&mut values, bit, carry_rank, "carry_in", carry_in, uses_adder, "alu-cin-sum-0".to_owned());
+            push(&mut values, bit, carry_rank, "carry_in", carry_in, uses_adder, "alu-cin-prop-0".to_owned());
         } else {
-            push(&mut values, bit, carry_rank, "carry_in", carry_in, true, format!("cc{}", bit - 1));
-            push(&mut values, bit, carry_rank, "carry_in", carry_in, true, format!("alu-carry-prop-{bit}"));
+            push(&mut values, bit, carry_rank, "carry_in", carry_in, uses_adder, format!("cc{}", bit - 1));
+            push(&mut values, bit, carry_rank, "carry_in", carry_in, uses_adder, format!("alu-carry-prop-{bit}"));
         }
-        push(&mut values, bit, carry_rank, "sum", sum, selected_family == "sum", format!("alu-sum-result-{bit}"));
-        push(&mut values, bit, carry_rank, "propagate", propagate, true, format!("alu-prop-carry-{bit}"));
+        push(&mut values, bit, carry_rank, "sum", sum, uses_adder, format!("alu-sum-result-{bit}"));
+        push(&mut values, bit, carry_rank, "propagate", propagate, uses_adder, format!("alu-prop-carry-{bit}"));
 
-        // Carry-out is represented on the physical link that leaves this slice:
-        // into the next sum XOR, or into the architectural carry flag at bit 7.
-        let carry_link = if bit < 7 {
-            format!("cc{bit}")
-        } else {
-            "alu-carry-flag".to_owned()
-        };
-        push(&mut values, bit, carry_rank + 1, "carry_out", carry_out, true, carry_link);
+        let carry_link = if bit < 7 { format!("cc{bit}") } else { "alu-carry-flag".to_owned() };
+        push(&mut values, bit, carry_rank + 1, "carry_out", carry_out, uses_adder, carry_link);
 
-        // Result mux output is authoritative even for COMPARE, but compare does
-        // not electrically commit the value to the architectural write bus.
-        let result_rank = if selected_family == "sum" { carry_rank + 1 } else { 3 };
+        let result_rank = if uses_adder { carry_rank + 1 } else { 3 };
         push(
             &mut values,
             bit,
@@ -99,7 +90,12 @@ pub fn physical_alu_link_values(trace: AluTrace) -> Vec<PhysicalAluLinkValue> {
         );
     }
 
-    values.sort_by_key(|value| (value.rank, value.bit, value.link_id.clone()));
+    values.sort_by(|left, right| {
+        left.rank
+            .cmp(&right.rank)
+            .then(left.bit.cmp(&right.bit))
+            .then(left.link_id.cmp(&right.link_id))
+    });
     values
 }
 
@@ -174,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn logical_operation_selects_only_its_mux_candidate() {
+    fn logical_operation_selects_only_its_function_path() {
         let values = physical_alu_link_values(logic_trace(AluOp::Or, 0x80, 0x01, 0x81));
         assert!(values
             .iter()
@@ -185,6 +181,22 @@ mod tests {
         assert!(values
             .iter()
             .any(|value| value.link_id == "alu-xor-result-7" && !value.selected));
+        assert!(values
+            .iter()
+            .filter(|value| value.stage == "carry_out")
+            .all(|value| !value.selected));
+    }
+
+    #[test]
+    fn xor_uses_rhs_conditioner_without_enabling_ripple_carry() {
+        let values = physical_alu_link_values(logic_trace(AluOp::Xor, 0xaa, 0x0f, 0xa5));
+        assert!(values
+            .iter()
+            .any(|value| value.link_id == "alu-rhs-xor-sum-0" && value.selected));
+        assert!(values
+            .iter()
+            .filter(|value| value.stage == "carry_in")
+            .all(|value| !value.selected));
     }
 
     #[test]
@@ -207,7 +219,7 @@ mod tests {
             .iter()
             .find(|value| value.link_id == "alu-carry-flag")
             .unwrap();
-        assert!(carry.value);
+        assert!(carry.value && carry.selected);
         assert_eq!(carry.bit, 7);
     }
 
