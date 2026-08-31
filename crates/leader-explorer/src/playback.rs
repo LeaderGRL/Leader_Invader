@@ -229,9 +229,21 @@ impl Playback {
             .unwrap_or_else(|| "null".to_owned())
     }
 
+    /// Historical/latest bus state for the inspector panel.
     #[must_use]
     pub fn current_bus_json(&self) -> String {
         self.current_bus_event()
+            .map(bus_json)
+            .unwrap_or_else(|| "null".to_owned())
+    }
+
+    /// Exact bus event for physical propagation. Unlike `current_bus_json`, this
+    /// never leaks a previous transaction into a later unrelated microcycle. An
+    /// explicit bus seek keeps its focused native event visible until ordinary
+    /// timeline movement clears the focus.
+    #[must_use]
+    pub fn current_exact_bus_json(&self) -> String {
+        self.current_exact_bus_event()
             .map(bus_json)
             .unwrap_or_else(|| "null".to_owned())
     }
@@ -571,6 +583,18 @@ impl Playback {
         (bus_key(event) <= key).then_some(event)
     }
 
+    fn current_exact_bus_event(&self) -> Option<&BusTransactionEvent> {
+        if let Some(event) = self.focused_bus_event() {
+            return Some(event);
+        }
+        let trace = self.trace.as_ref()?;
+        let key = self.current_key()?;
+        trace
+            .bus_transactions
+            .iter()
+            .find(|event| bus_key(event) == key)
+    }
+
     fn current_bus_event(&self) -> Option<&BusTransactionEvent> {
         if let Some(event) = self.focused_bus_event() {
             return Some(event);
@@ -832,7 +856,9 @@ mod tests {
         assert!(json.contains("\"format\":\"1bpp-msb-first-row-major\""));
         assert!(json.contains("\"checksum\":"));
         assert!(json.contains("\"bytes\":["));
-        let checkpoint = playback.current_vram_checkpoint().expect("native VRAM checkpoint");
+        let checkpoint = playback
+            .current_vram_checkpoint()
+            .expect("native VRAM checkpoint");
         assert_eq!(checkpoint.bytes.len(), 128 * 96 / 8);
     }
 
@@ -900,8 +926,31 @@ mod tests {
         assert!(playback.follow_pc_json().contains("view-pc.fetch"));
         assert!(playback.seek_next_bus());
         assert!(playback.current_bus_json().contains("\"kind\":"));
+        assert!(playback
+            .current_exact_bus_json()
+            .contains("\"kind\":"));
         assert!(playback.follow_bus_json().contains("view-bus.arbitration"));
-        assert!(playback.current_frame_json().contains("\"vramChecksum\":"));
+        assert!(playback
+            .current_frame_json()
+            .contains("\"vramChecksum\":"));
+    }
+
+    #[test]
+    fn exact_bus_event_does_not_leak_historical_transaction_state() {
+        let mut playback = Playback::new();
+        assert!(playback.load_match("explorer-exact-bus", 32));
+        let mut found_historical_only = false;
+        for cursor in 0..playback.microcycle_count() {
+            assert!(playback.seek_cursor(cursor));
+            if playback.current_bus_json() != "null" && playback.current_exact_bus_json() == "null" {
+                found_historical_only = true;
+                break;
+            }
+        }
+        assert!(
+            found_historical_only,
+            "native trace should contain microcycles after a bus event where propagation is no longer exact"
+        );
     }
 
     #[test]
@@ -911,6 +960,9 @@ mod tests {
         assert!(playback.seek_next_dma());
         assert!(playback.follow_dma_json().contains("view-gpu.dma"));
         assert!(playback.current_bus_json().contains("\"kind\":\"dma\""));
+        assert!(playback
+            .current_exact_bus_json()
+            .contains("\"kind\":\"dma\""));
         let dma_activity = playback.current_activity_json();
         assert!(dma_activity.contains("\"phase\":\"dma\""));
         assert!(dma_activity.contains("\"dmaAddr\""));
