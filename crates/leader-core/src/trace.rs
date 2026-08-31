@@ -365,6 +365,16 @@ impl FrameState {
     }
 }
 
+/// Exact native 128×96 1bpp framebuffer bytes retained at a raster boundary.
+/// The browser may decode these bytes for display but must not reconstruct game
+/// objects or video memory semantics independently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VramCheckpoint {
+    pub frame: u32,
+    pub checksum: u32,
+    pub bytes: Box<[u8]>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KillEvent {
     pub frame: u32,
@@ -378,6 +388,7 @@ pub struct MatchTrace {
     pub seed: String,
     pub seed_hash: u64,
     pub frames: Vec<FrameState>,
+    pub vram_checkpoints: Vec<VramCheckpoint>,
     pub micro_samples: Vec<MicroSample>,
     pub micro_cycles: Vec<MicroCycleEvent>,
     pub micro_addresses: Vec<MicroAddressEvent>,
@@ -404,6 +415,7 @@ impl MatchTrace {
             seed,
             seed_hash,
             frames: Vec::new(),
+            vram_checkpoints: Vec::new(),
             micro_samples: Vec::new(),
             micro_cycles: Vec::new(),
             micro_addresses: Vec::new(),
