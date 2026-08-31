@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 pub mod activity;
 pub mod alu_layout;
+pub mod alu_propagation;
 pub mod assembler;
 pub mod bus_layout;
 pub mod call_stack_contract;
@@ -50,6 +51,7 @@ pub use activity::{
     physical_pc_bit_changes, physical_register_bit_changes, physical_sp_bit_changes,
     PhysicalAluNodeValue, PhysicalBitChange,
 };
+pub use alu_propagation::{physical_alu_link_values, PhysicalAluLinkValue};
 pub use call_stack_contract::{validate_call_stack_contract, CallStackValidation};
 pub use control_contract::{
     control_topology_violations, physical_control_lines, physically_used_control_mask,
