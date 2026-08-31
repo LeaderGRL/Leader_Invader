@@ -6,18 +6,17 @@ const input = path.resolve(process.env.LEADER_SVG ?? "generated/Leader.svg");
 const outputDir = path.resolve(process.env.LEADER_FRONT_PAGE_CAPTURE_OUTPUT ?? "generated/frontpage-captures");
 const svg = await readFile(input, "utf8");
 
-// Capture every stable technical camera hold, not arbitrary wall-clock times.
-const checkpoints = [
+const checkpointSpecs = [
   { name: "01-overview", time: 0.25, focus: "full die" },
-  { name: "02-fetch-decode", time: 3.0, focus: "PC + fetch + decode" },
-  { name: "03-microcode", time: 6.1, focus: "256x24 control ROM" },
-  { name: "04-alu", time: 10.0, focus: "8-bit ripple ALU" },
-  { name: "05-rom", time: 15.0, focus: "native ROM page" },
-  { name: "06-ram", time: 21.0, focus: "native RAM page" },
-  { name: "07-alu-late", time: 28.0, focus: "late ALU propagation" },
-  { name: "08-vram", time: 35.5, focus: "native VRAM page" },
-  { name: "09-gpu", time: 43.5, focus: "DMA + scanout" },
-  { name: "10-late-memory", time: 51.0, focus: "late native memory access" },
+  { name: "02-fetch-decode", window: [2.2, 3.8], selector: "#v2-native-bus-propagation .v2-active-wire", focus: "PC + fetch + decode" },
+  { name: "03-microcode", window: [5.25, 6.95], selector: "#v2-microcode-bitcell-fabric > g", focus: "256x24 control ROM" },
+  { name: "04-alu", window: [8.8, 11.6], selector: "#v2-native-alu-propagation .v2-active-wire", focus: "8-bit ripple ALU" },
+  { name: "05-rom", window: [14.35, 15.65], selector: "#v2-exact-memory-cell-activity > g", focus: "native ROM page" },
+  { name: "06-ram", window: [21.35, 22.65], selector: "#v2-exact-memory-cell-activity > g", focus: "native RAM page" },
+  { name: "07-alu-late", window: [26.0, 30.2], selector: "#v2-native-alu-propagation .v2-active-wire", focus: "late ALU propagation" },
+  { name: "08-vram", window: [36.35, 37.65], selector: "#v2-exact-memory-cell-activity > g", focus: "native VRAM page" },
+  { name: "09-gpu", window: [42.0, 46.2], selector: "#v2-native-bus-propagation .v2-active-wire", focus: "DMA + scanout" },
+  { name: "10-late-memory", window: [49.35, 50.65], selector: "#v2-exact-memory-cell-activity > g", focus: "late native memory access" },
   { name: "11-outro-overview", time: 58.0, focus: "full die + final CRT" },
 ];
 
@@ -28,15 +27,6 @@ const page = await browser.newPage({
   viewport: { width: 1200, height: 675 },
   deviceScaleFactor: 1,
 });
-
-function intersects(a, b, tolerance = 1.5) {
-  return (
-    a.x + a.width - tolerance > b.x &&
-    b.x + b.width - tolerance > a.x &&
-    a.y + a.height - tolerance > b.y &&
-    b.y + b.height - tolerance > a.y
-  );
-}
 
 try {
   await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:1200px;height:675px;overflow:hidden;background:#04080d}svg{display:block;width:1200px;height:675px}</style></head><body>${svg}</body></html>`, {
@@ -51,10 +41,12 @@ try {
   if (!supportsTimeline) {
     throw new Error("Browser SVG timeline seeking is unavailable");
   }
+  await page.evaluate(() => document.querySelector("svg").pauseAnimations());
 
   const staticContract = await page.evaluate(() => {
     const viewport = document.querySelector("#v2-machine-viewport");
     const machine = document.querySelector("#v2-machine");
+    const clipRect = document.querySelector("#v2-machine-clip rect");
     const cameraTranslate = document.querySelector("#v2-camera-translate");
     const cameraScale = document.querySelector("#v2-camera-scale");
     const bitFabric = document.querySelector("#v2-memory-bitcell-fabric");
@@ -71,6 +63,12 @@ try {
       cameraScale: Boolean(cameraScale),
       viewportClip: viewport?.getAttribute("clip-path") ?? null,
       machineClip: machine?.getAttribute("clip-path") ?? null,
+      clip: clipRect ? {
+        x: Number(clipRect.getAttribute("x")),
+        y: Number(clipRect.getAttribute("y")),
+        width: Number(clipRect.getAttribute("width")),
+        height: Number(clipRect.getAttribute("height")),
+      } : null,
       memoryBitCells: bitFabric?.getAttribute("aria-label") ?? null,
       microcodeCells: microFabric?.getAttribute("data-microcode-cells") ?? null,
     };
@@ -97,15 +95,27 @@ try {
   if (staticContract.machineClip !== null) {
     throw new Error(`Raw topology must never carry a transformed clipPath: ${staticContract.machineClip}`);
   }
+  if (!staticContract.clip || staticContract.clip.x !== 24 || staticContract.clip.width !== 900 || staticContract.clip.x + staticContract.clip.width >= 934) {
+    throw new Error(`Hardware viewport must reserve a non-overlapping CRT sidebar: ${JSON.stringify(staticContract.clip)}`);
+  }
+
+  const checkpoints = [];
+  for (const spec of checkpointSpecs) {
+    if (spec.window) {
+      const best = await findPeakActivity(page, spec.window[0], spec.window[1], spec.selector);
+      if (best.score <= 0) {
+        throw new Error(`No native activity found for ${spec.name} (${spec.selector}) inside ${spec.window.join("-")}s`);
+      }
+      checkpoints.push({ ...spec, time: best.time, activityScore: best.score });
+    } else {
+      checkpoints.push({ ...spec, activityScore: null });
+    }
+  }
 
   const manifest = [];
   for (const checkpoint of checkpoints) {
-    await page.evaluate((time) => {
-      const svgRoot = document.querySelector("svg");
-      svgRoot.pauseAnimations();
-      svgRoot.setCurrentTime(time);
-    }, checkpoint.time);
-    await page.waitForTimeout(100);
+    await seek(page, checkpoint.time);
+    await page.waitForTimeout(80);
 
     const state = await page.evaluate(() => {
       const viewportRect = document.querySelector("#v2-machine-viewport")?.getBoundingClientRect();
@@ -120,7 +130,7 @@ try {
         if (!node || !title || !viewportRect) continue;
         const nodeRect = node.getBoundingClientRect();
         const titleRect = title.getBoundingClientRect();
-        if (!intersectsLocal(nodeRect, viewportRect, 0)) continue;
+        if (!intersects(nodeRect, viewportRect, 0)) continue;
 
         const tolerance = Math.max(2, nodeRect.width * 0.035);
         if (
@@ -131,7 +141,7 @@ try {
         ) {
           labelFailures.push({ id, node: rect(nodeRect), label: rect(titleRect) });
         }
-        if (titleRect.width > 1 && titleRect.height > 1 && intersectsLocal(titleRect, viewportRect, 0)) {
+        if (titleRect.width > 1 && titleRect.height > 1 && intersects(titleRect, viewportRect, 0)) {
           visibleTitleRects.push({ id, rect: rect(titleRect) });
         }
       }
@@ -139,7 +149,7 @@ try {
       const textOverlaps = [];
       for (let i = 0; i < visibleTitleRects.length; i += 1) {
         for (let j = i + 1; j < visibleTitleRects.length; j += 1) {
-          if (intersectsLocal(visibleTitleRects[i].rect, visibleTitleRects[j].rect, 1.5)) {
+          if (intersects(visibleTitleRects[i].rect, visibleTitleRects[j].rect, 1.5)) {
             textOverlaps.push([visibleTitleRects[i].id, visibleTitleRects[j].id]);
             if (textOverlaps.length >= 12) break;
           }
@@ -179,7 +189,7 @@ try {
       function rect(value) {
         return { x: value.x, y: value.y, width: value.width, height: value.height };
       }
-      function intersectsLocal(a, b, tolerance = 1.5) {
+      function intersects(a, b, tolerance = 1.5) {
         return (
           a.x + a.width - tolerance > b.x &&
           b.x + b.width - tolerance > a.x &&
@@ -198,7 +208,7 @@ try {
     if (state.rasterTransform !== "translate(950.000 127.000) scale(1.5000000 1.5000000)" || state.rasterClip !== null) {
       throw new Error(`CRT raster must be exact 4:3, uniformly scaled and unclipped: ${JSON.stringify(state)}`);
     }
-    if (checkpoint.time >= 3 && state.visibleCrtFrames.length !== 1) {
+    if (checkpoint.time >= 2.5 && state.visibleCrtFrames.length !== 1) {
       throw new Error(`Exactly one native VRAM framebuffer must be visible at ${checkpoint.time}s: ${JSON.stringify(state.visibleCrtFrames)}`);
     }
     for (const frame of state.visibleCrtFrames) {
@@ -210,7 +220,7 @@ try {
     const file = `${checkpoint.name}.png`;
     await root.screenshot({ path: path.join(outputDir, file), animations: "allow" });
     manifest.push({ ...checkpoint, file, state });
-    console.log(`captured ${checkpoint.time.toFixed(2)}s ${checkpoint.focus} -> ${file}`);
+    console.log(`captured ${checkpoint.time.toFixed(3)}s ${checkpoint.focus} activity=${checkpoint.activityScore ?? "n/a"} -> ${file}`);
   }
 
   await writeFile(
@@ -220,4 +230,27 @@ try {
   );
 } finally {
   await browser.close();
+}
+
+async function findPeakActivity(page, start, end, selector) {
+  const samples = 32;
+  let best = { time: (start + end) * 0.5, score: -1 };
+  for (let i = 0; i <= samples; i += 1) {
+    const time = start + (end - start) * (i / samples);
+    await seek(page, time);
+    const score = await page.evaluate((candidateSelector) =>
+      [...document.querySelectorAll(candidateSelector)]
+        .filter((element) => Number.parseFloat(getComputedStyle(element).opacity || "0") > 0.05).length,
+    selector);
+    if (score > best.score) best = { time, score };
+  }
+  return best;
+}
+
+async function seek(page, time) {
+  await page.evaluate((target) => {
+    const svgRoot = document.querySelector("svg");
+    svgRoot.pauseAnimations();
+    svgRoot.setCurrentTime(target);
+  }, time);
 }
