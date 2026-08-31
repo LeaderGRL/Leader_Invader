@@ -1,7 +1,8 @@
 use std::fmt::Write as _;
 
 use leader_core::{
-    resolve_physical_memory_address, MatchTrace, MemoryOwner, Rect, Topology,
+    physical_alu_link_values, resolve_physical_memory_address, AluEvent, BusTransactionEvent,
+    BusTransactionKind, MatchTrace, MemoryOwner, MicroAddressEvent, Rect, Topology,
 };
 use leader_svg::RenderConfig;
 
@@ -12,6 +13,8 @@ const VIEWPORT: Rect = Rect {
     h: 548.0,
 };
 const MAX_RENDERED_MEMORY_EVENTS: usize = 96;
+const MAX_RENDERED_BUS_EVENTS: usize = 96;
+const MAX_RENDERED_ALU_EVENTS: usize = 54;
 
 #[derive(Debug, Clone, Copy)]
 struct Pose {
@@ -26,19 +29,36 @@ struct CameraKey {
     pose: Pose,
 }
 
-/// Wraps the raw topology group in a clipped, trace-driven camera rig.
-///
-/// The camera never changes topology or signal timing. It only changes how much
-/// of the already-present physical machine is visible, so low-level detail can
-/// be inspected without reintroducing particles or decorative motion.
+#[derive(Debug, Clone, Copy)]
+struct SceneFocus {
+    pose: Pose,
+    event_time: f32,
+}
+
+#[derive(Debug)]
+struct CameraPlan {
+    keys: Vec<CameraKey>,
+    fetch_time: f32,
+    micro_time: f32,
+    alu_time: f32,
+    rom_time: f32,
+    ram_time: f32,
+    alu_late_time: f32,
+    vram_time: f32,
+    gpu_time: f32,
+    late_memory_time: f32,
+}
+
+/// Wrap the immutable physical topology in a deterministic technical camera.
+/// Camera holds are centered on the exact native trace event they display.
 #[must_use]
 pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
     if !svg.contains("data-frontpage-version=\"physical-die-v2\"") {
         return svg;
     }
 
-    let keys = camera_keys(topology, trace, config);
-    if keys.len() < 2 {
+    let plan = camera_plan(topology, trace, config);
+    if plan.keys.len() < 2 {
         return svg;
     }
 
@@ -50,31 +70,34 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: R
     };
     let machine_open_end = machine_start + relative_end + 1;
 
-    let mut rig = String::with_capacity(12_000);
-    let initial = keys[0].pose;
-    let values_translate = keys
+    let initial = plan.keys[0].pose;
+    let values_translate = plan
+        .keys
         .iter()
         .map(|key| format!("{:.5} {:.5}", key.pose.tx, key.pose.ty))
         .collect::<Vec<_>>()
         .join(";");
-    let values_scale = keys
+    let values_scale = plan
+        .keys
         .iter()
         .map(|key| format!("{:.7}", key.pose.scale))
         .collect::<Vec<_>>()
         .join(";");
-    let key_times = keys
+    let key_times = plan
+        .keys
         .iter()
         .map(|key| format!("{:.7}", (key.time / config.total()).clamp(0.0, 1.0)))
         .collect::<Vec<_>>()
         .join(";");
-    let key_splines = std::iter::repeat_n("0.42 0 0.18 1", keys.len().saturating_sub(1))
+    let key_splines = std::iter::repeat_n("0.42 0 0.18 1", plan.keys.len().saturating_sub(1))
         .collect::<Vec<_>>()
         .join(";");
 
+    let mut rig = String::with_capacity(12_000);
     let _ = write!(
         rig,
         r##"<g id="v2-machine-viewport" clip-path="url(#v2-machine-clip)" data-camera="trace-driven" data-camera-keys="{}"><g id="v2-camera-translate" transform="translate({:.5} {:.5})"><animateTransform attributeName="transform" attributeType="XML" type="translate" values="{}" keyTimes="{}" keySplines="{}" calcMode="spline" dur="{:.3}s" repeatCount="indefinite"/><g id="v2-camera-scale" transform="scale({:.7})"><animateTransform attributeName="transform" attributeType="XML" type="scale" values="{}" keyTimes="{}" keySplines="{}" calcMode="spline" dur="{:.3}s" repeatCount="indefinite"/><g id="v2-machine" data-camera-space="topology">"##,
-        keys.len(),
+        plan.keys.len(),
         initial.tx,
         initial.ty,
         values_translate,
@@ -87,7 +110,6 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: R
         key_splines,
         config.total(),
     );
-
     svg.replace_range(machine_start..machine_open_end, &rig);
 
     const CRT_MARKER: &str = "</g>\n<g id=\"v2-crt\">";
@@ -111,11 +133,24 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: R
 
     if let Some(index) = svg.rfind("</svg>") {
         let mut metadata = String::from("<g id=\"v2-camera-contract\" display=\"none\"");
-        let _ = write!(metadata, " data-camera-key-count=\"{}\"", keys.len());
-        for (index, key) in keys.iter().enumerate() {
+        let _ = write!(
+            metadata,
+            " data-camera-key-count=\"{}\" data-scene-fetch=\"{:.4}\" data-scene-micro=\"{:.4}\" data-scene-alu=\"{:.4}\" data-scene-rom=\"{:.4}\" data-scene-ram=\"{:.4}\" data-scene-alu-late=\"{:.4}\" data-scene-vram=\"{:.4}\" data-scene-gpu=\"{:.4}\" data-scene-late-memory=\"{:.4}\"",
+            plan.keys.len(),
+            plan.fetch_time,
+            plan.micro_time,
+            plan.alu_time,
+            plan.rom_time,
+            plan.ram_time,
+            plan.alu_late_time,
+            plan.vram_time,
+            plan.gpu_time,
+            plan.late_memory_time,
+        );
+        for (key_index, key) in plan.keys.iter().enumerate() {
             let _ = write!(
                 metadata,
-                " data-camera-t{index}=\"{:.3}\" data-camera-s{index}=\"{:.5}\"",
+                " data-camera-t{key_index}=\"{:.3}\" data-camera-s{key_index}=\"{:.5}\"",
                 key.time, key.pose.scale,
             );
         }
@@ -126,64 +161,74 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: R
     svg
 }
 
-fn camera_keys(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> Vec<CameraKey> {
+fn camera_plan(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> CameraPlan {
     let overview = fit_pose(Rect::new(0.0, 0.0, topology.width, topology.height), 8.0, 0.0);
-    let cpu = focus_groups(topology, &["pc", "decode"], 70.0, 0.64).unwrap_or(overview);
-    let micro = topology
+    let cpu_pose = focus_groups(topology, &["pc", "decode"], 70.0, 0.64).unwrap_or(overview);
+    let micro_pose = topology
         .node("microRom")
         .map(|node| fit_pose(node.bounds, 12.0, 3.8))
-        .unwrap_or(cpu);
-    let alu = topology
+        .unwrap_or(cpu_pose);
+    let alu_pose = topology
         .group("alu")
         .map(|group| fit_pose(group.bounds, 55.0, 0.52))
         .unwrap_or(overview);
-    let rom = memory_focus(topology, trace, config, MemoryOwner::Rom, 15.0)
-        .or_else(|| topology.group("romsys").map(|group| fit_pose(group.bounds, 45.0, 0.42)))
-        .unwrap_or(overview);
-    let ram = memory_focus(topology, trace, config, MemoryOwner::Ram, 22.0)
-        .or_else(|| topology.group("ramsys").map(|group| fit_pose(group.bounds, 45.0, 0.40)))
-        .unwrap_or(overview);
-    let vram = memory_focus(topology, trace, config, MemoryOwner::Vram, 37.0)
-        .or_else(|| topology.group("vramsys").map(|group| fit_pose(group.bounds, 45.0, 0.58)))
-        .unwrap_or(overview);
-    let late_memory = memory_focus_any(topology, trace, config, 50.0).unwrap_or(ram);
-    let gpu = topology
+    let gpu_pose = topology
         .group("gpu")
         .map(|group| fit_pose(group.bounds, 50.0, 0.50))
         .unwrap_or(overview);
 
-    let total = config.total();
+    let fetch_time = select_fetch_time(trace, config, 3.0);
+    let micro_time = select_micro_time(trace, config, 7.0);
+    let alu_time = select_alu_time(trace, config, 11.5, false);
+    let alu_late_time = select_alu_time(trace, config, 29.0, true);
+    let rom = memory_focus(topology, trace, config, MemoryOwner::Rom, 16.0)
+        .unwrap_or(SceneFocus { pose: topology.group("romsys").map_or(overview, |g| fit_pose(g.bounds, 45.0, 0.42)), event_time: 16.0 });
+    let ram = memory_focus(topology, trace, config, MemoryOwner::Ram, 22.0)
+        .unwrap_or(SceneFocus { pose: topology.group("ramsys").map_or(overview, |g| fit_pose(g.bounds, 45.0, 0.40)), event_time: 22.0 });
+    let vram = memory_focus(topology, trace, config, MemoryOwner::Vram, 37.0)
+        .unwrap_or(SceneFocus { pose: topology.group("vramsys").map_or(overview, |g| fit_pose(g.bounds, 45.0, 0.58)), event_time: 37.0 });
+    let late_memory = memory_focus_any(topology, trace, config, 50.0)
+        .unwrap_or(SceneFocus { pose: ram.pose, event_time: 50.0 });
+    let gpu_time = select_dma_time(trace, config, 44.0);
+
+    let scenes = [
+        (fetch_time, cpu_pose, 0.8_f32, 1.15_f32),
+        (micro_time, micro_pose, 0.9, 1.25),
+        (alu_time, alu_pose, 0.8, 1.35),
+        (rom.event_time, rom.pose, 0.8, 1.35),
+        (ram.event_time, ram.pose, 0.8, 1.55),
+        (alu_late_time, alu_pose, 0.8, 1.35),
+        (vram.event_time, vram.pose, 0.8, 1.55),
+        (gpu_time, gpu_pose, 0.8, 1.45),
+        (late_memory.event_time, late_memory.pose, 0.8, 1.55),
+    ];
+
     let mut keys = vec![
         CameraKey { time: 0.0, pose: overview },
         CameraKey { time: 0.9, pose: overview },
-        CameraKey { time: 1.8, pose: cpu },
-        CameraKey { time: 4.0, pose: cpu },
-        CameraKey { time: 5.0, pose: micro },
-        CameraKey { time: 7.2, pose: micro },
-        CameraKey { time: 8.3, pose: alu },
-        CameraKey { time: 12.0, pose: alu },
-        CameraKey { time: 13.1, pose: rom },
-        CameraKey { time: 17.0, pose: rom },
-        CameraKey { time: 18.1, pose: ram },
-        CameraKey { time: 24.0, pose: ram },
-        CameraKey { time: 25.1, pose: alu },
-        CameraKey { time: 31.0, pose: alu },
-        CameraKey { time: 32.1, pose: vram },
-        CameraKey { time: 39.0, pose: vram },
-        CameraKey { time: 40.1, pose: gpu },
-        CameraKey { time: 47.0, pose: gpu },
-        CameraKey { time: 48.1, pose: late_memory },
-        CameraKey { time: 54.0, pose: late_memory },
-        CameraKey { time: 55.2, pose: overview },
-        CameraKey { time: total, pose: overview },
     ];
-
-    for key in &mut keys {
-        key.time = key.time.min(total);
+    for (event_time, pose, lead, hold) in scenes {
+        let center = event_time.clamp(2.0, config.total() - 2.0);
+        keys.push(CameraKey { time: (center - lead).max(1.0), pose });
+        keys.push(CameraKey { time: (center + hold).min(config.total() - 1.0), pose });
     }
+    keys.push(CameraKey { time: (config.total() - 3.6).max(1.0), pose: overview });
+    keys.push(CameraKey { time: config.total(), pose: overview });
     keys.sort_by(|a, b| a.time.total_cmp(&b.time));
-    keys.dedup_by(|a, b| (a.time - b.time).abs() < 0.000_1);
-    keys
+    keys.dedup_by(|a, b| (a.time - b.time).abs() < 0.015);
+
+    CameraPlan {
+        keys,
+        fetch_time,
+        micro_time,
+        alu_time,
+        rom_time: rom.event_time,
+        ram_time: ram.event_time,
+        alu_late_time,
+        vram_time: vram.event_time,
+        gpu_time,
+        late_memory_time: late_memory.event_time,
+    }
 }
 
 fn focus_groups(topology: &Topology, ids: &[&str], padding: f32, max_scale: f32) -> Option<Pose> {
@@ -204,9 +249,8 @@ fn memory_focus(
     config: RenderConfig,
     owner: MemoryOwner,
     desired_time: f32,
-) -> Option<Pose> {
-    let sampled = rendered_memory_events(trace);
-    let event = sampled
+) -> Option<SceneFocus> {
+    let event = rendered_memory_events(trace)
         .into_iter()
         .filter_map(|event| {
             let address = event.address?;
@@ -214,19 +258,16 @@ fn memory_focus(
             if physical.owner != owner {
                 return None;
             }
-            let time = trace_moment(event.frame, event.ordinal, trace, config);
-            Some((physical, (time - desired_time).abs()))
+            let time = trace_moment(event.frame, event.ordinal, trace, config) + 0.17;
+            Some((physical, time, (time - desired_time).abs()))
         })
-        .min_by(|a, b| a.1.total_cmp(&b.1))?;
-
-    let prefix = match owner {
-        MemoryOwner::Rom => "romPage",
-        MemoryOwner::Ram => "ramPage",
-        MemoryOwner::Vram => "vramPage",
-        MemoryOwner::Mmio | MemoryOwner::Unmapped => return None,
-    };
+        .min_by(|a, b| a.2.total_cmp(&b.2))?;
+    let prefix = owner_prefix(owner)?;
     let node = topology.node(&format!("{prefix}{}", event.0.page))?;
-    Some(fit_pose(node.bounds, 10.0, 3.0))
+    Some(SceneFocus {
+        pose: memory_bank_pose(topology, owner, event.0.page).unwrap_or_else(|| fit_pose(node.bounds, 10.0, 3.0)),
+        event_time: event.1,
+    })
 }
 
 fn memory_focus_any(
@@ -234,38 +275,140 @@ fn memory_focus_any(
     trace: &MatchTrace,
     config: RenderConfig,
     desired_time: f32,
-) -> Option<Pose> {
+) -> Option<SceneFocus> {
     let event = rendered_memory_events(trace)
         .into_iter()
         .filter_map(|event| {
             let address = event.address?;
             let physical = resolve_physical_memory_address(address)?;
-            let time = trace_moment(event.frame, event.ordinal, trace, config);
-            Some((physical, (time - desired_time).abs()))
+            let time = trace_moment(event.frame, event.ordinal, trace, config) + 0.17;
+            Some((physical, time, (time - desired_time).abs()))
         })
-        .min_by(|a, b| a.1.total_cmp(&b.1))?;
-
-    let prefix = match event.0.owner {
-        MemoryOwner::Rom => "romPage",
-        MemoryOwner::Ram => "ramPage",
-        MemoryOwner::Vram => "vramPage",
-        MemoryOwner::Mmio | MemoryOwner::Unmapped => return None,
-    };
+        .min_by(|a, b| a.2.total_cmp(&b.2))?;
+    let prefix = owner_prefix(event.0.owner)?;
     let node = topology.node(&format!("{prefix}{}", event.0.page))?;
-    Some(fit_pose(node.bounds, 10.0, 3.0))
+    Some(SceneFocus {
+        pose: memory_bank_pose(topology, event.0.owner, event.0.page)
+            .unwrap_or_else(|| fit_pose(node.bounds, 10.0, 3.0)),
+        event_time: event.1,
+    })
 }
 
-fn rendered_memory_events(trace: &MatchTrace) -> Vec<&leader_core::BusTransactionEvent> {
+fn memory_bank_pose(topology: &Topology, owner: MemoryOwner, page: usize) -> Option<Pose> {
+    let (prefix, columns, page_count) = match owner {
+        MemoryOwner::Rom => ("romPage", 8_usize, 32_usize),
+        MemoryOwner::Ram => ("ramPage", 12, 96),
+        MemoryOwner::Vram => ("vramPage", 4, 8),
+        MemoryOwner::Mmio | MemoryOwner::Unmapped => return None,
+    };
+    let row = page / columns;
+    let col = page % columns;
+    let span = if owner == MemoryOwner::Vram { 2 } else { 3 };
+    let start_col = col.saturating_sub(span / 2).min(columns.saturating_sub(span));
+    let mut bounds = topology.node(&format!("{prefix}{}", row * columns + start_col))?.bounds;
+    for offset in 1..span {
+        let candidate = row * columns + start_col + offset;
+        if candidate >= page_count {
+            break;
+        }
+        bounds = union_rect(bounds, topology.node(&format!("{prefix}{candidate}"))?.bounds);
+    }
+    Some(fit_pose(bounds, 24.0, 2.55))
+}
+
+fn owner_prefix(owner: MemoryOwner) -> Option<&'static str> {
+    match owner {
+        MemoryOwner::Rom => Some("romPage"),
+        MemoryOwner::Ram => Some("ramPage"),
+        MemoryOwner::Vram => Some("vramPage"),
+        MemoryOwner::Mmio | MemoryOwner::Unmapped => None,
+    }
+}
+
+fn select_fetch_time(trace: &MatchTrace, config: RenderConfig, desired: f32) -> f32 {
+    rendered_bus_events(trace)
+        .into_iter()
+        .filter(|event| event.kind == BusTransactionKind::Fetch)
+        .map(|event| trace_moment(event.frame, event.ordinal, trace, config) + 0.18)
+        .min_by(|a, b| (a - desired).abs().total_cmp(&(b - desired).abs()))
+        .unwrap_or(desired)
+}
+
+fn select_dma_time(trace: &MatchTrace, config: RenderConfig, desired: f32) -> f32 {
+    rendered_bus_events(trace)
+        .into_iter()
+        .filter(|event| event.kind == BusTransactionKind::Dma)
+        .map(|event| trace_moment(event.frame, event.ordinal, trace, config) + 0.22)
+        .min_by(|a, b| (a - desired).abs().total_cmp(&(b - desired).abs()))
+        .unwrap_or(desired)
+}
+
+fn select_micro_time(trace: &MatchTrace, config: RenderConfig, desired: f32) -> f32 {
+    sample_slice(&trace.micro_addresses, 80)
+        .into_iter()
+        .filter(|event| event.control_bits != 0)
+        .map(|event| trace_moment(event.frame, event.ordinal, trace, config) + 0.12)
+        .min_by(|a, b| (a - desired).abs().total_cmp(&(b - desired).abs()))
+        .unwrap_or(desired)
+}
+
+fn select_alu_time(trace: &MatchTrace, config: RenderConfig, desired: f32, late: bool) -> f32 {
+    let events = rendered_alu_events(trace);
+    let mut candidates = events
+        .into_iter()
+        .filter(|event| !late || trace_moment(event.frame, event.ordinal, trace, config) >= 20.0)
+        .collect::<Vec<_>>();
+    candidates.sort_by(|a, b| alu_interest(**b).cmp(&alu_interest(**a)).then_with(|| {
+        let ta = trace_moment(a.frame, a.ordinal, trace, config);
+        let tb = trace_moment(b.frame, b.ordinal, trace, config);
+        (ta - desired).abs().total_cmp(&(tb - desired).abs())
+    }));
+    candidates.first().map_or(desired, |event| trace_moment(event.frame, event.ordinal, trace, config) + 0.14)
+}
+
+fn alu_interest(event: AluEvent) -> u32 {
+    event.trace.carry_chain.count_ones() * 4
+        + event.trace.lhs.count_ones()
+        + event.trace.rhs_effective.count_ones()
+        + event.trace.result.count_ones()
+}
+
+fn rendered_memory_events(trace: &MatchTrace) -> Vec<&BusTransactionEvent> {
     let candidates = trace
         .bus_transactions
         .iter()
         .filter(|event| event.address.is_some() && event.data.is_some())
         .collect::<Vec<_>>();
-    if candidates.len() <= MAX_RENDERED_MEMORY_EVENTS {
-        return candidates;
+    sample_refs(&candidates, MAX_RENDERED_MEMORY_EVENTS)
+}
+
+fn rendered_bus_events(trace: &MatchTrace) -> Vec<&BusTransactionEvent> {
+    let candidates = trace
+        .bus_transactions
+        .iter()
+        .filter(|event| event.address.is_some())
+        .collect::<Vec<_>>();
+    sample_refs(&candidates, MAX_RENDERED_BUS_EVENTS)
+}
+
+fn rendered_alu_events(trace: &MatchTrace) -> Vec<&AluEvent> {
+    sample_slice(&trace.alu_events, MAX_RENDERED_ALU_EVENTS)
+}
+
+fn sample_refs<'a, T>(values: &'a [&'a T], limit: usize) -> Vec<&'a T> {
+    if values.len() <= limit || limit == 0 {
+        return values.to_vec();
     }
-    let stride = candidates.len().div_ceil(MAX_RENDERED_MEMORY_EVENTS);
-    candidates.into_iter().step_by(stride).collect()
+    let stride = values.len().div_ceil(limit);
+    values.iter().step_by(stride).copied().collect()
+}
+
+fn sample_slice<T>(values: &[T], limit: usize) -> Vec<&T> {
+    if values.len() <= limit || limit == 0 {
+        return values.iter().collect();
+    }
+    let stride = values.len().div_ceil(limit);
+    values.iter().step_by(stride).collect()
 }
 
 fn fit_pose(bounds: Rect, padding: f32, max_scale: f32) -> Pose {
@@ -317,16 +460,18 @@ mod tests {
     }
 
     #[test]
-    fn camera_starts_and_ends_on_the_full_die() {
+    fn plan_exposes_native_scene_timestamps_and_deep_detail() {
         let topology = build_topology();
         let trace = Machine::run_match("trace-camera-overview", 5000);
         let config = crate::frontpage::render_config();
-        let keys = camera_keys(&topology, &trace, config);
-        assert!(keys.len() >= 20);
-        assert!((keys.first().unwrap().pose.scale - keys.last().unwrap().pose.scale).abs() < 0.000_1);
-        assert_eq!(keys.first().unwrap().time, 0.0);
-        assert!((keys.last().unwrap().time - config.total()).abs() < 0.001);
-        assert!(keys.iter().any(|key| key.pose.scale >= 2.8));
+        let plan = camera_plan(&topology, &trace, config);
+        assert!(plan.keys.len() >= 12);
+        assert_eq!(plan.keys.first().unwrap().time, 0.0);
+        assert!((plan.keys.last().unwrap().time - config.total()).abs() < 0.001);
+        assert!(plan.keys.iter().any(|key| key.pose.scale >= 2.0));
+        assert!(plan.ram_time > 0.0);
+        assert!(plan.vram_time > 0.0);
+        assert!(plan.gpu_time > 0.0);
     }
 
     #[test]
