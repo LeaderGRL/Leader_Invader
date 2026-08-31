@@ -1,12 +1,16 @@
-use crate::topology::{Link, SignalKind, Topology};
+use crate::topology::{Link, Node, Rect, SignalKind, Topology};
 
-/// Injects the missing internal wires for the visible eight-slice ALU.
+/// Injects the internal wiring and function-selection gates for the visible
+/// eight-slice ALU.
 ///
-/// The base topology already contains the principal SUM→RESULT,
-/// GENERATE→CARRY and CARRY→next-SUM links. This pass completes the rest of
-/// the physical full-adder network so renderers can traverse the actual gate
-/// graph instead of inventing presentation-only connections.
+/// The historical topology already contains the full-adder gates
+/// (`xorA/xorB/andA/andB/orC`) and the result mux. This pass completes both the
+/// arithmetic ripple network and the logical result paths so every native ALU
+/// operation has a physical route into `muxR` rather than relying on a
+/// renderer-side interpretation.
 pub fn inject_alu_wiring(topology: &mut Topology) {
+    inject_logic_nodes(topology);
+
     for bit in 0..8 {
         add_link(
             topology,
@@ -22,7 +26,7 @@ pub fn inject_alu_wiring(topology: &mut Topology) {
             "readMuxB",
             &format!("xorA{bit}"),
             SignalKind::Data,
-            "B",
+            "B/EFF",
         );
         add_link(
             topology,
@@ -38,7 +42,7 @@ pub fn inject_alu_wiring(topology: &mut Topology) {
             "readMuxB",
             &format!("andA{bit}"),
             SignalKind::Data,
-            "B",
+            "B/EFF",
         );
         add_link(
             topology,
@@ -64,6 +68,66 @@ pub fn inject_alu_wiring(topology: &mut Topology) {
             SignalKind::Carry,
             "CARRY",
         );
+
+        // Logical function gates consume the architectural operands directly.
+        add_link(
+            topology,
+            &format!("alu-a-pass-{bit}"),
+            "readMuxA",
+            &format!("passR{bit}"),
+            SignalKind::Data,
+            "A",
+        );
+        add_link(
+            topology,
+            &format!("alu-a-and-logic-{bit}"),
+            "readMuxA",
+            &format!("logicAnd{bit}"),
+            SignalKind::Data,
+            "A",
+        );
+        add_link(
+            topology,
+            &format!("alu-b-and-logic-{bit}"),
+            "readMuxB",
+            &format!("logicAnd{bit}"),
+            SignalKind::Data,
+            "B",
+        );
+        add_link(
+            topology,
+            &format!("alu-a-or-logic-{bit}"),
+            "readMuxA",
+            &format!("logicOr{bit}"),
+            SignalKind::Data,
+            "A",
+        );
+        add_link(
+            topology,
+            &format!("alu-b-or-logic-{bit}"),
+            "readMuxB",
+            &format!("logicOr{bit}"),
+            SignalKind::Data,
+            "B",
+        );
+
+        // All five physical function results terminate at the same result mux.
+        for (source, suffix, label) in [
+            (format!("passR{bit}"), "pass", "PASS"),
+            (format!("logicAnd{bit}"), "and", "AND"),
+            (format!("logicOr{bit}"), "or", "OR"),
+            (format!("xorA{bit}"), "xor", "XOR"),
+            (format!("xorB{bit}"), "sum", "SUM"),
+        ] {
+            add_link(
+                topology,
+                &format!("alu-{suffix}-result-{bit}"),
+                &source,
+                &format!("muxR{bit}"),
+                SignalKind::Data,
+                label,
+            );
+        }
         add_link(
             topology,
             &format!("alu-select-result-{bit}"),
@@ -111,6 +175,29 @@ pub fn inject_alu_wiring(topology: &mut Topology) {
     }
 }
 
+fn inject_logic_nodes(topology: &mut Topology) {
+    for bit in 0..8 {
+        let y = 815.0 + bit as f32 * 94.0;
+        for (prefix, title, kind, x) in [
+            ("passR", "PASS", "BUF", 2800.0),
+            ("logicAnd", "AND", "AND", 2870.0),
+            ("logicOr", "OR", "OR", 2940.0),
+        ] {
+            let id = format!("{prefix}{bit}");
+            if topology.node(&id).is_some() {
+                continue;
+            }
+            topology.nodes.push(Node {
+                id,
+                title: format!("{title} {bit}"),
+                kind: kind.to_owned(),
+                group: "alu".to_owned(),
+                bounds: Rect::new(x, y, 62.0, 54.0),
+            });
+        }
+    }
+}
+
 fn add_link(
     topology: &mut Topology,
     id: &str,
@@ -138,11 +225,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_slice_has_complete_visible_full_adder_wiring() {
+    fn every_slice_has_complete_visible_alu_wiring() {
         let mut topology = crate::topology::build_topology();
         inject_alu_wiring(&mut topology);
 
         for bit in 0..8 {
+            for node in [
+                format!("passR{bit}"),
+                format!("logicAnd{bit}"),
+                format!("logicOr{bit}"),
+            ] {
+                assert!(topology.node(&node).is_some(), "{node}");
+            }
+
             for id in [
                 format!("alu-a-xor-{bit}"),
                 format!("alu-b-xor-{bit}"),
@@ -151,6 +246,16 @@ mod tests {
                 format!("alu-xor-sum-{bit}"),
                 format!("alu-xor-prop-{bit}"),
                 format!("alu-prop-carry-{bit}"),
+                format!("alu-a-pass-{bit}"),
+                format!("alu-a-and-logic-{bit}"),
+                format!("alu-b-and-logic-{bit}"),
+                format!("alu-a-or-logic-{bit}"),
+                format!("alu-b-or-logic-{bit}"),
+                format!("alu-pass-result-{bit}"),
+                format!("alu-and-result-{bit}"),
+                format!("alu-or-result-{bit}"),
+                format!("alu-xor-result-{bit}"),
+                format!("alu-sum-result-{bit}"),
                 format!("alu-select-result-{bit}"),
                 format!("alu-result-write-{bit}"),
             ] {
@@ -170,8 +275,10 @@ mod tests {
     fn injected_wiring_is_idempotent() {
         let mut topology = crate::topology::build_topology();
         inject_alu_wiring(&mut topology);
-        let once = topology.links.len();
+        let nodes_once = topology.nodes.len();
+        let links_once = topology.links.len();
         inject_alu_wiring(&mut topology);
-        assert_eq!(topology.links.len(), once);
+        assert_eq!(topology.nodes.len(), nodes_once);
+        assert_eq!(topology.links.len(), links_once);
     }
 }
