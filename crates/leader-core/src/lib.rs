@@ -81,7 +81,8 @@ pub use microcode::{
     MicroSequencer,
 };
 pub use navigation::{
-    build_navigation, navigation_violations, CameraView, Module, NavigationLevel, NavigationModel,
+    build_navigation, navigation_violations, CameraView, DetailDensity, Module, NavigationLevel,
+    NavigationModel,
 };
 pub use pc_datapath::{derive_pc_datapath, PcDatapathEvent, PcDatapathKind};
 pub use shield_bank::{
