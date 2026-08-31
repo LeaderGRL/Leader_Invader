@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Review the committed production artifact exactly as GitHub will load it.
+      # Review the exact committed SVG artifact that the GitHub front page loads.
       - name: Install Playwright
         run: |
           npm install --no-save playwright@1.58.2
