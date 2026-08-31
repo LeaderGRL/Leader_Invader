@@ -55,7 +55,7 @@ The visible CPU/control path is production-native and physically authoritative.
 - final injected topology validation;
 - native-only overlay pipeline;
 - GitHub-safe declarative output validation;
-- hard production SVG budget of 5,000,000 bytes.
+- artifact size recorded as telemetry rather than used as a semantic validity ceiling.
 
 ### F3 acceptance — satisfied
 
@@ -63,7 +63,7 @@ Every visible critical CPU datapath/control node is backed by native same-tick s
 
 ## M3 — richer arcade hardware ✅
 
-The F3 authority rule is now applied to the core game-specific hardware set. Simulation semantics remain complete and unsampled; only SVG presentation is bounded.
+The F3 authority rule is now applied to the core game-specific hardware set. Simulation semantics remain complete and unsampled; only SVG presentation is bounded for readability.
 
 ### Original-arcade-inspired 16-bit shift register ✅
 
@@ -146,7 +146,7 @@ Completed contracts:
 - fetch/read/write/input/DMA/scanout data ownership is validated against the mapped region;
 - production `render`, `trace` and `stats` all require this contract.
 
-The generated replay after this follow-up measures **3,805,473 bytes**, leaving roughly **1.19 MB** below the 5 MB budget.
+Artifact size is intentionally observational. Native semantic completeness and inspectability take priority over a fixed byte ceiling; sampling is used only where it improves presentation readability, never to make validation pass.
 
 ### Remaining optional cleanup
 
@@ -158,13 +158,36 @@ The generated replay after this follow-up measures **3,805,473 bytes**, leaving 
 
 ## M4 — live WASM explorer
 
-The README remains a zero-JavaScript cinematic artifact, while the same core powers a live explorer with:
+The README remains a zero-JavaScript cinematic artifact, while the same core powers a live explorer.
 
+### Shared navigation substrate ✅
+
+The frontend-independent foundation now exists in `leader-core` and the generated SVG:
+
+- canonical hierarchy `machine → subsystem → detail` over the real physical topology;
+- every topology group is a first-class subsystem view;
+- dense CPU, memory, bus, M3 and video regions have dedicated bit-exact detail views;
+- module bounds are derived from their real physical nodes rather than a duplicate UI graph;
+- every node has a unique subsystem owner and at most one detail owner;
+- hierarchy validation is a production gate;
+- `child_views()`, `view_path_for_node()` and `deepest_view_for_node()` provide direct traversal queries;
+- every rendered physical node carries subsystem/detail membership plus `target-view`, `parent-view` and complete `view-path` metadata;
+- deterministic `CameraCue` scenes drive both camera framing and level-of-detail presentation;
+- scene timing, active view, detail state and camera rectangle are serialized into the SVG;
+- README replay already uses the hierarchy for CPU/M3/video close-ups without JavaScript.
+
+### Remaining interactive frontend work
+
+- instantiate the same hierarchy in WASM rather than parsing presentation heuristics;
 - drag-pan and wheel/pinch zoom;
+- click a physical node to enter `deepest_view_for_node()`;
+- breadcrumb/back navigation from the canonical view path;
 - node inspection using the same native metadata contracts;
 - pause / micro-step / instruction-step;
 - follow PC / bus / DMA / VBlank;
-- seed and bot-policy selection.
+- scrub or replay deterministic camera scenes;
+- seed and bot-policy selection;
+- optional user-created groups/layout state layered above, never replacing physical topology authority.
 
 ## M5 — generated match seasons
 
