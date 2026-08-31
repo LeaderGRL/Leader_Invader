@@ -40,7 +40,7 @@ pub fn physical_bus_link_values(
                     SignalKind::Address,
                     1,
                     "address_driver",
-                    u16::from((address & (1_u16 << bit)) != 0),
+                    if address & (1_u16 << bit) != 0 { 1 } else { 0 },
                     1,
                 );
             }
@@ -226,7 +226,12 @@ fn push_link(
     });
 }
 
-fn find_link(topology: &Topology, from: &str, to: &str, signal: SignalKind) -> Option<&Link> {
+fn find_link<'a>(
+    topology: &'a Topology,
+    from: &str,
+    to: &str,
+    signal: SignalKind,
+) -> Option<&'a Link> {
     topology
         .links
         .iter()
@@ -262,7 +267,12 @@ mod tests {
         let topology = crate::build_topology();
         let values = physical_bus_link_values(
             &topology,
-            event(0x1234, 0xa5, BusAddressSource::ProgramCounter, BusTransactionKind::Fetch),
+            event(
+                0x1234,
+                0xa5,
+                BusAddressSource::ProgramCounter,
+                BusTransactionKind::Fetch,
+            ),
         );
 
         assert!(values.iter().any(|value| {
@@ -292,7 +302,12 @@ mod tests {
         let topology = crate::build_topology();
         let values = physical_bus_link_values(
             &topology,
-            event(0x3456, 0x6c, BusAddressSource::Cpu, BusTransactionKind::Write),
+            event(
+                0x3456,
+                0x6c,
+                BusAddressSource::Cpu,
+                BusTransactionKind::Write,
+            ),
         );
         assert!(values.iter().any(|value| {
             value.stage == "page_select"
@@ -318,10 +333,19 @@ mod tests {
         let topology = crate::build_topology();
         let values = physical_bus_link_values(
             &topology,
-            event(0x83fe, 0x5a, BusAddressSource::Dma, BusTransactionKind::Dma),
+            event(
+                0x83fe,
+                0x5a,
+                BusAddressSource::Dma,
+                BusTransactionKind::Dma,
+            ),
         );
-        assert!(values.iter().any(|value| value.stage == "dma_address_driver" && value.rank == 1));
-        assert!(values.iter().any(|value| value.stage == "address_arbitration" && value.rank == 2));
+        assert!(values
+            .iter()
+            .any(|value| value.stage == "dma_address_driver" && value.rank == 1));
+        assert!(values
+            .iter()
+            .any(|value| value.stage == "address_arbitration" && value.rank == 2));
         assert!(values.iter().any(|value| {
             value.stage == "page_select"
                 && topology.links.iter().any(|link| {
@@ -338,17 +362,39 @@ mod tests {
                         && link.to == "dataBuf"
                 })
         }));
-        assert!(values.iter().any(|value| value.stage == "dma_data_latch" && value.rank == 6));
+        assert!(values
+            .iter()
+            .any(|value| value.stage == "dma_data_latch" && value.rank == 6));
     }
 
     #[test]
     fn every_reported_bus_propagation_link_exists_in_final_topology() {
         let topology = crate::build_topology();
         for event in [
-            event(0x01fe, 0x11, BusAddressSource::ProgramCounter, BusTransactionKind::Fetch),
-            event(0x7f20, 0x22, BusAddressSource::Cpu, BusTransactionKind::Read),
-            event(0x8123, 0x33, BusAddressSource::Cpu, BusTransactionKind::Write),
-            event(0x83fe, 0x44, BusAddressSource::Dma, BusTransactionKind::Dma),
+            event(
+                0x01fe,
+                0x11,
+                BusAddressSource::ProgramCounter,
+                BusTransactionKind::Fetch,
+            ),
+            event(
+                0x7f20,
+                0x22,
+                BusAddressSource::Cpu,
+                BusTransactionKind::Read,
+            ),
+            event(
+                0x8123,
+                0x33,
+                BusAddressSource::Cpu,
+                BusTransactionKind::Write,
+            ),
+            event(
+                0x83fe,
+                0x44,
+                BusAddressSource::Dma,
+                BusTransactionKind::Dma,
+            ),
         ] {
             for value in physical_bus_link_values(&topology, event) {
                 assert!(
