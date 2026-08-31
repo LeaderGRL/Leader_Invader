@@ -1,9 +1,12 @@
 #![forbid(unsafe_code)]
 
+mod viewport;
+
 use leader_core::{
-    build_navigation, build_topology, CameraView, ExplorerState, Link, NavigationModel, Node,
+    build_navigation, build_topology, CameraView, ExplorerState, Link, NavigationModel, Node, Rect,
     Topology,
 };
+use viewport::ViewportState;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -13,6 +16,7 @@ pub struct Explorer {
     topology: Topology,
     navigation: NavigationModel,
     state: ExplorerState,
+    viewport: ViewportState,
 }
 
 impl Default for Explorer {
@@ -29,10 +33,16 @@ impl Explorer {
         let topology = build_topology();
         let navigation = build_navigation(&topology);
         let state = ExplorerState::new(&navigation);
+        let world = Rect::new(0.0, 0.0, topology.width, topology.height);
+        let initial = state
+            .current_view(&navigation)
+            .map_or(world, |view| view.bounds);
+        let viewport = ViewportState::new(world, initial);
         Self {
             topology,
             navigation,
             state,
+            viewport,
         }
     }
 
@@ -47,7 +57,11 @@ impl Explorer {
     }
 
     pub fn focus_node(&mut self, node_id: &str) -> bool {
-        self.state.focus_node(&self.navigation, node_id)
+        let changed = self.state.focus_node(&self.navigation, node_id);
+        if changed {
+            self.fit_camera_to_current_view();
+        }
+        changed
     }
 
     pub fn focus_at(&mut self, x: f32, y: f32) -> bool {
@@ -58,23 +72,56 @@ impl Explorer {
         else {
             return false;
         };
-        self.state.focus_node(&self.navigation, &node_id)
+        self.focus_node(&node_id)
     }
 
     pub fn enter_view(&mut self, view_id: &str) -> bool {
-        self.state.enter_view(&self.navigation, view_id)
+        let changed = self.state.enter_view(&self.navigation, view_id);
+        if changed {
+            self.fit_camera_to_current_view();
+        }
+        changed
     }
 
     pub fn back(&mut self) -> bool {
-        self.state.back(&self.navigation)
+        let changed = self.state.back(&self.navigation);
+        if changed {
+            self.fit_camera_to_current_view();
+        }
+        changed
     }
 
     pub fn parent(&mut self) -> bool {
-        self.state.parent(&self.navigation)
+        let changed = self.state.parent(&self.navigation);
+        if changed {
+            self.fit_camera_to_current_view();
+        }
+        changed
     }
 
     pub fn home(&mut self) -> bool {
-        self.state.home(&self.navigation)
+        let changed = self.state.home(&self.navigation);
+        if changed {
+            self.fit_camera_to_current_view();
+        }
+        changed
+    }
+
+    pub fn pan_camera(&mut self, dx: f32, dy: f32) {
+        self.viewport.pan(dx, dy);
+    }
+
+    pub fn zoom_camera_at(&mut self, anchor_x: f32, anchor_y: f32, factor: f32) -> bool {
+        self.viewport.zoom_at(anchor_x, anchor_y, factor)
+    }
+
+    pub fn fit_current_view(&mut self) {
+        self.fit_camera_to_current_view();
+    }
+
+    #[must_use]
+    pub fn camera_json(&self) -> String {
+        rect_json(self.viewport.camera())
     }
 
     #[must_use]
@@ -133,6 +180,14 @@ impl Explorer {
     }
 }
 
+impl Explorer {
+    fn fit_camera_to_current_view(&mut self) {
+        if let Some(bounds) = self.state.current_view(&self.navigation).map(|view| view.bounds) {
+            self.viewport.fit(bounds);
+        }
+    }
+}
+
 fn graph_json(width: f32, height: f32, nodes: Vec<&Node>, links: Vec<&Link>) -> String {
     let nodes = nodes
         .iter()
@@ -151,15 +206,12 @@ fn graph_json(width: f32, height: f32, nodes: Vec<&Node>, links: Vec<&Link>) -> 
 
 fn simple_node_json(node: &Node) -> String {
     format!(
-        "{{\"id\":\"{}\",\"title\":\"{}\",\"kind\":\"{}\",\"subsystem\":\"{}\",\"bounds\":{{\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}}}}}",
+        "{{\"id\":\"{}\",\"title\":\"{}\",\"kind\":\"{}\",\"subsystem\":\"{}\",\"bounds\":{}}}",
         json_escape(&node.id),
         json_escape(&node.title),
         json_escape(&node.kind),
         json_escape(&node.group),
-        node.bounds.x,
-        node.bounds.y,
-        node.bounds.w,
-        node.bounds.h
+        rect_json(node.bounds)
     )
 }
 
@@ -176,17 +228,14 @@ fn node_json(node: &Node, navigation: &NavigationModel) -> String {
         |view| format!("\"{}\"", json_escape(&view.id)),
     );
     format!(
-        "{{\"id\":\"{}\",\"title\":\"{}\",\"kind\":\"{}\",\"subsystem\":\"{}\",\"targetView\":{},\"viewPath\":[{}],\"bounds\":{{\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}}}}}",
+        "{{\"id\":\"{}\",\"title\":\"{}\",\"kind\":\"{}\",\"subsystem\":\"{}\",\"targetView\":{},\"viewPath\":[{}],\"bounds\":{}}}",
         json_escape(&node.id),
         json_escape(&node.title),
         json_escape(&node.kind),
         json_escape(&node.group),
         target_json,
         path_json,
-        node.bounds.x,
-        node.bounds.y,
-        node.bounds.w,
-        node.bounds.h
+        rect_json(node.bounds)
     )
 }
 
@@ -218,16 +267,20 @@ fn view_json(view: &CameraView) -> String {
         |parent| format!("\"{}\"", json_escape(parent)),
     );
     format!(
-        "{{\"id\":\"{}\",\"moduleId\":\"{}\",\"label\":\"{}\",\"parentView\":{},\"density\":\"{}\",\"bounds\":{{\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}}}}}",
+        "{{\"id\":\"{}\",\"moduleId\":\"{}\",\"label\":\"{}\",\"parentView\":{},\"density\":\"{}\",\"bounds\":{}}}",
         json_escape(&view.id),
         json_escape(&view.module_id),
         json_escape(&view.label),
         parent,
         view.density.as_str(),
-        view.bounds.x,
-        view.bounds.y,
-        view.bounds.w,
-        view.bounds.h
+        rect_json(view.bounds)
+    )
+}
+
+fn rect_json(rect: Rect) -> String {
+    format!(
+        "{{\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}}}",
+        rect.x, rect.y, rect.w, rect.h
     )
 }
 
@@ -316,5 +369,30 @@ mod tests {
         assert!(explorer.focus_at(x, y));
         assert_eq!(explorer.current_view_id(), "view-decode.microcode");
         assert!(!explorer.focus_at(-10.0, -10.0));
+    }
+
+    #[test]
+    fn navigation_refits_camera_while_manual_pan_and_zoom_remain_local() {
+        let mut explorer = Explorer::new();
+        assert_eq!(
+            explorer.camera_json(),
+            "{\"x\":0.0,\"y\":0.0,\"w\":7000.0,\"h\":3720.0}"
+        );
+
+        assert!(explorer.focus_node("microRom"));
+        let fitted = explorer.camera_json();
+        assert!(fitted.contains("\"w\":168.0"));
+        assert!(explorer.zoom_camera_at(1860.0, 400.0, 2.0));
+        assert_ne!(explorer.camera_json(), fitted);
+        explorer.pan_camera(10.0, 10.0);
+        assert_ne!(explorer.camera_json(), fitted);
+        explorer.fit_current_view();
+        assert_eq!(explorer.camera_json(), fitted);
+
+        assert!(explorer.back());
+        assert_eq!(
+            explorer.camera_json(),
+            "{\"x\":0.0,\"y\":0.0,\"w\":7000.0,\"h\":3720.0}"
+        );
     }
 }
