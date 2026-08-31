@@ -3,6 +3,11 @@
 #[must_use]
 pub fn apply(mut svg: String) -> String {
     if svg.contains("data-frontpage-version=\"physical-die-v2\"") {
+        // The physical framebuffer contract is monochrome 1bpp. The legacy
+        // topology title predates that contract, so normalize the serialized
+        // presentation until the topology migration removes the old label.
+        svg = svg.replace("RGB332 SCREEN", "1-BIT CRT DISPLAY");
+
         // The framebuffer geometry is already exactly bounded to 128×96 before
         // scaling. A root-space clip attached to the transformed raster group
         // can be evaluated in the transformed user space by SVG renderers and
@@ -49,12 +54,14 @@ mod tests {
     #[test]
     fn physical_die_receives_only_hidden_contract_compatibility() {
         let source = String::from(
-            "<svg data-frontpage-version=\"physical-die-v2\"><g clip-path=\"url(#v2-crt-clip)\" transform=\"scale(2)\"></g></svg>",
+            "<svg data-frontpage-version=\"physical-die-v2\"><text>RGB332 SCREEN</text><g clip-path=\"url(#v2-crt-clip)\" transform=\"scale(2)\"></g></svg>",
         );
         let output = apply(source);
         assert!(output.contains("id=\"v2-legacy-contract-compat\""));
         assert!(output.contains("display=\"none\""));
         assert!(!output.contains("leaderCamera"));
+        assert!(!output.contains("RGB332 SCREEN"));
+        assert!(output.contains("1-BIT CRT DISPLAY"));
         assert!(!output.contains("clip-path=\"url(#v2-crt-clip)\" transform="));
         assert!(output.contains("<g transform=\"scale(2)\""));
     }
