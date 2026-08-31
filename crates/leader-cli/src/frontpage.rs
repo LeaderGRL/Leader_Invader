@@ -9,6 +9,10 @@ mod bitfabric {
     include!("frontpage_bitfabric.rs");
 }
 
+mod layers {
+    include!("frontpage_layers.rs");
+}
+
 mod quality {
     include!("frontpage_quality.rs");
 }
@@ -39,14 +43,15 @@ pub const fn render_config() -> RenderConfig {
 }
 
 /// Render the complete physical machine, enrich it with true memory/microcode
-/// bit-cell fabrics, enforce scale-independent readability and CRT continuity,
-/// then apply a trace-driven camera without altering topology or native signal
-/// propagation.
+/// bit-cell fabrics, layer electrical propagation beneath component bodies,
+/// enforce scale-independent readability and CRT continuity, then apply a
+/// trace-driven camera without altering topology or native signal propagation.
 #[must_use]
 pub fn render(topology: &Topology, trace: &MatchTrace, _legacy_config: RenderConfig) -> String {
     let config = render_config();
     let svg = physical_die::render(topology, trace, config);
     let svg = bitfabric::apply(svg, topology, trace);
+    let svg = layers::apply(svg);
     let svg = quality::apply(svg, topology);
     let svg = crt_contract::apply(svg, config);
     camera::apply(svg, topology, trace, config)
