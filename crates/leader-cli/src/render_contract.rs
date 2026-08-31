@@ -27,12 +27,15 @@ const REQUIRED_GROUPS: [&str; 18] = [
     "f3-timing",
 ];
 
-const REQUIRED_METADATA: [&str; 50] = [
+const REQUIRED_METADATA: [&str; 53] = [
     "data-view=",
     "data-module=",
     "data-parent=",
     "data-density=",
     "data-default-view=",
+    "data-subsystem=",
+    "data-detail-module=",
+    "data-detail-density=",
     "data-pc-before=",
     "data-opcode=",
     "data-ucontrol=",
@@ -80,7 +83,7 @@ const REQUIRED_METADATA: [&str; 50] = [
     "data-shield-source=",
 ];
 
-const REQUIRED_NAVIGATION_COVERAGE: [&str; 10] = [
+const REQUIRED_NAVIGATION_COVERAGE: [&str; 14] = [
     "data-default-view=\"view-machine\"",
     "data-module=\"pc.fetch\"",
     "data-module=\"decode.microcode\"",
@@ -91,6 +94,10 @@ const REQUIRED_NAVIGATION_COVERAGE: [&str; 10] = [
     "data-module=\"io.shields\"",
     "data-module=\"gpu.timing\"",
     "data-density=\"bit_exact\"",
+    "data-subsystem=\"decode\"",
+    "data-detail-module=\"decode.microcode\"",
+    "data-detail-module=\"io.shields\"",
+    "data-detail-density=\"bit_exact\"",
 ];
 
 const REQUIRED_BUS_COVERAGE: [&str; 33] = [
@@ -228,6 +235,18 @@ mod tests {
         svg = svg.replace("data-module=\"gpu.timing\"", "data-module=\"missing\"");
         let error = validate_native_svg_contract(&svg)
             .expect_err("generic navigation metadata must not satisfy concrete coverage");
+        assert!(error.contains("missing required navigation coverage marker"));
+    }
+
+    #[test]
+    fn physical_node_membership_is_required() {
+        let mut svg = valid_contract_fixture();
+        svg = svg.replace(
+            "data-detail-module=\"decode.microcode\"",
+            "data-detail-module=\"missing\"",
+        );
+        let error = validate_native_svg_contract(&svg)
+            .expect_err("physical node hierarchy membership must be preserved");
         assert!(error.contains("missing required navigation coverage marker"));
     }
 
