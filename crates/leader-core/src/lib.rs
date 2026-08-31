@@ -4,6 +4,7 @@ pub mod alu_layout;
 pub mod alu_propagation;
 pub mod assembler;
 pub mod bus_layout;
+pub mod bus_propagation;
 pub mod call_stack_contract;
 pub mod control_contract;
 pub mod control_layout;
@@ -52,6 +53,7 @@ pub use activity::{
     PhysicalAluNodeValue, PhysicalBitChange,
 };
 pub use alu_propagation::{physical_alu_link_values, PhysicalAluLinkValue};
+pub use bus_propagation::{physical_bus_link_values, PhysicalBusLinkValue};
 pub use call_stack_contract::{validate_call_stack_contract, CallStackValidation};
 pub use control_contract::{
     control_topology_violations, physical_control_lines, physically_used_control_mask,
