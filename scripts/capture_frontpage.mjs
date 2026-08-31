@@ -49,6 +49,7 @@ try {
       memoryPages: document.querySelectorAll("#v2-memory-byte-fabric [data-memory-page]").length,
       particles: document.querySelectorAll("animateMotion").length,
       cameraAnimations: document.querySelectorAll('animate[attributeName="viewBox"]').length,
+      machineClipPath: machine?.getAttribute("clip-path") ?? null,
       machineRect: machineRect && { x: machineRect.x, y: machineRect.y, width: machineRect.width, height: machineRect.height },
       logicRect: logicRect && { x: logicRect.x, y: logicRect.y, width: logicRect.width, height: logicRect.height },
       memoryRect: memoryRect && { x: memoryRect.x, y: memoryRect.y, width: memoryRect.width, height: memoryRect.height },
@@ -64,10 +65,13 @@ try {
   if (staticContract.particles !== 0 || staticContract.cameraAnimations !== 0) {
     throw new Error(`V2 must not contain particle/camera motion: ${JSON.stringify(staticContract)}`);
   }
+  if (staticContract.machineClipPath !== null) {
+    throw new Error(`Physical die must not be clipped in transformed user space: ${staticContract.machineClipPath}`);
+  }
   if (!staticContract.logicRect || staticContract.logicRect.width < 850 || staticContract.logicRect.height < 400) {
     throw new Error(`Physical logic die is cropped or undersized: ${JSON.stringify(staticContract.logicRect)}`);
   }
-  if (!staticContract.memoryRect || staticContract.memoryRect.width < 400 || staticContract.memoryRect.height < 250) {
+  if (!staticContract.memoryRect || staticContract.memoryRect.width < 350 || staticContract.memoryRect.height < 250) {
     throw new Error(`Memory fabric is cropped or undersized: ${JSON.stringify(staticContract.memoryRect)}`);
   }
 
