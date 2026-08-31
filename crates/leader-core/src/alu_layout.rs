@@ -56,6 +56,17 @@ pub fn inject_alu_wiring(topology: &mut Topology) {
             add_link(topology, &format!("alu-carry-prop-{bit}"), &previous_carry, &and_b, SignalKind::Carry, "CIN");
         }
     }
+
+    // The final ripple carry is a physical architectural flag input rather than
+    // a value that disappears at the edge of bit slice 7.
+    add_link(
+        topology,
+        "alu-carry-flag",
+        "orC7",
+        "flagC",
+        SignalKind::Carry,
+        "CARRY OUT",
+    );
 }
 
 fn inject_function_nodes(topology: &mut Topology) {
@@ -152,6 +163,7 @@ mod tests {
 
         assert!(topology.links.iter().any(|link| link.id == "alu-cin-sum-0"));
         assert!(topology.links.iter().any(|link| link.id == "alu-cin-prop-0"));
+        assert!(topology.links.iter().any(|link| link.id == "alu-carry-flag"));
         for bit in 1..8 {
             let id = format!("alu-carry-prop-{bit}");
             assert!(topology.links.iter().any(|link| link.id == id), "{id}");
@@ -164,10 +176,20 @@ mod tests {
         inject_alu_wiring(&mut topology);
         for bit in 0..8 {
             let rhs = format!("rhsXor{bit}");
-            assert!(topology.links.iter().any(|link| link.from == "readMuxB" && link.to == rhs));
-            assert!(topology.links.iter().any(|link| link.from == "aluSel" && link.to == rhs));
-            assert!(topology.links.iter().any(|link| link.from == rhs && link.to == format!("xorA{bit}")));
-            assert!(topology.links.iter().any(|link| link.from == rhs && link.to == format!("andA{bit}")));
+            assert!(topology
+                .links
+                .iter()
+                .any(|link| link.from == "readMuxB" && link.to == rhs.as_str()));
+            assert!(topology
+                .links
+                .iter()
+                .any(|link| link.from == "aluSel" && link.to == rhs.as_str()));
+            assert!(topology.links.iter().any(|link| {
+                link.from == rhs.as_str() && link.to == format!("xorA{bit}").as_str()
+            }));
+            assert!(topology.links.iter().any(|link| {
+                link.from == rhs.as_str() && link.to == format!("andA{bit}").as_str()
+            }));
         }
     }
 
