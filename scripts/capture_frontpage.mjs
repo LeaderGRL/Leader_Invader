@@ -5,21 +5,6 @@ import path from "node:path";
 const input = path.resolve(process.env.LEADER_SVG ?? "generated/Leader.svg");
 const outputDir = path.resolve(process.env.LEADER_FRONT_PAGE_CAPTURE_OUTPUT ?? "generated/frontpage-captures");
 const svg = await readFile(input, "utf8");
-
-const checkpointSpecs = [
-  { name: "01-overview", time: 0.25, focus: "full die" },
-  { name: "02-fetch-decode", window: [2.2, 3.8], selector: "#v2-native-bus-propagation .v2-active-wire", focus: "PC + fetch + decode" },
-  { name: "03-microcode", window: [5.25, 6.95], selector: "#v2-microcode-bitcell-fabric > g", focus: "256x24 control ROM" },
-  { name: "04-alu", window: [8.8, 11.6], selector: "#v2-native-alu-propagation .v2-active-wire", focus: "8-bit ripple ALU" },
-  { name: "05-rom", window: [14.35, 15.65], selector: "#v2-exact-memory-cell-activity > g[data-memory-owner=\"rom\"]", focus: "native ROM page" },
-  { name: "06-ram", window: [21.35, 22.65], selector: "#v2-exact-memory-cell-activity > g[data-memory-owner=\"ram\"]", focus: "native RAM page" },
-  { name: "07-alu-late", window: [26.0, 30.2], selector: "#v2-native-alu-propagation .v2-active-wire", focus: "late ALU propagation" },
-  { name: "08-vram", window: [36.35, 37.65], selector: "#v2-exact-memory-cell-activity > g[data-memory-owner=\"vram\"]", focus: "native VRAM page" },
-  { name: "09-gpu", window: [42.0, 46.2], selector: "#v2-native-bus-propagation .v2-active-wire[data-stage=\"dma_data_latch\"]", focus: "DMA + scanout" },
-  { name: "10-late-memory", window: [49.35, 50.65], selector: "#v2-exact-memory-cell-activity > g", focus: "late native memory access" },
-  { name: "11-outro-overview", time: 58.0, focus: "full die + final CRT" },
-];
-
 await mkdir(outputDir, { recursive: true });
 
 const browser = await chromium.launch({ headless: true });
@@ -42,6 +27,8 @@ try {
     const clipRect = document.querySelector("#v2-machine-clip rect");
     const bitFabric = document.querySelector("#v2-memory-bitcell-fabric");
     const microFabric = document.querySelector("#v2-microcode-bitcell-fabric");
+    const camera = document.querySelector("#v2-camera-contract");
+    const scene = (name) => Number(camera?.getAttribute(`data-scene-${name}`));
     return {
       nodes: document.querySelectorAll("#v2-logic-nodes > g").length,
       nodeLabels: document.querySelectorAll("#v3-node-labels > g").length,
@@ -60,6 +47,11 @@ try {
       } : null,
       memoryBitCells: bitFabric?.getAttribute("aria-label") ?? null,
       microcodeCells: microFabric?.getAttribute("data-microcode-cells") ?? null,
+      scenes: {
+        fetch: scene("fetch"), micro: scene("micro"), alu: scene("alu"), rom: scene("rom"),
+        ram: scene("ram"), aluLate: scene("alu-late"), vram: scene("vram"), gpu: scene("gpu"),
+        lateMemory: scene("late-memory"),
+      },
     };
   });
 
@@ -71,69 +63,35 @@ try {
   if (!staticContract.cameraTranslate || !staticContract.cameraScale || staticContract.viewportClip !== "url(#v2-machine-clip)") throw new Error(`Technical camera rig is incomplete: ${JSON.stringify(staticContract)}`);
   if (staticContract.machineClip !== null) throw new Error(`Raw topology must never carry a transformed clipPath: ${staticContract.machineClip}`);
   if (!staticContract.clip || staticContract.clip.x !== 24 || staticContract.clip.width !== 900 || staticContract.clip.x + staticContract.clip.width >= 934) throw new Error(`Hardware viewport must reserve a non-overlapping CRT sidebar: ${JSON.stringify(staticContract.clip)}`);
-
-  const checkpoints = [];
-  for (const spec of checkpointSpecs) {
-    if (spec.window) {
-      const best = await findPeakActivity(page, spec.window[0], spec.window[1], spec.selector);
-      if (best.score <= 0) throw new Error(`No native activity found for ${spec.name} (${spec.selector}) inside ${spec.window.join("-")}s`);
-      checkpoints.push({ ...spec, time: best.time, activityScore: best.score });
-    } else {
-      checkpoints.push({ ...spec, activityScore: null });
-    }
+  for (const [name, value] of Object.entries(staticContract.scenes)) {
+    if (!Number.isFinite(value) || value <= 0 || value >= 59) throw new Error(`Camera scene ${name} is not bound to a valid native event: ${value}`);
   }
+
+  const checkpoints = [
+    { name: "01-overview", time: 0.25, focus: "full die" },
+    { name: "02-fetch-decode", time: staticContract.scenes.fetch, selector: "#v2-native-bus-propagation .v2-active-wire", focus: "PC + native fetch/decode" },
+    { name: "03-microcode", time: staticContract.scenes.micro, selector: "#v2-microcode-bitcell-fabric > g", focus: "native 256x24 control word" },
+    { name: "04-alu", time: staticContract.scenes.alu, selector: "#v2-native-alu-propagation .v2-active-wire", focus: "native ripple ALU" },
+    { name: "05-rom", time: staticContract.scenes.rom, selector: "#v2-exact-memory-cell-activity > g[data-memory-owner=\"rom\"]", focus: "native ROM page/byte" },
+    { name: "06-ram", time: staticContract.scenes.ram, selector: "#v2-exact-memory-cell-activity > g[data-memory-owner=\"ram\"]", focus: "native RAM page/byte" },
+    { name: "07-alu-late", time: staticContract.scenes.aluLate, selector: "#v2-native-alu-propagation .v2-active-wire", focus: "late native ripple ALU" },
+    { name: "08-vram", time: staticContract.scenes.vram, selector: "#v2-exact-memory-cell-activity > g[data-memory-owner=\"vram\"]", focus: "native VRAM page/byte" },
+    { name: "09-gpu", time: staticContract.scenes.gpu, selector: "#v2-native-bus-propagation .v2-active-wire[data-stage=\"dma_data_latch\"]", focus: "native DMA latch" },
+    { name: "10-late-memory", time: staticContract.scenes.lateMemory, selector: "#v2-exact-memory-cell-activity > g", focus: "late native memory access" },
+    { name: "11-outro-overview", time: 58.0, focus: "full die + final native CRT" },
+  ];
 
   const manifest = [];
   for (const checkpoint of checkpoints) {
     await seek(page, checkpoint.time);
     await page.waitForTimeout(80);
+    if (checkpoint.selector) {
+      const activeCount = await visibleCount(page, checkpoint.selector);
+      if (activeCount <= 0) throw new Error(`Camera ${checkpoint.name} is not synchronized with ${checkpoint.selector} at ${checkpoint.time}s`);
+      checkpoint.activityScore = activeCount;
+    }
 
-    const state = await page.evaluate(() => {
-      const viewportRect = document.querySelector("#v2-machine-viewport")?.getBoundingClientRect();
-      const labelFailures = [];
-      const visibleTitleRects = [];
-      for (const group of document.querySelectorAll("#v3-node-labels > g")) {
-        const id = group.getAttribute("data-label-for-node");
-        const node = document.querySelector(`#v2-node-${CSS.escape(id)}`);
-        const title = group.querySelector(".v3-title");
-        if (!node || !title || !viewportRect) continue;
-        const nodeRect = node.getBoundingClientRect();
-        const titleRect = title.getBoundingClientRect();
-        if (!intersects(nodeRect, viewportRect, 0)) continue;
-        const tolerance = Math.max(2, nodeRect.width * 0.035);
-        if (titleRect.x < nodeRect.x - tolerance || titleRect.y < nodeRect.y - tolerance || titleRect.x + titleRect.width > nodeRect.x + nodeRect.width + tolerance || titleRect.y + titleRect.height > nodeRect.y + nodeRect.height + tolerance) {
-          labelFailures.push({ id, node: rect(nodeRect), label: rect(titleRect) });
-        }
-        if (titleRect.width > 1 && titleRect.height > 1 && intersects(titleRect, viewportRect, 0)) visibleTitleRects.push({ id, rect: rect(titleRect) });
-      }
-
-      const textOverlaps = [];
-      for (let i = 0; i < visibleTitleRects.length; i += 1) {
-        for (let j = i + 1; j < visibleTitleRects.length; j += 1) {
-          if (intersects(visibleTitleRects[i].rect, visibleTitleRects[j].rect, 1.5)) {
-            textOverlaps.push([visibleTitleRects[i].id, visibleTitleRects[j].id]);
-            if (textOverlaps.length >= 12) break;
-          }
-        }
-        if (textOverlaps.length >= 12) break;
-      }
-
-      const visibleCrtFrames = [...document.querySelectorAll("#v2-crt .v2-crt-pixel")]
-        .filter((element) => Number.parseFloat(getComputedStyle(element).opacity || "0") > 0.5)
-        .map((element) => ({ frame: element.getAttribute("data-vram-frame"), pixels: element.getAttribute("data-vram-pixels"), checksum: element.getAttribute("data-vram-checksum"), box: rect(element.getBoundingClientRect()) }));
-      const crtRasterGroup = [...document.querySelectorAll("#v2-crt g")].find((element) => element.getAttribute("transform")?.includes("scale(1.5000000 1.5000000)"));
-      const activeWires = [...document.querySelectorAll("#v2-native-bus-propagation .v2-active-wire, #v2-native-alu-propagation .v2-active-wire")].filter((element) => Number.parseFloat(getComputedStyle(element).opacity || "0") > 0.05).length;
-      return {
-        labelFailures, textOverlaps, visibleLabels: visibleTitleRects.length, visibleCrtFrames,
-        rasterTransform: crtRasterGroup?.getAttribute("transform") ?? null,
-        rasterClip: crtRasterGroup?.getAttribute("clip-path") ?? null,
-        activeWires,
-      };
-
-      function rect(value) { return { x: value.x, y: value.y, width: value.width, height: value.height }; }
-      function intersects(a, b, tolerance = 1.5) { return a.x + a.width - tolerance > b.x && b.x + b.width - tolerance > a.x && a.y + a.height - tolerance > b.y && b.y + b.height - tolerance > a.y; }
-    });
-
+    const state = await inspectFrame(page);
     if (state.labelFailures.length > 0) throw new Error(`Node labels escape their physical components at ${checkpoint.time}s: ${JSON.stringify(state.labelFailures.slice(0, 8))}`);
     if (state.textOverlaps.length > 0) throw new Error(`Readable node labels overlap at ${checkpoint.time}s: ${JSON.stringify(state.textOverlaps)}`);
     if (state.rasterTransform !== "translate(950.000 127.000) scale(1.5000000 1.5000000)" || state.rasterClip !== null) throw new Error(`CRT raster must be exact 4:3, uniformly scaled and unclipped: ${JSON.stringify(state)}`);
@@ -143,7 +101,7 @@ try {
     const file = `${checkpoint.name}.png`;
     await root.screenshot({ path: path.join(outputDir, file), animations: "allow" });
     manifest.push({ ...checkpoint, file, state });
-    console.log(`captured ${checkpoint.time.toFixed(3)}s ${checkpoint.focus} activity=${checkpoint.activityScore ?? "n/a"} -> ${file}`);
+    console.log(`captured ${checkpoint.time.toFixed(4)}s ${checkpoint.focus} activity=${checkpoint.activityScore ?? "n/a"} -> ${file}`);
   }
 
   await writeFile(path.join(outputDir, "manifest.json"), `${JSON.stringify({ source: path.basename(input), staticContract, checkpoints: manifest }, null, 2)}\n`, "utf8");
@@ -151,18 +109,53 @@ try {
   await browser.close();
 }
 
-async function findPeakActivity(page, start, end, selector) {
-  const samples = 40;
-  const center = (start + end) * 0.5;
-  let best = { time: center, score: -1, distance: Number.POSITIVE_INFINITY };
-  for (let i = 0; i <= samples; i += 1) {
-    const time = start + (end - start) * (i / samples);
-    await seek(page, time);
-    const score = await page.evaluate((candidateSelector) => [...document.querySelectorAll(candidateSelector)].filter((element) => Number.parseFloat(getComputedStyle(element).opacity || "0") > 0.05).length, selector);
-    const distance = Math.abs(time - center);
-    if (score > best.score || (score === best.score && distance < best.distance)) best = { time, score, distance };
-  }
-  return best;
+async function visibleCount(page, selector) {
+  return page.evaluate((candidateSelector) => [...document.querySelectorAll(candidateSelector)].filter((element) => Number.parseFloat(getComputedStyle(element).opacity || "0") > 0.05).length, selector);
+}
+
+async function inspectFrame(page) {
+  return page.evaluate(() => {
+    const viewportRect = document.querySelector("#v2-machine-viewport")?.getBoundingClientRect();
+    const labelFailures = [];
+    const visibleTitleRects = [];
+    for (const group of document.querySelectorAll("#v3-node-labels > g")) {
+      const id = group.getAttribute("data-label-for-node");
+      const node = document.querySelector(`#v2-node-${CSS.escape(id)}`);
+      const title = group.querySelector(".v3-title");
+      if (!node || !title || !viewportRect) continue;
+      const nodeRect = node.getBoundingClientRect();
+      const titleRect = title.getBoundingClientRect();
+      if (!intersects(nodeRect, viewportRect, 0)) continue;
+      const tolerance = Math.max(2, nodeRect.width * 0.035);
+      if (titleRect.x < nodeRect.x - tolerance || titleRect.y < nodeRect.y - tolerance || titleRect.x + titleRect.width > nodeRect.x + nodeRect.width + tolerance || titleRect.y + titleRect.height > nodeRect.y + nodeRect.height + tolerance) labelFailures.push({ id, node: rect(nodeRect), label: rect(titleRect) });
+      if (titleRect.width > 1 && titleRect.height > 1 && intersects(titleRect, viewportRect, 0)) visibleTitleRects.push({ id, rect: rect(titleRect) });
+    }
+
+    const textOverlaps = [];
+    for (let i = 0; i < visibleTitleRects.length; i += 1) {
+      for (let j = i + 1; j < visibleTitleRects.length; j += 1) {
+        if (intersects(visibleTitleRects[i].rect, visibleTitleRects[j].rect, 1.5)) {
+          textOverlaps.push([visibleTitleRects[i].id, visibleTitleRects[j].id]);
+          if (textOverlaps.length >= 12) break;
+        }
+      }
+      if (textOverlaps.length >= 12) break;
+    }
+
+    const visibleCrtFrames = [...document.querySelectorAll("#v2-crt .v2-crt-pixel")]
+      .filter((element) => Number.parseFloat(getComputedStyle(element).opacity || "0") > 0.5)
+      .map((element) => ({ frame: element.getAttribute("data-vram-frame"), pixels: element.getAttribute("data-vram-pixels"), checksum: element.getAttribute("data-vram-checksum"), box: rect(element.getBoundingClientRect()) }));
+    const crtRasterGroup = [...document.querySelectorAll("#v2-crt g")].find((element) => element.getAttribute("transform")?.includes("scale(1.5000000 1.5000000)"));
+    return {
+      labelFailures, textOverlaps, visibleLabels: visibleTitleRects.length, visibleCrtFrames,
+      rasterTransform: crtRasterGroup?.getAttribute("transform") ?? null,
+      rasterClip: crtRasterGroup?.getAttribute("clip-path") ?? null,
+      activeWires: [...document.querySelectorAll("#v2-native-bus-propagation .v2-active-wire, #v2-native-alu-propagation .v2-active-wire")].filter((element) => Number.parseFloat(getComputedStyle(element).opacity || "0") > 0.05).length,
+    };
+
+    function rect(value) { return { x: value.x, y: value.y, width: value.width, height: value.height }; }
+    function intersects(a, b, tolerance = 1.5) { return a.x + a.width - tolerance > b.x && b.x + b.width - tolerance > a.x && a.y + a.height - tolerance > b.y && b.y + b.height - tolerance > a.y; }
+  });
 }
 
 async function seek(page, time) {
