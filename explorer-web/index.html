@@ -67,6 +67,17 @@
           <input id="timeline-scrubber" class="timeline-scrubber" type="range" min="0" max="0" value="0" step="1" disabled aria-label="Native microcycle cursor">
         </div>
 
+        <div class="panel-section crt-section">
+          <div class="section-heading-row">
+            <h2>Native VRAM / CRT</h2>
+            <output id="crt-frame" class="crt-frame-label">—</output>
+          </div>
+          <div class="crt-bezel">
+            <canvas id="crt-canvas" width="128" height="96" aria-label="Native 128 by 96 one-bit framebuffer"></canvas>
+          </div>
+          <div id="crt-state" class="crt-state mono-block muted">No native raster loaded.</div>
+        </div>
+
         <div class="panel-section">
           <h2>Follow authority</h2>
           <div class="follow-grid">
