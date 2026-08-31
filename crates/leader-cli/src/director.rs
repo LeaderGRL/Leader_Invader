@@ -1,4 +1,9 @@
-use leader_core::{build_navigation, MatchTrace, NavigationModel, Rect, Topology};
+use std::fmt::Write;
+
+use leader_core::{
+    build_navigation, CameraView, DetailDensity, MatchTrace, NavigationLevel, NavigationModel, Rect,
+    Topology,
+};
 use leader_svg::RenderConfig;
 
 const VIEW_W: f32 = 864.0;
@@ -12,6 +17,7 @@ pub fn apply_camera(
     trace: &MatchTrace,
     config: RenderConfig,
 ) -> String {
+    let navigation = build_navigation(topology);
     let Some(camera_start) = svg.find("<svg class=\"animated\" id=\"camera\"") else {
         return svg;
     };
@@ -45,8 +51,12 @@ pub fn apply_camera(
         .find(background)
         .map_or(open_end, |offset| open_end + offset + background.len());
 
-    let css = camera_css(topology, trace, config);
-    svg.insert_str(world_insert, &format!("{css}<g id=\"camera-world\">"));
+    let css = camera_css(&navigation, topology, trace, config);
+    let overlay = navigation_overlay(&navigation);
+    svg.insert_str(
+        world_insert,
+        &format!("{css}<g id=\"camera-world\">{overlay}"),
+    );
 
     let Some(old_camera_start) = svg.find("<animate attributeName=\"viewBox\"") else {
         return svg;
@@ -62,9 +72,54 @@ pub fn apply_camera(
     svg
 }
 
-fn camera_css(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
+fn navigation_overlay(navigation: &NavigationModel) -> String {
+    let mut out = String::with_capacity(navigation.views.len() * 360);
+    out.push_str(
+        "<g id=\"navigation-hierarchy\" data-default-view=\"view-machine\" aria-hidden=\"true\">",
+    );
+    for view in &navigation.views {
+        if view.level == NavigationLevel::Machine {
+            continue;
+        }
+        render_view_boundary(&mut out, view);
+    }
+    out.push_str("</g>");
+    out
+}
+
+fn render_view_boundary(out: &mut String, view: &CameraView) {
+    let class = match view.level {
+        NavigationLevel::Machine => "nav-machine",
+        NavigationLevel::Subsystem => "nav-subsystem",
+        NavigationLevel::Detail => "nav-detail",
+    };
+    let parent = view.parent_view.as_deref().unwrap_or("");
+    let label_y = view.bounds.y + 18.0;
+    let _ = write!(
+        out,
+        "<g id=\"nav-{}\" class=\"nav-boundary {class}\" data-view=\"{}\" data-module=\"{}\" data-parent=\"{}\" data-density=\"{}\"><rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"14\"/><text x=\"{:.1}\" y=\"{label_y:.1}\">{}</text></g>",
+        xml_escape(&view.module_id),
+        xml_escape(&view.id),
+        xml_escape(&view.module_id),
+        xml_escape(parent),
+        view.density.as_str(),
+        view.bounds.x,
+        view.bounds.y,
+        view.bounds.w,
+        view.bounds.h,
+        view.bounds.x + 12.0,
+        xml_escape(&view.label)
+    );
+}
+
+fn camera_css(
+    navigation: &NavigationModel,
+    topology: &Topology,
+    trace: &MatchTrace,
+    config: RenderConfig,
+) -> String {
     let total = config.total();
-    let track = camera_track(topology, trace, config);
+    let track = camera_track(navigation, topology, trace, config);
     let mut rules = String::with_capacity(track.len() * 80);
     for (time, rect) in track {
         let percent = norm(time, total) * 100.0;
@@ -75,7 +130,7 @@ fn camera_css(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> 
         ));
     }
     format!(
-        "<style>@keyframes leaderCamera{{{rules}}}#camera-world{{transform-box:view-box;transform-origin:0 0;animation:leaderCamera {total:.3}s linear infinite}}</style>"
+        "<style>@keyframes leaderCamera{{{rules}}}#camera-world{{transform-box:view-box;transform-origin:0 0;animation:leaderCamera {total:.3}s linear infinite}}.nav-boundary{{pointer-events:none}}.nav-boundary rect{{fill:#08131d;fill-opacity:.08;vector-effect:non-scaling-stroke}}.nav-boundary text{{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:2px;vector-effect:non-scaling-stroke}}.nav-subsystem rect{{stroke:#44677f;stroke-width:2;stroke-dasharray:12 10;opacity:.42}}.nav-subsystem text{{fill:#5f7f95;font-size:13px;font-weight:700;opacity:.56}}.nav-detail rect{{stroke:#80a7bd;stroke-width:1.5;stroke-dasharray:7 7;opacity:.50}}.nav-detail text{{fill:#91b5c7;font-size:11px;font-weight:800;opacity:.68}}</style>"
     )
 }
 
@@ -96,12 +151,12 @@ fn view_matrix(rect: Rect) -> ViewMatrix {
 }
 
 fn camera_track(
+    navigation: &NavigationModel,
     topology: &Topology,
     _trace: &MatchTrace,
     config: RenderConfig,
 ) -> Vec<(f32, Rect)> {
     let total = config.total();
-    let navigation = build_navigation(topology);
     let full = navigation
         .view(&navigation.default_view)
         .map(|view| aspect_rect(view.bounds, 0.0))
@@ -127,28 +182,40 @@ fn camera_track(
     track.push((config.assembly_seconds, full));
 
     let boot = config.assembly_seconds;
-    hold_view(&mut track, &navigation, boot + 0.20, "clk", 0.72);
-    hold_view(&mut track, &navigation, boot + 1.20, "pc", 0.78);
-    hold_view(&mut track, &navigation, boot + 2.25, "romsys", 0.82);
-    hold_view(&mut track, &navigation, boot + 3.35, "decode", 0.46);
-    hold_view(&mut track, &navigation, boot + 3.88, "decode.microcode", 0.38);
-    hold_view(&mut track, &navigation, boot + 4.45, "regs", 0.48);
-    hold_view(&mut track, &navigation, boot + 4.98, "alu", 0.36);
-    hold_view(&mut track, &navigation, boot + 5.40, "alu.ripple", 0.48);
-    hold_view(&mut track, &navigation, boot + 6.05, "bus", 0.32);
-    hold_view(&mut track, &navigation, boot + 6.43, "bus.stack", 0.38);
-    hold_view(&mut track, &navigation, boot + 6.90, "gpu", 0.28);
-    hold_view(&mut track, &navigation, boot + 7.24, "gpu.scanout", 0.66);
+    hold_view(&mut track, navigation, boot + 0.15, "clk.phases", 0.48);
+    hold_view(&mut track, navigation, boot + 0.72, "pc.fetch", 0.62);
+    hold_view(&mut track, navigation, boot + 1.45, "romsys.decode", 0.36);
+    hold_view(&mut track, navigation, boot + 1.88, "romsys.pages", 0.42);
+    hold_view(&mut track, navigation, boot + 2.40, "decode.instruction", 0.46);
+    hold_view(&mut track, navigation, boot + 2.96, "decode.microcode", 0.54);
+    hold_view(&mut track, navigation, boot + 3.60, "regs.readwrite", 0.58);
+    hold_view(&mut track, navigation, boot + 4.28, "alu.ripple", 0.76);
+    hold_view(&mut track, navigation, boot + 5.14, "ramsys.decode", 0.34);
+    hold_view(&mut track, navigation, boot + 5.56, "bus.arbitration", 0.42);
+    hold_view(&mut track, navigation, boot + 6.08, "bus.stack", 0.52);
+    hold_view(&mut track, navigation, boot + 6.70, "vramsys.decode", 0.34);
+    hold_view(&mut track, navigation, boot + 7.12, "gpu.dma", 0.42);
+    hold_view(&mut track, navigation, boot + 7.64, "gpu.timing", 0.46);
+    hold_view(&mut track, navigation, boot + 8.20, "gpu.scanout", 0.66);
     track.push((config.game_start(), full));
 
     let game = config.game_start();
-    let global_observe_end = (game + 7.0).min(config.game_end() - 8.0);
-    track.push((game + 0.35, full));
+    track.push((game + 0.25, full));
+    hold_view(&mut track, navigation, game + 0.72, "io.input_irq", 0.46);
+    hold_view(&mut track, navigation, game + 1.30, "io.shift_register", 0.56);
+    hold_view(&mut track, navigation, game + 1.98, "io.formation", 0.58);
+    hold_view(&mut track, navigation, game + 2.68, "io.enemy_shots", 0.66);
+    hold_view(&mut track, navigation, game + 3.46, "io.shields", 0.72);
+    hold_view(&mut track, navigation, game + 4.30, "gpu.dma", 0.48);
+    hold_view(&mut track, navigation, game + 4.90, "gpu.timing", 0.56);
+    hold_view(&mut track, navigation, game + 5.58, "gpu.scanout", 0.64);
+
+    let global_observe_end = (game + 6.40).min(config.game_end() - 8.0);
     track.push((global_observe_end, full));
     if let Some(display) = topology.node("display") {
-        track.push((global_observe_end + 0.55, focus(display.bounds, 210.0)));
-        track.push((global_observe_end + 1.35, focus(display.bounds, 92.0)));
-        track.push((global_observe_end + 2.20, display_screen(display.bounds)));
+        track.push((global_observe_end + 0.40, focus(display.bounds, 210.0)));
+        track.push((global_observe_end + 1.10, focus(display.bounds, 92.0)));
+        track.push((global_observe_end + 1.85, display_screen(display.bounds)));
         track.push((
             config.game_end() + config.outro_seconds - 0.20,
             display_screen(display.bounds),
@@ -222,10 +289,18 @@ fn norm(value: f32, total: f32) -> f32 {
     (value / total).clamp(0.0, 1.0)
 }
 
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use leader_core::{build_topology, Machine, NavigationLevel};
+    use leader_core::{build_topology, Machine};
 
     #[test]
     fn director_replaces_viewbox_animation_with_css_world_camera_only() {
@@ -240,7 +315,20 @@ mod tests {
         assert!(output.contains("viewBox=\"0 0 864 484\""));
         assert!(output.contains("@keyframes leaderCamera"));
         assert!(output.contains("id=\"camera-world\""));
+        assert!(output.contains("id=\"navigation-hierarchy\""));
         assert!(!output.contains("id=\"f3-datapath\""));
+    }
+
+    #[test]
+    fn navigation_overlay_serializes_inspectable_detail_metadata() {
+        let topology = build_topology();
+        let navigation = build_navigation(&topology);
+        let overlay = navigation_overlay(&navigation);
+        assert!(overlay.contains("data-module=\"decode.microcode\""));
+        assert!(overlay.contains("data-module=\"io.shields\""));
+        assert!(overlay.contains("data-module=\"gpu.timing\""));
+        assert!(overlay.contains("data-density=\"bit_exact\""));
+        assert!(overlay.contains("data-parent=\"view-gpu\""));
     }
 
     #[test]
@@ -252,16 +340,27 @@ mod tests {
             .view_for_module("decode.microcode")
             .expect("microcode detail view")
             .bounds;
-        assert!(view_matrix(aspect_rect(microcode, 0.0)).scale > view_matrix(aspect_rect(full, 0.0)).scale * 4.0);
+        assert!(
+            view_matrix(aspect_rect(microcode, 0.0)).scale
+                > view_matrix(aspect_rect(full, 0.0)).scale * 4.0
+        );
     }
 
     #[test]
     fn director_has_real_nested_detail_views() {
         let topology = build_topology();
         let navigation = build_navigation(&topology);
-        for id in ["decode.microcode", "alu.ripple", "bus.stack", "gpu.scanout"] {
+        for id in [
+            "decode.microcode",
+            "alu.ripple",
+            "bus.stack",
+            "io.shields",
+            "gpu.timing",
+            "gpu.scanout",
+        ] {
             let view = navigation.view_for_module(id).expect("detail view");
             assert_eq!(view.level, NavigationLevel::Detail);
+            assert_eq!(view.density, DetailDensity::BitExact);
             assert!(view.parent_view.is_some());
         }
     }
