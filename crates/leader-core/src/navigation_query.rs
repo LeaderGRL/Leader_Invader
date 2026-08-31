@@ -78,6 +78,42 @@ impl NavigationModel {
     }
 
     #[must_use]
+    pub fn route_for_link(
+        &self,
+        topology: &Topology,
+        link: &Link,
+    ) -> Option<[[f32; 2]; 4]> {
+        let from = topology.node(&link.from)?;
+        let to = topology.node(&link.to)?;
+        let from_center = [
+            from.bounds.x + from.bounds.w * 0.5,
+            from.bounds.y + from.bounds.h * 0.5,
+        ];
+        let to_center = [
+            to.bounds.x + to.bounds.w * 0.5,
+            to.bounds.y + to.bounds.h * 0.5,
+        ];
+        let travels_right = to_center[0] >= from_center[0];
+        let start_x = if travels_right {
+            from.bounds.x + from.bounds.w
+        } else {
+            from.bounds.x
+        };
+        let end_x = if travels_right {
+            to.bounds.x
+        } else {
+            to.bounds.x + to.bounds.w
+        };
+        let middle_x = (start_x + end_x) * 0.5;
+        Some([
+            [start_x, from_center[1]],
+            [middle_x, from_center[1]],
+            [middle_x, to_center[1]],
+            [end_x, to_center[1]],
+        ])
+    }
+
+    #[must_use]
     pub fn node_at_in_view<'a>(
         &self,
         topology: &'a Topology,
@@ -177,7 +213,10 @@ mod tests {
         let topology = crate::build_topology();
         let navigation = build_navigation(&topology);
         let nodes = navigation.nodes_for_view(&topology, "view-decode.microcode");
-        let node_ids = nodes.iter().map(|node| node.id.as_str()).collect::<HashSet<_>>();
+        let node_ids = nodes
+            .iter()
+            .map(|node| node.id.as_str())
+            .collect::<HashSet<_>>();
         assert!(node_ids.contains("microAddr"));
         assert!(node_ids.contains("microRom"));
         assert!(!node_ids.contains("shieldAddr"));
@@ -194,13 +233,39 @@ mod tests {
         let topology = crate::build_topology();
         let navigation = build_navigation(&topology);
         assert_eq!(
-            navigation.nodes_for_view(&topology, &navigation.default_view).len(),
+            navigation
+                .nodes_for_view(&topology, &navigation.default_view)
+                .len(),
             topology.nodes.len()
         );
         assert_eq!(
-            navigation.links_for_view(&topology, &navigation.default_view).len(),
+            navigation
+                .links_for_view(&topology, &navigation.default_view)
+                .len(),
             topology.links.len()
         );
+    }
+
+    #[test]
+    fn canonical_link_route_is_orthogonal_and_terminates_on_node_edges() {
+        let topology = crate::build_topology();
+        let navigation = build_navigation(&topology);
+        let link = topology
+            .links
+            .iter()
+            .find(|link| link.id == "d-microAddr-microRom")
+            .expect("microcode link");
+        let from = topology.node(&link.from).expect("from node");
+        let to = topology.node(&link.to).expect("to node");
+        let route = navigation
+            .route_for_link(&topology, link)
+            .expect("closed physical route");
+
+        assert_eq!(route[0][0], from.bounds.x + from.bounds.w);
+        assert_eq!(route[3][0], to.bounds.x);
+        assert_eq!(route[0][1], route[1][1]);
+        assert_eq!(route[1][0], route[2][0]);
+        assert_eq!(route[2][1], route[3][1]);
     }
 
     #[test]
