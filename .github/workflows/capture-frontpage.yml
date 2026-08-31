@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Review the committed physical-die candidate exactly as GitHub will load it.
+      # Review the committed unclipped physical-die artifact exactly as GitHub will load it.
       - name: Install Playwright
         run: |
           npm install --no-save playwright@1.58.2
