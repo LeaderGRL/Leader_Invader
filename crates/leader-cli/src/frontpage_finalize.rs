@@ -8,10 +8,16 @@ pub fn apply(mut svg: String) -> String {
         // presentation until the topology migration removes the old label.
         svg = svg.replace("RGB332 SCREEN", "1-BIT CRT DISPLAY");
 
-        // The framebuffer geometry is already exactly bounded to 128×96 before
-        // scaling. A root-space clip attached to the transformed raster group
-        // can be evaluated in the transformed user space by SVG renderers and
-        // hide the native image, so V2 deliberately does not clip this group.
+        // Both the complete die and the framebuffer are already mathematically
+        // fitted inside their target rectangles before serialization. Attaching
+        // a root-space clipPath to the same group that carries the fit transform
+        // makes SVG user-space resolution renderer-dependent and can crop almost
+        // the entire transformed scene. Keep transformed content unclipped and
+        // let the explicit fit geometry be the only framing authority.
+        svg = svg.replace(
+            "<g id=\"v2-machine\" clip-path=\"url(#v2-machine-clip)\" transform=",
+            "<g id=\"v2-machine\" transform=",
+        );
         svg = svg.replace(
             "<g clip-path=\"url(#v2-crt-clip)\" transform=",
             "<g transform=",
@@ -52,9 +58,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn physical_die_receives_only_hidden_contract_compatibility() {
+    fn physical_die_fit_groups_are_not_root_space_clipped() {
         let source = String::from(
-            "<svg data-frontpage-version=\"physical-die-v2\"><text>RGB332 SCREEN</text><g clip-path=\"url(#v2-crt-clip)\" transform=\"scale(2)\"></g></svg>",
+            "<svg data-frontpage-version=\"physical-die-v2\"><text>RGB332 SCREEN</text><g id=\"v2-machine\" clip-path=\"url(#v2-machine-clip)\" transform=\"scale(.2)\"></g><g clip-path=\"url(#v2-crt-clip)\" transform=\"scale(2)\"></g></svg>",
         );
         let output = apply(source);
         assert!(output.contains("id=\"v2-legacy-contract-compat\""));
@@ -62,6 +68,8 @@ mod tests {
         assert!(!output.contains("leaderCamera"));
         assert!(!output.contains("RGB332 SCREEN"));
         assert!(output.contains("1-BIT CRT DISPLAY"));
+        assert!(!output.contains("id=\"v2-machine\" clip-path="));
+        assert!(output.contains("<g id=\"v2-machine\" transform=\"scale(.2)\""));
         assert!(!output.contains("clip-path=\"url(#v2-crt-clip)\" transform="));
         assert!(output.contains("<g transform=\"scale(2)\""));
     }
