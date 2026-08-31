@@ -1,13 +1,13 @@
 #![forbid(unsafe_code)]
 
+mod vram_replay;
+
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use leader_core::game::{ALIEN_COLS, ALIEN_ROWS, PLAYER_Y};
 use leader_core::rng::hash_seed;
 use leader_core::{
-    orthogonal_route_for_link, physical_activity_nodes, FrameState, MatchTrace, PhaseKind,
-    ProjectileSnapshot, Rect, Topology, ENEMY_SHOT_SLOTS,
+    orthogonal_route_for_link, physical_activity_nodes, MatchTrace, PhaseKind, Rect, Topology,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -77,9 +77,6 @@ pub fn render(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> 
     <feGaussianBlur stdDeviation="8" result="blur"/>
     <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
   </filter>
-  <symbol id="alien-a" viewBox="0 0 8 6"><path fill="currentColor" d="M2 0h4v1h1v1h1v2H7v1H6V4H2v1H1V4H0V2h1V1h1zm0 2v1h1V2zm3 0v1h1V2zM1 5h1v1H1zm5 0h1v1H6z"/></symbol>
-  <symbol id="alien-b" viewBox="0 0 8 6"><path fill="currentColor" d="M1 0h1v1h4V0h1v1h1v3H7v1H6V4H2v1H1V4H0V1h1zm1 2v1h1V2zm3 0v1h1V2zM0 5h2v1H0zm6 0h2v1H6z"/></symbol>
-  <symbol id="player" viewBox="0 0 11 6"><path fill="currentColor" d="M5 0h1v2h3v1h2v3H0V3h2V2h3z"/></symbol>
 </defs>
 <style>
 text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
@@ -288,7 +285,7 @@ fn render_display(out: &mut String, topology: &Topology, trace: &MatchTrace, con
     let Some(display) = topology.node("display") else {
         return;
     };
-    if trace.frames.is_empty() {
+    if trace.vram_checkpoints.is_empty() {
         return;
     }
     let b = display.bounds;
@@ -306,167 +303,13 @@ fn render_display(out: &mut String, topology: &Topology, trace: &MatchTrace, con
         128.0 * scale,
         96.0 * scale
     );
-    render_game(out, trace, config, total);
+    vram_replay::render_vram_replay(
+        out,
+        &trace.vram_checkpoints,
+        trace.total_frames,
+        config,
+    );
     out.push_str("</g></g>");
-}
-
-fn render_game(out: &mut String, trace: &MatchTrace, config: RenderConfig, total: f32) {
-    let frames = sample_frames(&trace.frames, 180);
-    let (fleet_values, fleet_keys) = transform_series(
-        &frames,
-        trace.total_frames,
-        config,
-        total,
-        |frame| (f32::from(frame.fleet_x), f32::from(frame.fleet_y)),
-    );
-    let _ = write!(
-        out,
-        r##"<g color="#b7ff72"><animateTransform attributeName="transform" type="translate" values="{fleet_values}" keyTimes="{fleet_keys}" dur="{total:.3}s" repeatCount="indefinite" calcMode="linear"/>"##
-    );
-    for row in 0..ALIEN_ROWS {
-        for col in 0..ALIEN_COLS {
-            let symbol = if (row + col) % 2 == 0 { "alien-a" } else { "alien-b" };
-            let _ = write!(
-                out,
-                r##"<use href="#{symbol}" x="{}" y="{}" width="8" height="6""##,
-                col * 12,
-                row * 13
-            );
-            if let Some(kill) = trace.kills.iter().find(|kill| kill.row == row && kill.col == col) {
-                let t = trace_time(kill.frame, trace.total_frames, config);
-                let k1 = norm(t, total);
-                let k2 = norm(t + 0.08, total);
-                let _ = write!(
-                    out,
-                    r##" opacity="1"><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;{k1:.6};{k2:.6};1" dur="{total:.3}s" repeatCount="indefinite"/></use>"##
-                );
-            } else {
-                out.push_str("/>");
-            }
-        }
-    }
-    out.push_str("</g>");
-
-    let (player_values, player_keys) = transform_series(
-        &frames,
-        trace.total_frames,
-        config,
-        total,
-        |frame| (f32::from(frame.player_x - 5), f32::from(PLAYER_Y - 5)),
-    );
-    let _ = write!(
-        out,
-        r##"<g color="#b7ff72"><animateTransform attributeName="transform" type="translate" values="{player_values}" keyTimes="{player_keys}" dur="{total:.3}s" repeatCount="indefinite" calcMode="linear"/><use href="#player" width="11" height="6"/></g><rect y="93" width="128" height="1" fill="#17382c"/>"##
-    );
-
-    render_projectile_track(out, trace, config, total, true, 0);
-    for slot in 0..ENEMY_SHOT_SLOTS {
-        render_projectile_track(out, trace, config, total, false, slot);
-    }
-
-    let clear = config.game_end();
-    let _ = write!(
-        out,
-        r##"<text x="64" y="50" text-anchor="middle" fill="#b7ff72" font-size="8" font-weight="900" opacity="0">GAME CLEAR<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;{:.6};{:.6};{:.6};1" dur="{total:.3}s" repeatCount="indefinite"/></text>"##,
-        norm(clear, total),
-        norm(clear + 0.20, total),
-        norm(total - 0.30, total)
-    );
-}
-
-fn render_projectile_track(
-    out: &mut String,
-    trace: &MatchTrace,
-    config: RenderConfig,
-    total: f32,
-    player: bool,
-    slot: usize,
-) {
-    let projectile_at = |frame: &FrameState| -> Option<ProjectileSnapshot> {
-        if player {
-            frame.player_shot
-        } else {
-            frame.enemy_shots[slot]
-        }
-    };
-
-    let mut start: Option<(usize, i16, i16)> = None;
-    for (index, frame) in trace.frames.iter().enumerate() {
-        let projectile = projectile_at(frame);
-        match (start, projectile) {
-            (None, Some(projectile)) => start = Some((index, projectile.x, projectile.y)),
-            (Some((start_index, start_x, start_y)), None) => {
-                let end_index = index.saturating_sub(1);
-                if let Some(end) = projectile_at(&trace.frames[end_index]) {
-                    render_projectile_segment(
-                        out,
-                        trace,
-                        config,
-                        total,
-                        player,
-                        start_index,
-                        end_index,
-                        start_x,
-                        start_y,
-                        end,
-                    );
-                }
-                start = None;
-            }
-            _ => {}
-        }
-    }
-
-    if let Some((start_index, start_x, start_y)) = start {
-        let end_index = trace.frames.len().saturating_sub(1);
-        if let Some(end) = projectile_at(&trace.frames[end_index]) {
-            render_projectile_segment(
-                out,
-                trace,
-                config,
-                total,
-                player,
-                start_index,
-                end_index,
-                start_x,
-                start_y,
-                end,
-            );
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_projectile_segment(
-    out: &mut String,
-    trace: &MatchTrace,
-    config: RenderConfig,
-    total: f32,
-    player: bool,
-    start_index: usize,
-    end_index: usize,
-    start_x: i16,
-    start_y: i16,
-    end: ProjectileSnapshot,
-) {
-    let t1 = trace_time(trace.frames[start_index].frame, trace.total_frames, config);
-    let t2 = trace_time(trace.frames[end_index].frame, trace.total_frames, config).max(t1 + 0.04);
-    let class = if player { "#e8e677" } else { "#ff8065" };
-    let _ = write!(
-        out,
-        r##"<rect fill="{class}" width="1" height="{}" opacity="0"><animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;{:.6};{:.6};{:.6};{:.6};1" dur="{total:.3}s" repeatCount="indefinite"/><animateTransform attributeName="transform" type="translate" values="{start_x} {start_y};{start_x} {start_y};{} {};{} {}" keyTimes="0;{:.6};{:.6};1" dur="{total:.3}s" repeatCount="indefinite"/></rect>"##,
-        if player { 4 } else { 3 },
-        norm(t1, total),
-        norm(t1 + 0.02, total),
-        norm(t2, total),
-        norm(t2 + 0.02, total),
-        end.x,
-        end.y,
-        end.x,
-        end.y,
-        norm(t1, total),
-        norm(t2, total)
-    );
 }
 
 fn render_camera(out: &mut String, topology: &Topology, config: RenderConfig) {
@@ -561,55 +404,6 @@ fn assembly_schedule(topology: &Topology, seconds: f32) -> HashMap<String, f32> 
     schedule
 }
 
-fn sample_frames(frames: &[FrameState], max_samples: usize) -> Vec<&FrameState> {
-    if frames.len() <= max_samples {
-        return frames.iter().collect();
-    }
-    let stride = (frames.len() / max_samples).max(1);
-    let mut sampled = frames.iter().step_by(stride).collect::<Vec<_>>();
-    if sampled.last().map(|frame| frame.frame) != frames.last().map(|frame| frame.frame) {
-        if let Some(last) = frames.last() {
-            sampled.push(last);
-        }
-    }
-    sampled
-}
-
-fn transform_series<F>(
-    frames: &[&FrameState],
-    total_frames: u32,
-    config: RenderConfig,
-    total: f32,
-    position: F,
-) -> (String, String)
-where
-    F: Fn(&FrameState) -> (f32, f32),
-{
-    let first = frames[0];
-    let last = *frames.last().unwrap_or(&first);
-    let first_pos = position(first);
-    let last_pos = position(last);
-    let mut values = vec![
-        format!("{:.1} {:.1}", first_pos.0, first_pos.1),
-        format!("{:.1} {:.1}", first_pos.0, first_pos.1),
-    ];
-    let mut keys = vec!["0".to_owned(), format!("{:.6}", norm(config.game_start(), total))];
-
-    for frame in frames {
-        let pos = position(frame);
-        values.push(format!("{:.1} {:.1}", pos.0, pos.1));
-        keys.push(format!(
-            "{:.6}",
-            norm(trace_time(frame.frame, total_frames, config), total)
-        ));
-    }
-    values.push(format!("{:.1} {:.1}", last_pos.0, last_pos.1));
-    values.push(format!("{:.1} {:.1}", last_pos.0, last_pos.1));
-    keys.push(format!("{:.6}", norm(config.game_end(), total)));
-    keys.push("1".to_owned());
-    (values.join(";"), keys.join(";"))
-}
-
 fn trace_time(frame: u32, total_frames: u32, config: RenderConfig) -> f32 {
     config.game_start()
         + frame as f32 / total_frames.max(1) as f32 * config.game_seconds
@@ -664,14 +458,14 @@ mod tests {
     }
 
     #[test]
-    fn renderer_replays_all_enemy_projectile_slots() {
+    fn renderer_uses_native_vram_without_reconstructing_game_entities() {
         let topology = build_topology();
-        let trace = Machine::run_match("svg-multi-shot", 5_000);
-        assert!(trace
-            .frames
-            .iter()
-            .any(|frame| frame.enemy_shots.iter().flatten().count() >= 2));
+        let trace = Machine::run_match("svg-native-vram", 64);
         let svg = render(&topology, &trace, RenderConfig::default());
-        assert!(svg.matches("fill=\"#ff8065\"").count() >= 2);
+        assert!(!trace.vram_checkpoints.is_empty());
+        assert!(svg.contains("fill=\"#b7ff72\""));
+        assert!(!svg.contains("alien-a"));
+        assert!(!svg.contains("alien-b"));
+        assert!(!svg.contains("href=\"#player\""));
     }
 }
