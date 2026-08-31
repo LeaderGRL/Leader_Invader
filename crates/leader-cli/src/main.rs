@@ -11,6 +11,7 @@ mod flags_overlay;
 mod formation_cadence_overlay;
 mod microcode_overlay;
 mod microcycle_overlay;
+mod navigation_targets;
 #[cfg(test)]
 mod native_pipeline_tests;
 mod pc_overlay;
@@ -197,6 +198,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let config = RenderConfig::default();
     let svg = render_native_base(&topology, &trace, config);
     let svg = director::apply_camera(svg, &topology, &trace, config);
+    let svg = navigation_targets::apply(svg, &topology);
     let svg = pc_overlay::apply(svg, &topology, &trace, config);
     let svg = decoder_overlay::apply(svg, &topology, &trace, config);
     let svg = microcode_overlay::apply(svg, &topology, &trace, config);
