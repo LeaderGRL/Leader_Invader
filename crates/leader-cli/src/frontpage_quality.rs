@@ -6,7 +6,8 @@ use leader_core::Topology;
 ///
 /// The physical renderer deliberately owns geometry and trace timing. This
 /// pass owns readability: camera-independent typography, exact node labels,
-/// restrained dormant wiring, and a pixel-perfect 4:3 CRT raster.
+/// restrained dormant wiring, a dedicated hardware viewport, and a
+/// pixel-perfect 4:3 CRT raster.
 #[must_use]
 pub fn apply(mut svg: String, topology: &Topology) -> String {
     if !svg.contains("data-frontpage-version=\"physical-die-v2\"") {
@@ -15,6 +16,7 @@ pub fn apply(mut svg: String, topology: &Topology) -> String {
 
     inject_quality_css(&mut svg);
     replace_legacy_labels(&mut svg, topology);
+    reserve_crt_sidebar(&mut svg);
     repair_crt_raster(&mut svg);
     svg
 }
@@ -22,17 +24,18 @@ pub fn apply(mut svg: String, topology: &Topology) -> String {
 fn inject_quality_css(svg: &mut String) {
     let css = r##"
 /* Front-page readability contract: world-space typography is camera-safe. */
-.v2-group{stroke-width:1.35;stroke-dasharray:16 12;fill-opacity:.08}
+.v2-group{stroke-width:1.15;stroke-dasharray:14 11;fill-opacity:.065}
 .v2-group-label{display:none}
 #v2-logic-nodes text{display:none}
-.v2-node{stroke-width:1.15}
-.v2-wire{stroke-width:.72;opacity:.075}
-.v2-active-wire{stroke-width:3.2;filter:url(#v2-glow)}
-#v3-group-labels text{font-size:17px;font-weight:900;letter-spacing:1.5px;fill:#7890a2;paint-order:stroke;stroke:#050b11;stroke-width:5px;stroke-linejoin:round}
-#v3-node-labels .v3-title{font-weight:850;fill:#b8c9d4;paint-order:stroke;stroke:#071019;stroke-width:2.2px;stroke-linejoin:round}
-#v3-node-labels .v3-kind{font-size:6.4px;font-weight:700;fill:#60798b;letter-spacing:.35px}
-#v2-memory-bitcell-fabric{opacity:.86}
-#v2-microcode-bitcell-fabric{opacity:.92}
+.v2-node{stroke-width:1.05}
+.v2-wire{stroke-width:.58;opacity:.045}
+.v2-active-wire{stroke-width:1.75;filter:none}
+.v2-active-wire.v2-active-carry{stroke-width:2.65;filter:url(#v2-glow)}
+#v3-group-labels text{font-size:15px;font-weight:900;letter-spacing:1.2px;fill:#7890a2;paint-order:stroke;stroke:#050b11;stroke-width:4px;stroke-linejoin:round}
+#v3-node-labels .v3-title{font-weight:850;fill:#b8c9d4;paint-order:stroke;stroke:#071019;stroke-width:2px;stroke-linejoin:round}
+#v3-node-labels .v3-kind{font-size:6.2px;font-weight:700;fill:#60798b;letter-spacing:.3px}
+#v2-memory-bitcell-fabric{opacity:.90}
+#v2-microcode-bitcell-fabric{opacity:.96}
 #v2-crt .v2-crt-pixel{shape-rendering:crispEdges}
 "##;
     if let Some(index) = svg.find("</style>") {
@@ -45,7 +48,7 @@ fn replace_legacy_labels(svg: &mut String, topology: &Topology) {
     group_labels.push_str("<g id=\"v3-group-labels\" pointer-events=\"none\">\n");
     for group in &topology.groups {
         let x = group.bounds.x + 14.0;
-        let y = group.bounds.y + 24.0;
+        let y = group.bounds.y + 22.0;
         let label = xml_escape(&group.label);
         let _ = writeln!(
             group_labels,
@@ -59,7 +62,7 @@ fn replace_legacy_labels(svg: &mut String, topology: &Topology) {
     node_labels.push_str("<g id=\"v3-node-labels\" pointer-events=\"none\">\n");
     for node in &topology.nodes {
         let bounds = node.bounds;
-        let title_size = (bounds.h * 0.18).clamp(7.2, 11.0);
+        let title_size = (bounds.h * 0.18).clamp(7.0, 10.5);
         let chars = ((bounds.w - 10.0) / (title_size * 0.61)).floor().max(2.0) as usize;
         let title = if node.id == "display" {
             "1-BIT CRT".to_string()
@@ -75,7 +78,7 @@ fn replace_legacy_labels(svg: &mut String, topology: &Topology) {
             xml_escape(&title),
         );
         if bounds.h >= 58.0 {
-            let kind = fit_text(&node.kind, ((bounds.w - 10.0) / 4.2).floor().max(2.0) as usize);
+            let kind = fit_text(&node.kind, ((bounds.w - 10.0) / 4.1).floor().max(2.0) as usize);
             let kind_y = bounds.y + bounds.h - 6.0;
             let _ = writeln!(
                 node_labels,
@@ -93,6 +96,16 @@ fn replace_legacy_labels(svg: &mut String, topology: &Topology) {
     if let Some(index) = svg.find("<g id=\"v2-memory-byte-fabric\"") {
         svg.insert_str(index, &node_labels);
     }
+}
+
+fn reserve_crt_sidebar(svg: &mut String) {
+    // The original physical-die clip occupied the full 1152px content width,
+    // allowing camera content to appear underneath the fixed CRT. Reserve the
+    // right-most 252px exclusively for video/probe UI instead.
+    *svg = svg.replace(
+        "<clipPath id=\"v2-machine-clip\"><rect x=\"24\" y=\"92\" width=\"1152\" height=\"548\" rx=\"9\"/></clipPath>",
+        "<clipPath id=\"v2-machine-clip\"><rect x=\"24\" y=\"92\" width=\"900\" height=\"548\" rx=\"9\"/></clipPath>",
+    );
 }
 
 fn repair_crt_raster(svg: &mut String) {
@@ -166,5 +179,14 @@ mod tests {
         let output = apply(source, &topology);
         assert!(!output.contains("clip-path=\"url(#v2-crt-clip)\" transform="));
         assert!(output.contains("scale(1.5000000 1.5000000)"));
+    }
+
+    #[test]
+    fn quality_pass_reserves_a_non_overlapping_crt_sidebar() {
+        let topology = build_topology();
+        let source = "<svg data-frontpage-version=\"physical-die-v2\"><defs><clipPath id=\"v2-machine-clip\"><rect x=\"24\" y=\"92\" width=\"1152\" height=\"548\" rx=\"9\"/></clipPath></defs><style></style><g id=\"v2-static-wires\"></g><g id=\"v2-memory-byte-fabric\"></g></svg>".to_string();
+        let output = apply(source, &topology);
+        assert!(output.contains("width=\"900\" height=\"548\""));
+        assert!(!output.contains("width=\"1152\" height=\"548\""));
     }
 }
