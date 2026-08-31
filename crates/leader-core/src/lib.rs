@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+pub mod activity;
 pub mod assembler;
 pub mod call_stack_contract;
 pub mod control_contract;
@@ -41,6 +42,7 @@ pub mod video_pipeline_contract;
 pub mod video_timing;
 pub mod video_timing_layout;
 
+pub use activity::physical_activity_nodes;
 pub use call_stack_contract::{validate_call_stack_contract, CallStackValidation};
 pub use control_contract::{
     control_topology_violations, physical_control_lines, physically_used_control_mask,
