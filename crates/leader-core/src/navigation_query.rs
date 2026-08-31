@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use crate::navigation::{CameraView, NavigationModel};
+use crate::routing::orthogonal_route_for_link;
 use crate::topology::{Link, Node, Topology};
 
 impl NavigationModel {
@@ -83,34 +84,7 @@ impl NavigationModel {
         topology: &Topology,
         link: &Link,
     ) -> Option<[[f32; 2]; 4]> {
-        let from = topology.node(&link.from)?;
-        let to = topology.node(&link.to)?;
-        let from_center = [
-            from.bounds.x + from.bounds.w * 0.5,
-            from.bounds.y + from.bounds.h * 0.5,
-        ];
-        let to_center = [
-            to.bounds.x + to.bounds.w * 0.5,
-            to.bounds.y + to.bounds.h * 0.5,
-        ];
-        let travels_right = to_center[0] >= from_center[0];
-        let start_x = if travels_right {
-            from.bounds.x + from.bounds.w
-        } else {
-            from.bounds.x
-        };
-        let end_x = if travels_right {
-            to.bounds.x
-        } else {
-            to.bounds.x + to.bounds.w
-        };
-        let middle_x = (start_x + end_x) * 0.5;
-        Some([
-            [start_x, from_center[1]],
-            [middle_x, from_center[1]],
-            [middle_x, to_center[1]],
-            [end_x, to_center[1]],
-        ])
+        orthogonal_route_for_link(topology, link)
     }
 
     #[must_use]
