@@ -5,15 +5,13 @@ use leader_core::{
 };
 use leader_svg::RenderConfig;
 
-// Keep a dedicated right-hand sidebar for the CRT. The hardware camera never
-// renders underneath the display, eliminating panel/topology overlap while
-// preserving the full 1200x675 GitHub canvas.
 const VIEWPORT: Rect = Rect {
     x: 24.0,
     y: 92.0,
     w: 900.0,
     h: 548.0,
 };
+const MAX_RENDERED_MEMORY_EVENTS: usize = 96;
 
 #[derive(Debug, Clone, Copy)]
 struct Pose {
@@ -129,11 +127,7 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: R
 }
 
 fn camera_keys(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> Vec<CameraKey> {
-    let overview = fit_pose(
-        Rect::new(0.0, 0.0, topology.width, topology.height),
-        8.0,
-        0.0,
-    );
+    let overview = fit_pose(Rect::new(0.0, 0.0, topology.width, topology.height), 8.0, 0.0);
     let cpu = focus_groups(topology, &["pc", "decode"], 70.0, 0.64).unwrap_or(overview);
     let micro = topology
         .node("microRom")
@@ -211,9 +205,9 @@ fn memory_focus(
     owner: MemoryOwner,
     desired_time: f32,
 ) -> Option<Pose> {
-    let event = trace
-        .bus_transactions
-        .iter()
+    let sampled = rendered_memory_events(trace);
+    let event = sampled
+        .into_iter()
         .filter_map(|event| {
             let address = event.address?;
             let physical = resolve_physical_memory_address(address)?;
@@ -221,9 +215,9 @@ fn memory_focus(
                 return None;
             }
             let time = trace_moment(event.frame, event.ordinal, trace, config);
-            Some((event, physical, (time - desired_time).abs()))
+            Some((physical, (time - desired_time).abs()))
         })
-        .min_by(|a, b| a.2.total_cmp(&b.2))?;
+        .min_by(|a, b| a.1.total_cmp(&b.1))?;
 
     let prefix = match owner {
         MemoryOwner::Rom => "romPage",
@@ -231,7 +225,7 @@ fn memory_focus(
         MemoryOwner::Vram => "vramPage",
         MemoryOwner::Mmio | MemoryOwner::Unmapped => return None,
     };
-    let node = topology.node(&format!("{prefix}{}", event.1.page))?;
+    let node = topology.node(&format!("{prefix}{}", event.0.page))?;
     Some(fit_pose(node.bounds, 10.0, 3.0))
 }
 
@@ -241,9 +235,8 @@ fn memory_focus_any(
     config: RenderConfig,
     desired_time: f32,
 ) -> Option<Pose> {
-    let event = trace
-        .bus_transactions
-        .iter()
+    let event = rendered_memory_events(trace)
+        .into_iter()
         .filter_map(|event| {
             let address = event.address?;
             let physical = resolve_physical_memory_address(address)?;
@@ -262,10 +255,22 @@ fn memory_focus_any(
     Some(fit_pose(node.bounds, 10.0, 3.0))
 }
 
+fn rendered_memory_events(trace: &MatchTrace) -> Vec<&leader_core::BusTransactionEvent> {
+    let candidates = trace
+        .bus_transactions
+        .iter()
+        .filter(|event| event.address.is_some() && event.data.is_some())
+        .collect::<Vec<_>>();
+    if candidates.len() <= MAX_RENDERED_MEMORY_EVENTS {
+        return candidates;
+    }
+    let stride = candidates.len().div_ceil(MAX_RENDERED_MEMORY_EVENTS);
+    candidates.into_iter().step_by(stride).collect()
+}
+
 fn fit_pose(bounds: Rect, padding: f32, max_scale: f32) -> Pose {
     let focus = bounds.padded(padding);
-    let scale = (VIEWPORT.w / focus.w.max(1.0))
-        .min(VIEWPORT.h / focus.h.max(1.0));
+    let scale = (VIEWPORT.w / focus.w.max(1.0)).min(VIEWPORT.h / focus.h.max(1.0));
     let scale = if max_scale > 0.0 { scale.min(max_scale) } else { scale };
     let rendered_w = focus.w * scale;
     let rendered_h = focus.h * scale;
@@ -322,5 +327,14 @@ mod tests {
         assert_eq!(keys.first().unwrap().time, 0.0);
         assert!((keys.last().unwrap().time - config.total()).abs() < 0.001);
         assert!(keys.iter().any(|key| key.pose.scale >= 2.8));
+    }
+
+    #[test]
+    fn memory_camera_uses_the_same_sampled_events_as_the_renderer() {
+        let trace = Machine::run_match("trace-camera-memory-sampling", 5000);
+        let sampled = rendered_memory_events(&trace);
+        assert!(!sampled.is_empty());
+        assert!(sampled.len() <= MAX_RENDERED_MEMORY_EVENTS + 1);
+        assert!(sampled.iter().all(|event| event.address.is_some() && event.data.is_some()));
     }
 }
