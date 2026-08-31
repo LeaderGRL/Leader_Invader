@@ -4,9 +4,21 @@ use leader_svg::{render, RenderConfig};
 use crate::{
     alu_overlay, bus_overlay, control_state_overlay, control_word_overlay, decoder_overlay,
     director, enemy_shot_overlay, flags_overlay, formation_cadence_overlay, microcode_overlay,
-    microcycle_overlay, pc_overlay, register_overlay, render_native_base, shield_overlay,
-    shift_register_overlay, stack_overlay, timing_overlay, video_pipeline_overlay,
+    microcycle_overlay, pc_overlay, register_overlay, shield_overlay, shift_register_overlay,
+    stack_overlay, timing_overlay, video_pipeline_overlay,
 };
+
+fn render_native_base(
+    topology: &leader_core::Topology,
+    trace: &leader_core::MatchTrace,
+    config: RenderConfig,
+) -> String {
+    // Historical overlay tests still need the pre-observatory base renderer.
+    // Production `render` does not call this path anymore.
+    let mut native_base = trace.clone();
+    native_base.micro_samples.clear();
+    render(topology, &native_base, config)
+}
 
 fn apply_native_pipeline(
     svg: String,
