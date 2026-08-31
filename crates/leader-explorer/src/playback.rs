@@ -1,4 +1,7 @@
-use leader_core::{Machine, MatchTrace, MicroCycleEvent, MicroCycleKind};
+use leader_core::{
+    BusTransactionEvent, BusTransactionKind, FrameState, Machine, MatchTrace, MicroCycleEvent,
+    MicroCycleKind, MicroSample, PhaseKind,
+};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -130,11 +133,96 @@ impl Playback {
         true
     }
 
+    pub fn seek_next_bus(&mut self) -> bool {
+        let Some(target) = self.next_bus_after_cursor(None).map(event_key) else {
+            return false;
+        };
+        self.seek_key(target)
+    }
+
+    pub fn seek_next_dma(&mut self) -> bool {
+        let Some(target) = self
+            .next_bus_after_cursor(Some(BusTransactionKind::Dma))
+            .map(event_key)
+        else {
+            return false;
+        };
+        self.seek_key(target)
+    }
+
+    pub fn seek_next_vblank(&mut self) -> bool {
+        let Some(target) = self.next_vblank_after_cursor().map(sample_key) else {
+            return false;
+        };
+        self.seek_key(target)
+    }
+
     #[must_use]
     pub fn current_microcycle_json(&self) -> String {
         self.current_event()
             .map(microcycle_json)
             .unwrap_or_else(|| "null".to_owned())
+    }
+
+    #[must_use]
+    pub fn current_bus_json(&self) -> String {
+        self.current_bus_event()
+            .map(bus_json)
+            .unwrap_or_else(|| "null".to_owned())
+    }
+
+    #[must_use]
+    pub fn current_frame_json(&self) -> String {
+        self.current_frame_state()
+            .map(frame_json)
+            .unwrap_or_else(|| "null".to_owned())
+    }
+
+    #[must_use]
+    pub fn follow_pc_json(&self) -> String {
+        let Some(event) = self.current_event() else {
+            return "null".to_owned();
+        };
+        format!(
+            "{{\"targetView\":\"view-pc.fetch\",\"primaryNode\":\"pcBit0\",\"pc\":{},\"frame\":{},\"ordinal\":{}}}",
+            event.pc, event.frame, event.ordinal
+        )
+    }
+
+    #[must_use]
+    pub fn follow_bus_json(&self) -> String {
+        let Some(event) = self.current_bus_event() else {
+            return "null".to_owned();
+        };
+        format!(
+            "{{\"targetView\":\"view-bus.arbitration\",\"primaryNode\":\"arb\",\"transaction\":{}}}",
+            bus_json(event)
+        )
+    }
+
+    #[must_use]
+    pub fn follow_dma_json(&self) -> String {
+        let Some(event) = self.current_dma_event() else {
+            return "null".to_owned();
+        };
+        format!(
+            "{{\"targetView\":\"view-gpu.dma\",\"primaryNode\":\"dmaAddr\",\"transaction\":{}}}",
+            bus_json(event)
+        )
+    }
+
+    #[must_use]
+    pub fn follow_vblank_json(&self) -> String {
+        let Some(sample) = self.current_vblank_sample() else {
+            return "null".to_owned();
+        };
+        format!(
+            "{{\"targetView\":\"view-gpu.timing\",\"primaryNode\":\"vblankLatch\",\"frame\":{},\"ordinal\":{},\"pc\":{},\"control\":\"{}\"}}",
+            sample.frame,
+            sample.ordinal,
+            sample.pc,
+            json_escape(&sample.control)
+        )
     }
 
     #[must_use]
@@ -187,9 +275,87 @@ impl Playback {
             .and_then(|trace| trace.micro_cycles.get(self.cursor))
     }
 
+    fn current_key(&self) -> Option<(u32, u16)> {
+        self.current_event().map(event_key)
+    }
+
+    fn current_bus_event(&self) -> Option<&BusTransactionEvent> {
+        let trace = self.trace.as_ref()?;
+        let key = self.current_key()?;
+        trace
+            .bus_transactions
+            .iter()
+            .rev()
+            .find(|event| event_key(event) <= key)
+    }
+
+    fn current_dma_event(&self) -> Option<&BusTransactionEvent> {
+        let trace = self.trace.as_ref()?;
+        let key = self.current_key()?;
+        trace
+            .bus_transactions
+            .iter()
+            .rev()
+            .find(|event| event.kind == BusTransactionKind::Dma && event_key(event) <= key)
+    }
+
+    fn current_vblank_sample(&self) -> Option<&MicroSample> {
+        let trace = self.trace.as_ref()?;
+        let key = self.current_key()?;
+        trace
+            .micro_samples
+            .iter()
+            .rev()
+            .find(|sample| sample.phase == PhaseKind::VBlank && sample_key(sample) <= key)
+    }
+
+    fn current_frame_state(&self) -> Option<&FrameState> {
+        let trace = self.trace.as_ref()?;
+        let frame = self.current_event()?.frame;
+        trace.frames.iter().rev().find(|state| state.frame <= frame)
+    }
+
+    fn next_bus_after_cursor(
+        &self,
+        kind: Option<BusTransactionKind>,
+    ) -> Option<&BusTransactionEvent> {
+        let trace = self.trace.as_ref()?;
+        let key = self.current_key()?;
+        trace.bus_transactions.iter().find(|event| {
+            event_key(event) > key && kind.map_or(true, |expected| event.kind == expected)
+        })
+    }
+
+    fn next_vblank_after_cursor(&self) -> Option<&MicroSample> {
+        let trace = self.trace.as_ref()?;
+        let key = self.current_key()?;
+        trace
+            .micro_samples
+            .iter()
+            .find(|sample| sample.phase == PhaseKind::VBlank && sample_key(sample) > key)
+    }
+
+    fn seek_key(&mut self, target: (u32, u16)) -> bool {
+        self.playing = false;
+        let Some(trace) = &self.trace else {
+            return false;
+        };
+        let Some(index) = trace
+            .micro_cycles
+            .iter()
+            .position(|event| event_key(event) >= target)
+        else {
+            return false;
+        };
+        self.cursor = index;
+        true
+    }
+
     fn is_at_end(&self) -> bool {
         match &self.trace {
-            Some(trace) => trace.micro_cycles.is_empty() || self.cursor >= trace.micro_cycles.len() - 1,
+            Some(trace) => {
+                trace.micro_cycles.is_empty() || self.cursor >= trace.micro_cycles.len() - 1
+            }
             None => true,
         }
     }
@@ -206,6 +372,39 @@ impl Playback {
     }
 }
 
+fn event_key<T: NativeEventKey>(event: &T) -> (u32, u16) {
+    (event.frame(), event.ordinal())
+}
+
+trait NativeEventKey {
+    fn frame(&self) -> u32;
+    fn ordinal(&self) -> u16;
+}
+
+impl NativeEventKey for MicroCycleEvent {
+    fn frame(&self) -> u32 {
+        self.frame
+    }
+
+    fn ordinal(&self) -> u16 {
+        self.ordinal
+    }
+}
+
+impl NativeEventKey for BusTransactionEvent {
+    fn frame(&self) -> u32 {
+        self.frame
+    }
+
+    fn ordinal(&self) -> u16 {
+        self.ordinal
+    }
+}
+
+fn sample_key(sample: &MicroSample) -> (u32, u16) {
+    (sample.frame, sample.ordinal)
+}
+
 fn microcycle_json(event: &MicroCycleEvent) -> String {
     format!(
         "{{\"frame\":{},\"ordinal\":{},\"phase\":\"{}\",\"kind\":\"{}\",\"pc\":{},\"mar\":{},\"mdr\":{},\"ir\":{},\"control\":\"{}\"}}",
@@ -218,6 +417,42 @@ fn microcycle_json(event: &MicroCycleEvent) -> String {
         event.mdr,
         event.ir,
         json_escape(event.control)
+    )
+}
+
+fn bus_json(event: &BusTransactionEvent) -> String {
+    let address = event
+        .address
+        .map_or_else(|| "null".to_owned(), |value| value.to_string());
+    let data = event
+        .data
+        .map_or_else(|| "null".to_owned(), |value| value.to_string());
+    format!(
+        "{{\"frame\":{},\"ordinal\":{},\"pc\":{},\"address\":{},\"data\":{},\"addressSource\":\"{}\",\"dataSource\":\"{}\",\"kind\":\"{}\",\"control\":\"{}\"}}",
+        event.frame,
+        event.ordinal,
+        event.pc,
+        address,
+        data,
+        event.address_source.as_str(),
+        event.data_source.as_str(),
+        event.kind.as_str(),
+        json_escape(event.control)
+    )
+}
+
+fn frame_json(frame: &FrameState) -> String {
+    format!(
+        "{{\"frame\":{},\"playerX\":{},\"fleetX\":{},\"fleetY\":{},\"fleetDir\":{},\"score\":{},\"lives\":{},\"pc\":{},\"vramChecksum\":{}}}",
+        frame.frame,
+        frame.player_x,
+        frame.fleet_x,
+        frame.fleet_y,
+        frame.fleet_dir,
+        frame.score,
+        frame.lives,
+        frame.pc,
+        frame.vram_checksum
     )
 }
 
@@ -241,7 +476,9 @@ mod tests {
         assert!(playback.is_loaded());
         assert!(!playback.is_playing());
         assert!(playback.microcycle_count() > 100);
-        assert!(playback.current_microcycle_json().contains("\"kind\":\"fetch_address\""));
+        assert!(playback
+            .current_microcycle_json()
+            .contains("\"kind\":\"fetch_address\""));
     }
 
     #[test]
@@ -259,7 +496,9 @@ mod tests {
         assert!(playback.load_match("explorer-instruction-step", 16));
         assert!(playback.step_instruction());
         assert!(playback.cursor() > 0);
-        assert!(playback.current_microcycle_json().contains("\"kind\":\"fetch_address\""));
+        assert!(playback
+            .current_microcycle_json()
+            .contains("\"kind\":\"fetch_address\""));
     }
 
     #[test]
@@ -281,5 +520,28 @@ mod tests {
         assert!(playback.seek_frame(2));
         let event = playback.current_event().expect("current event");
         assert!(event.frame >= 2);
+    }
+
+    #[test]
+    fn follow_pc_and_bus_expose_native_state_without_ui_reconstruction() {
+        let mut playback = Playback::new();
+        assert!(playback.load_match("explorer-follow", 16));
+        assert!(playback.follow_pc_json().contains("view-pc.fetch"));
+        assert!(playback.seek_next_bus());
+        assert!(playback.current_bus_json().contains("\"kind\":"));
+        assert!(playback.follow_bus_json().contains("view-bus.arbitration"));
+        assert!(playback.current_frame_json().contains("\"vramChecksum\":"));
+    }
+
+    #[test]
+    fn dma_and_vblank_follow_modes_seek_real_native_events() {
+        let mut playback = Playback::new();
+        assert!(playback.load_match("explorer-follow-video", 32));
+        assert!(playback.seek_next_dma());
+        assert!(playback.follow_dma_json().contains("view-gpu.dma"));
+        assert!(playback.current_bus_json().contains("\"kind\":\"dma\""));
+
+        assert!(playback.seek_next_vblank());
+        assert!(playback.follow_vblank_json().contains("view-gpu.timing"));
     }
 }
