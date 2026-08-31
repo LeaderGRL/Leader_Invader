@@ -18,6 +18,8 @@ pub fn apply_camera(
     config: RenderConfig,
 ) -> String {
     let navigation = build_navigation(topology);
+    annotate_node_membership(&mut svg, &navigation);
+
     let Some(camera_start) = svg.find("<svg class=\"animated\" id=\"camera\"") else {
         return svg;
     };
@@ -72,10 +74,59 @@ pub fn apply_camera(
     svg
 }
 
+fn annotate_node_membership(svg: &mut String, navigation: &NavigationModel) {
+    for module in navigation
+        .modules
+        .iter()
+        .filter(|module| module.level == NavigationLevel::Subsystem)
+    {
+        for node_id in &module.node_ids {
+            insert_node_attribute(
+                svg,
+                node_id,
+                &format!(" data-subsystem=\"{}\"", xml_escape(&module.id)),
+            );
+        }
+    }
+
+    for module in navigation
+        .modules
+        .iter()
+        .filter(|module| module.level == NavigationLevel::Detail)
+    {
+        let density = navigation
+            .view_for_module(&module.id)
+            .map(|view| view.density.as_str())
+            .unwrap_or(DetailDensity::BitExact.as_str());
+        for node_id in &module.node_ids {
+            insert_node_attribute(
+                svg,
+                node_id,
+                &format!(
+                    " data-detail-module=\"{}\" data-detail-density=\"{density}\"",
+                    xml_escape(&module.id)
+                ),
+            );
+        }
+    }
+}
+
+fn insert_node_attribute(svg: &mut String, node_id: &str, attribute: &str) {
+    let marker = format!("<g id=\"node-{}\"", xml_escape(node_id));
+    let Some(start) = svg.find(&marker) else {
+        return;
+    };
+    let insert_at = start + marker.len();
+    svg.insert_str(insert_at, attribute);
+}
+
 fn navigation_overlay(navigation: &NavigationModel) -> String {
     let mut out = String::with_capacity(navigation.views.len() * 360);
-    out.push_str(
-        "<g id=\"navigation-hierarchy\" data-default-view=\"view-machine\" aria-hidden=\"true\">",
+    let _ = write!(
+        out,
+        "<g id=\"navigation-hierarchy\" data-default-view=\"{}\" data-view-count=\"{}\" aria-hidden=\"true\">",
+        xml_escape(&navigation.default_view),
+        navigation.views.len()
     );
     for view in &navigation.views {
         if view.level == NavigationLevel::Machine {
