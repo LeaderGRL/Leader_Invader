@@ -28,9 +28,9 @@ use std::{
 };
 
 use leader_core::{
-    build_topology, validate_call_stack_contract, validate_enemy_shot_bank_contract,
-    validate_final_topology, validate_formation_cadence_contract, validate_memory_map_contract,
-    validate_native_control_authority, validate_shield_bank_contract,
+    build_navigation, build_topology, navigation_violations, validate_call_stack_contract,
+    validate_enemy_shot_bank_contract, validate_final_topology, validate_formation_cadence_contract,
+    validate_memory_map_contract, validate_native_control_authority, validate_shield_bank_contract,
     validate_shift_register_contract, validate_sp_event_stream, validate_video_pipeline_contract,
     MatchTrace, MicroCycleKind, Machine, Topology,
 };
@@ -114,6 +114,16 @@ fn render_native_base(topology: &Topology, trace: &MatchTrace, config: RenderCon
     render(topology, &native_base, config)
 }
 
+fn validate_navigation(topology: &Topology) -> Result<usize, String> {
+    let navigation = build_navigation(topology);
+    let violations = navigation_violations(topology, &navigation);
+    if violations.is_empty() {
+        Ok(navigation.views.len())
+    } else {
+        Err(format!("navigation hierarchy invalid: {}", violations.join("; ")))
+    }
+}
+
 fn validate_native_trace(
     trace: &MatchTrace,
 ) -> Result<
@@ -165,6 +175,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let topology = build_topology();
     let topology_validation = validate_final_topology(&topology)
         .map_err(|error| format!("final topology invalid: {error}"))?;
+    let navigation_views = validate_navigation(&topology)?;
     let trace = run_native_trace(&options.seed, options.max_frames);
     if !trace.finished {
         return Err(format!(
@@ -209,9 +220,10 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let trace_path = options.output.with_file_name("trace.json");
     write(&trace_path, trace.to_json().as_bytes())?;
     println!(
-        "rendered {} nodes / {} links / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} shift events / {} cadence clocks / {} cadence ticks / {} enemy-shot writes / {} max concurrent shots / {} shield-caused shot clears / {} shield damages / {} shield pixels left / {} mapped bus transactions / video {}/{}/{}/{} / {} native overlays / {} bytes -> {}",
+        "rendered {} nodes / {} links / {} navigation views / {} frames / {} kills / {} verified µwords / {} PC increments / {} flag latches / {} control latches / {} SP events / {} CALL pairs / {} shift events / {} cadence clocks / {} cadence ticks / {} enemy-shot writes / {} max concurrent shots / {} shield-caused shot clears / {} shield damages / {} shield pixels left / {} mapped bus transactions / video {}/{}/{}/{} / {} native overlays / {} bytes -> {}",
         topology_validation.nodes,
         topology_validation.links,
+        navigation_views,
         trace.total_frames,
         trace.kills.len(),
         validation.micro_words,
@@ -284,6 +296,7 @@ fn stats_cmd(options: Options) -> Result<(), String> {
     let topology = build_topology();
     let topology_validation = validate_final_topology(&topology)
         .map_err(|error| format!("final topology invalid: {error}"))?;
+    let navigation_views = validate_navigation(&topology)?;
     let trace = run_native_trace(&options.seed, options.max_frames);
     let (
         validation,
@@ -303,6 +316,7 @@ fn stats_cmd(options: Options) -> Result<(), String> {
         .count();
     println!("topology.nodes={}", topology_validation.nodes);
     println!("topology.links={}", topology_validation.links);
+    println!("navigation.views={navigation_views}");
     println!("trace.frames={}", trace.frames.len());
     println!("trace.micro_samples={}", trace.micro_samples.len());
     println!("trace.micro_cycles={}", trace.micro_cycles.len());
