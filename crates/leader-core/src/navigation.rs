@@ -214,7 +214,7 @@ pub fn build_navigation(topology: &Topology) -> NavigationModel {
         |id| matches!(id, "romRowDec" | "romByteDec"),
     );
     push_detail_module(topology, &mut modules, "romsys.pages", "ROM PAGE ARRAY", "romsys", |id| {
-        id.starts_with("romPage")
+        is_numbered_page(id, "romPage")
     });
     push_detail_module(
         topology,
@@ -225,7 +225,7 @@ pub fn build_navigation(topology: &Topology) -> NavigationModel {
         |id| matches!(id, "ramPageDec" | "ramByteDec"),
     );
     push_detail_module(topology, &mut modules, "ramsys.pages", "RAM PAGE ARRAY", "ramsys", |id| {
-        id.starts_with("ramPage")
+        is_numbered_page(id, "ramPage")
     });
     push_detail_module(
         topology,
@@ -247,7 +247,7 @@ pub fn build_navigation(topology: &Topology) -> NavigationModel {
         |id| matches!(id, "vramPageDec" | "vramByteDec"),
     );
     push_detail_module(topology, &mut modules, "vramsys.pages", "VRAM PAGE ARRAY", "vramsys", |id| {
-        id.starts_with("vramPage")
+        is_numbered_page(id, "vramPage")
     });
     push_detail_module(topology, &mut modules, "io.input_irq", "INPUT / TIMER / IRQ", "io", |id| {
         matches!(id, "kbd" | "inputLatch" | "timer" | "irqAnd" | "irqLatch")
@@ -302,6 +302,13 @@ pub fn build_navigation(topology: &Topology) -> NavigationModel {
         modules,
         views,
     }
+}
+
+fn is_numbered_page(id: &str, prefix: &str) -> bool {
+    let Some(suffix) = id.strip_prefix(prefix) else {
+        return false;
+    };
+    !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn push_detail_module<F>(
@@ -457,7 +464,12 @@ mod tests {
             assert_eq!(module.parent.as_deref(), Some("machine"));
             for node in topology.nodes.iter().filter(|node| node.group == group.id) {
                 assert!(module.node_ids.contains(&node.id));
-                assert_eq!(navigation.subsystem_for_node(&node.id).map(|owner| owner.id.as_str()), Some(group.id.as_str()));
+                assert_eq!(
+                    navigation
+                        .subsystem_for_node(&node.id)
+                        .map(|owner| owner.id.as_str()),
+                    Some(group.id.as_str())
+                );
             }
         }
     }
@@ -489,25 +501,48 @@ mod tests {
     }
 
     #[test]
+    fn numbered_page_modules_exclude_decoder_nodes() {
+        let topology = crate::build_topology();
+        let navigation = build_navigation(&topology);
+        for (module_id, decoder) in [
+            ("ramsys.pages", "ramPageDec"),
+            ("vramsys.pages", "vramPageDec"),
+        ] {
+            let module = navigation.module(module_id).expect("page module");
+            assert!(!module.node_ids.iter().any(|node| node == decoder));
+        }
+    }
+
+    #[test]
     fn physical_nodes_have_unambiguous_detail_lookup() {
         let topology = crate::build_topology();
         let navigation = build_navigation(&topology);
         assert_eq!(
-            navigation.detail_for_node("microRom").map(|module| module.id.as_str()),
+            navigation
+                .detail_for_node("microRom")
+                .map(|module| module.id.as_str()),
             Some("decode.microcode")
         );
         assert_eq!(
-            navigation.detail_for_node("shieldAddr").map(|module| module.id.as_str()),
+            navigation
+                .detail_for_node("shieldAddr")
+                .map(|module| module.id.as_str()),
             Some("io.shields")
         );
-        assert_eq!(navigation.detail_for_node("dataBuf"), navigation.module("bus.arbitration"));
+        assert_eq!(
+            navigation.detail_for_node("dataBuf"),
+            navigation.module("bus.arbitration")
+        );
     }
 
     #[test]
     fn duplicate_detail_ownership_is_rejected() {
         let topology = crate::build_topology();
         let mut navigation = build_navigation(&topology);
-        let duplicate = navigation.module("decode.microcode").expect("microcode").clone();
+        let duplicate = navigation
+            .module("decode.microcode")
+            .expect("microcode")
+            .clone();
         let mut duplicate = duplicate;
         duplicate.id = "decode.microcode.duplicate".to_owned();
         navigation.modules.push(duplicate);
@@ -534,7 +569,10 @@ mod tests {
         let navigation = build_navigation(&topology);
         let view = navigation.view_for_module("gpu.timing").expect("timing view");
         let lineage = navigation.lineage_for_view(&view.id);
-        let ids = lineage.iter().map(|entry| entry.module_id.as_str()).collect::<Vec<_>>();
+        let ids = lineage
+            .iter()
+            .map(|entry| entry.module_id.as_str())
+            .collect::<Vec<_>>();
         assert_eq!(ids, vec!["machine", "gpu", "gpu.timing"]);
     }
 
