@@ -200,10 +200,24 @@ fn render_view_boundary(out: &mut String, view: &CameraView) {
 fn camera_css(navigation: &NavigationModel, track: &[CameraCue], total: f32) -> String {
     let mut camera_rules = String::with_capacity(track.len() * 80);
     let mut node_kind_rules = String::with_capacity(track.len() * 32);
+    let mut node_title_rules = String::with_capacity(track.len() * 32);
+    let mut wire_rules = String::with_capacity(track.len() * 32);
+    let mut group_rules = String::with_capacity(track.len() * 32);
+    let mut group_label_rules = String::with_capacity(track.len() * 32);
+
     for cue in track {
         let percent = norm(cue.time, total) * 100.0;
         let matrix = view_matrix(cue.rect);
-        let node_kind_opacity = if cue.detail_lod { 1.0 } else { 0.16 };
+        let machine = cue.view_id == navigation.default_view;
+        let (node_kind_opacity, node_title_opacity, wire_opacity, group_opacity, group_label_opacity) =
+            if cue.detail_lod {
+                (1.0, 1.0, 0.62, 0.22, 0.28)
+            } else if machine {
+                (0.12, 0.56, 0.20, 0.72, 0.82)
+            } else {
+                (0.42, 0.84, 0.36, 0.48, 0.62)
+            };
+
         camera_rules.push_str(&format!(
             "{percent:.6}%{{transform:matrix({:.7},0,0,{:.7},{:.3},{:.3})}}",
             matrix.scale, matrix.scale, matrix.tx, matrix.ty
@@ -211,8 +225,20 @@ fn camera_css(navigation: &NavigationModel, track: &[CameraCue], total: f32) -> 
         node_kind_rules.push_str(&format!(
             "{percent:.6}%{{opacity:{node_kind_opacity:.2}}}"
         ));
+        node_title_rules.push_str(&format!(
+            "{percent:.6}%{{opacity:{node_title_opacity:.2}}}"
+        ));
+        wire_rules.push_str(&format!("{percent:.6}%{{opacity:{wire_opacity:.2}}}"));
+        group_rules.push_str(&format!("{percent:.6}%{{opacity:{group_opacity:.2}}}"));
+        group_label_rules.push_str(&format!(
+            "{percent:.6}%{{opacity:{group_label_opacity:.2}}}"
+        ));
     }
-    node_kind_rules.push_str("100%{opacity:.16}");
+    node_kind_rules.push_str("100%{opacity:.12}");
+    node_title_rules.push_str("100%{opacity:.56}");
+    wire_rules.push_str("100%{opacity:.20}");
+    group_rules.push_str("100%{opacity:.72}");
+    group_label_rules.push_str("100%{opacity:.82}");
 
     let mut focus_css = String::with_capacity(navigation.views.len() * track.len() * 28);
     for (index, view) in navigation
@@ -236,7 +262,7 @@ fn camera_css(navigation: &NavigationModel, track: &[CameraCue], total: f32) -> 
     }
 
     format!(
-        "<style>@keyframes leaderCamera{{{camera_rules}}}@keyframes leaderNodeKindLod{{{node_kind_rules}}}{focus_css}#camera-world{{transform-box:view-box;transform-origin:0 0;animation:leaderCamera {total:.3}s linear infinite}}.nav-boundary{{pointer-events:none;opacity:.05}}.nav-boundary rect{{fill:#08131d;fill-opacity:.08;vector-effect:non-scaling-stroke}}.nav-boundary text{{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:2px;vector-effect:non-scaling-stroke}}.nav-subsystem rect{{stroke:#44677f;stroke-width:2;stroke-dasharray:12 10}}.nav-subsystem text{{fill:#5f7f95;font-size:13px;font-weight:700}}.nav-detail rect{{stroke:#80a7bd;stroke-width:1.5;stroke-dasharray:7 7}}.nav-detail text{{fill:#91b5c7;font-size:11px;font-weight:800}}.node-kind{{animation:leaderNodeKindLod {total:.3}s linear infinite}}</style>"
+        "<style>@keyframes leaderCamera{{{camera_rules}}}@keyframes leaderNodeKindLod{{{node_kind_rules}}}@keyframes leaderNodeTitleLod{{{node_title_rules}}}@keyframes leaderWireLod{{{wire_rules}}}@keyframes leaderGroupLod{{{group_rules}}}@keyframes leaderGroupLabelLod{{{group_label_rules}}}{focus_css}#camera-world{{transform-box:view-box;transform-origin:0 0;animation:leaderCamera {total:.3}s linear infinite}}.nav-boundary{{pointer-events:none;opacity:.05}}.nav-boundary rect{{fill:#08131d;fill-opacity:.08;vector-effect:non-scaling-stroke}}.nav-boundary text{{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:2px;vector-effect:non-scaling-stroke}}.nav-subsystem rect{{stroke:#44677f;stroke-width:2;stroke-dasharray:12 10}}.nav-subsystem text{{fill:#5f7f95;font-size:13px;font-weight:700}}.nav-detail rect{{stroke:#80a7bd;stroke-width:1.5;stroke-dasharray:7 7}}.nav-detail text{{fill:#91b5c7;font-size:11px;font-weight:800}}.node-kind{{animation:leaderNodeKindLod {total:.3}s linear infinite}}.node-title{{animation:leaderNodeTitleLod {total:.3}s linear infinite}}.wire{{animation:leaderWireLod {total:.3}s linear infinite}}.group{{animation:leaderGroupLod {total:.3}s linear infinite}}.group-label{{animation:leaderGroupLabelLod {total:.3}s linear infinite}}</style>"
     )
 }
 
@@ -522,6 +548,8 @@ mod tests {
         assert!(output.contains("viewBox=\"0 0 864 484\""));
         assert!(output.contains("@keyframes leaderCamera"));
         assert!(output.contains("@keyframes leaderNodeKindLod"));
+        assert!(output.contains("@keyframes leaderWireLod"));
+        assert!(output.contains("@keyframes leaderNodeTitleLod"));
         assert!(output.contains("id=\"camera-world\""));
         assert!(output.contains("id=\"navigation-hierarchy\""));
         assert!(output.contains("id=\"navigation-scenes\""));
