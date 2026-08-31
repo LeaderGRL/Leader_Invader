@@ -6,8 +6,9 @@ pub struct NativeSvgValidation {
     pub bytes: usize,
 }
 
-const REQUIRED_GROUPS: [&str; 18] = [
+const REQUIRED_GROUPS: [&str; 19] = [
     "navigation-hierarchy",
+    "navigation-scenes",
     "f3-pc",
     "f3-native-decoder",
     "f3-microcode",
@@ -27,7 +28,7 @@ const REQUIRED_GROUPS: [&str; 18] = [
     "f3-timing",
 ];
 
-const REQUIRED_METADATA: [&str; 53] = [
+const REQUIRED_METADATA: [&str; 62] = [
     "data-view=",
     "data-module=",
     "data-parent=",
@@ -36,6 +37,15 @@ const REQUIRED_METADATA: [&str; 53] = [
     "data-subsystem=",
     "data-detail-module=",
     "data-detail-density=",
+    "data-scene-count=",
+    "data-scene-time=",
+    "data-scene-progress=",
+    "data-scene-view=",
+    "data-scene-detail=",
+    "data-scene-x=",
+    "data-scene-y=",
+    "data-scene-w=",
+    "data-scene-h=",
     "data-pc-before=",
     "data-opcode=",
     "data-ucontrol=",
@@ -83,7 +93,7 @@ const REQUIRED_METADATA: [&str; 53] = [
     "data-shield-source=",
 ];
 
-const REQUIRED_NAVIGATION_COVERAGE: [&str; 14] = [
+const REQUIRED_NAVIGATION_COVERAGE: [&str; 18] = [
     "data-default-view=\"view-machine\"",
     "data-module=\"pc.fetch\"",
     "data-module=\"decode.microcode\"",
@@ -98,6 +108,10 @@ const REQUIRED_NAVIGATION_COVERAGE: [&str; 14] = [
     "data-detail-module=\"decode.microcode\"",
     "data-detail-module=\"io.shields\"",
     "data-detail-density=\"bit_exact\"",
+    "data-scene-view=\"view-decode.microcode\"",
+    "data-scene-view=\"view-io.shields\"",
+    "data-scene-detail=\"true\"",
+    "data-scene-detail=\"false\"",
 ];
 
 const REQUIRED_BUS_COVERAGE: [&str; 33] = [
@@ -247,6 +261,18 @@ mod tests {
         );
         let error = validate_native_svg_contract(&svg)
             .expect_err("physical node hierarchy membership must be preserved");
+        assert!(error.contains("missing required navigation coverage marker"));
+    }
+
+    #[test]
+    fn deterministic_scene_cues_are_required() {
+        let mut svg = valid_contract_fixture();
+        svg = svg.replace(
+            "data-scene-view=\"view-decode.microcode\"",
+            "data-scene-view=\"view-missing\"",
+        );
+        let error = validate_native_svg_contract(&svg)
+            .expect_err("camera scene metadata must preserve real hierarchy views");
         assert!(error.contains("missing required navigation coverage marker"));
     }
 
