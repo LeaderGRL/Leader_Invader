@@ -28,7 +28,7 @@ const REQUIRED_GROUPS: [&str; 19] = [
     "f3-timing",
 ];
 
-const REQUIRED_METADATA: [&str; 62] = [
+const REQUIRED_METADATA: [&str; 65] = [
     "data-view=",
     "data-module=",
     "data-parent=",
@@ -37,6 +37,9 @@ const REQUIRED_METADATA: [&str; 62] = [
     "data-subsystem=",
     "data-detail-module=",
     "data-detail-density=",
+    "data-target-view=",
+    "data-parent-view=",
+    "data-view-path=",
     "data-scene-count=",
     "data-scene-time=",
     "data-scene-progress=",
@@ -93,7 +96,7 @@ const REQUIRED_METADATA: [&str; 62] = [
     "data-shield-source=",
 ];
 
-const REQUIRED_NAVIGATION_COVERAGE: [&str; 18] = [
+const REQUIRED_NAVIGATION_COVERAGE: [&str; 21] = [
     "data-default-view=\"view-machine\"",
     "data-module=\"pc.fetch\"",
     "data-module=\"decode.microcode\"",
@@ -108,6 +111,9 @@ const REQUIRED_NAVIGATION_COVERAGE: [&str; 18] = [
     "data-detail-module=\"decode.microcode\"",
     "data-detail-module=\"io.shields\"",
     "data-detail-density=\"bit_exact\"",
+    "data-target-view=\"view-decode.microcode\"",
+    "data-parent-view=\"view-decode\"",
+    "data-view-path=\"view-machine/view-decode/view-decode.microcode\"",
     "data-scene-view=\"view-decode.microcode\"",
     "data-scene-view=\"view-io.shields\"",
     "data-scene-detail=\"true\"",
@@ -261,6 +267,18 @@ mod tests {
         );
         let error = validate_native_svg_contract(&svg)
             .expect_err("physical node hierarchy membership must be preserved");
+        assert!(error.contains("missing required navigation coverage marker"));
+    }
+
+    #[test]
+    fn interactive_node_targets_are_required() {
+        let mut svg = valid_contract_fixture();
+        svg = svg.replace(
+            "data-target-view=\"view-decode.microcode\"",
+            "data-target-view=\"view-missing\"",
+        );
+        let error = validate_native_svg_contract(&svg)
+            .expect_err("physical nodes must preserve their interactive navigation targets");
         assert!(error.contains("missing required navigation coverage marker"));
     }
 
