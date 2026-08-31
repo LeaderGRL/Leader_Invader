@@ -144,6 +144,7 @@ pub fn validate_final_topology(topology: &Topology) -> Result<TopologyValidation
             require_path(topology, &previous_carry, &and_b, "ALU carry")?;
         }
     }
+    require_path(topology, "orC7", "flagC", "ALU architectural carry")?;
 
     for page in 0..32 {
         let node = format!("romPage{page}");
@@ -266,6 +267,16 @@ mod tests {
             .retain(|link| !(link.from == "logicOr5" && link.to == "muxR5"));
         let error = validate_final_topology(&topology).expect_err("missing logical path must fail");
         assert!(error.contains("logicOr5 -> muxR5"));
+    }
+
+    #[test]
+    fn missing_architectural_carry_path_is_detected() {
+        let mut topology = build_topology();
+        topology
+            .links
+            .retain(|link| !(link.from == "orC7" && link.to == "flagC"));
+        let error = validate_final_topology(&topology).expect_err("missing carry flag path must fail");
+        assert!(error.contains("orC7 -> flagC"));
     }
 
     #[test]
