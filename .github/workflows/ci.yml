@@ -30,6 +30,8 @@ jobs:
         run: cargo test --workspace
       - name: Check WASM explorer
         run: cargo check -p leader-explorer --target wasm32-unknown-unknown
+      - name: Check browser shell syntax
+        run: node --check explorer-web/app.js
       - name: Clippy
         run: cargo clippy --workspace --all-targets
       - name: Generate smoke artifact
