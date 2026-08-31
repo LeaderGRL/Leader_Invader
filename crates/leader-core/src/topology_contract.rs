@@ -60,54 +60,16 @@ pub fn validate_final_topology(topology: &Topology) -> Result<TopologyValidation
     }
 
     for required in [
-        "microRom",
-        "ctrlMarLoad",
-        "addrLoLatch",
-        "addrHiLatch",
-        "conditionLatch",
-        "pcSelectLatch",
-        "regSelectLatch",
-        "returnDataMux",
-        "stackRam",
-        "dmaAddr",
-        "dmaData",
-        "xCounter",
-        "yCounter",
-        "pixelMux",
-        "scanShift",
-        "hsync",
-        "vsync",
-        "vblankLatch",
-        "vblankWaitGate",
-        "display",
-        "shiftHi",
-        "shiftLo",
-        "shiftOffset",
-        "shiftMux",
-        "shiftOut",
-        "formationAlive",
-        "formationDivider",
-        "formationCounter",
-        "formationTick",
-        "enemyShotAlloc",
-        "enemyShotCooldown",
-        "enemyShot0X",
-        "enemyShot0Y",
-        "enemyShot0Active",
-        "enemyShot1X",
-        "enemyShot1Y",
-        "enemyShot1Active",
-        "enemyShot2X",
-        "enemyShot2Y",
-        "enemyShot2Active",
-        "shieldAddr",
-        "shieldMask",
-        "shieldWriteEnable",
-        "shieldRam0",
-        "shieldRam1",
-        "shieldRam2",
-        "shieldRam3",
-        "shieldVideoMux",
+        "microRom", "ctrlMarLoad", "addrLoLatch", "addrHiLatch", "conditionLatch",
+        "pcSelectLatch", "regSelectLatch", "returnDataMux", "stackRam", "dmaAddr",
+        "dmaData", "xCounter", "yCounter", "pixelMux", "scanShift", "hsync", "vsync",
+        "vblankLatch", "vblankWaitGate", "display", "shiftHi", "shiftLo", "shiftOffset",
+        "shiftMux", "shiftOut", "formationAlive", "formationDivider", "formationCounter",
+        "formationTick", "enemyShotAlloc", "enemyShotCooldown", "enemyShot0X",
+        "enemyShot0Y", "enemyShot0Active", "enemyShot1X", "enemyShot1Y",
+        "enemyShot1Active", "enemyShot2X", "enemyShot2Y", "enemyShot2Active",
+        "shieldAddr", "shieldMask", "shieldWriteEnable", "shieldRam0", "shieldRam1",
+        "shieldRam2", "shieldRam3", "shieldVideoMux",
     ] {
         if topology.node(required).is_none() {
             return Err(format!("final topology missing required node {required}"));
@@ -138,21 +100,40 @@ pub fn validate_final_topology(topology: &Topology) -> Result<TopologyValidation
         let and_a = format!("andA{bit}");
         let and_b = format!("andB{bit}");
         let or_c = format!("orC{bit}");
+        let pass_r = format!("passR{bit}");
+        let logic_and = format!("logicAnd{bit}");
+        let logic_or = format!("logicOr{bit}");
         let mux_r = format!("muxR{bit}");
-        for (from, to) in [
-            ("readMuxA", xor_a.as_str()),
-            ("readMuxB", xor_a.as_str()),
-            ("readMuxA", and_a.as_str()),
-            ("readMuxB", and_a.as_str()),
-            (xor_a.as_str(), xor_b.as_str()),
-            (xor_a.as_str(), and_b.as_str()),
-            (and_a.as_str(), or_c.as_str()),
-            (and_b.as_str(), or_c.as_str()),
-            (xor_b.as_str(), mux_r.as_str()),
-            ("aluSel", mux_r.as_str()),
-            (mux_r.as_str(), "writeBus"),
+
+        for required in [&pass_r, &logic_and, &logic_or] {
+            if topology.node(required).is_none() {
+                return Err(format!("final topology missing required ALU function node {required}"));
+            }
+        }
+
+        for (from, to, family) in [
+            ("readMuxA", xor_a.as_str(), "ALU adder A"),
+            ("readMuxB", xor_a.as_str(), "ALU adder B"),
+            ("readMuxA", and_a.as_str(), "ALU generate A"),
+            ("readMuxB", and_a.as_str(), "ALU generate B"),
+            (xor_a.as_str(), xor_b.as_str(), "ALU sum"),
+            (xor_a.as_str(), and_b.as_str(), "ALU propagate"),
+            (and_a.as_str(), or_c.as_str(), "ALU carry generate"),
+            (and_b.as_str(), or_c.as_str(), "ALU carry propagate"),
+            ("readMuxA", pass_r.as_str(), "ALU pass"),
+            ("readMuxA", logic_and.as_str(), "ALU logical AND A"),
+            ("readMuxB", logic_and.as_str(), "ALU logical AND B"),
+            ("readMuxA", logic_or.as_str(), "ALU logical OR A"),
+            ("readMuxB", logic_or.as_str(), "ALU logical OR B"),
+            (pass_r.as_str(), mux_r.as_str(), "ALU PASS result"),
+            (logic_and.as_str(), mux_r.as_str(), "ALU AND result"),
+            (logic_or.as_str(), mux_r.as_str(), "ALU OR result"),
+            (xor_a.as_str(), mux_r.as_str(), "ALU XOR result"),
+            (xor_b.as_str(), mux_r.as_str(), "ALU arithmetic result"),
+            ("aluSel", mux_r.as_str(), "ALU selection"),
+            (mux_r.as_str(), "writeBus", "ALU writeback"),
         ] {
-            require_path(topology, from, to, "ALU")?;
+            require_path(topology, from, to, family)?;
         }
         if bit > 0 {
             let previous_carry = format!("orC{}", bit - 1);
@@ -206,8 +187,8 @@ mod tests {
     fn final_runtime_topology_is_closed_unique_and_inside_groups() {
         let topology = build_topology();
         let validation = validate_final_topology(&topology).expect("valid final topology");
-        assert!(validation.nodes >= 466);
-        assert!(validation.links >= 800);
+        assert!(validation.nodes >= 490);
+        assert!(validation.links >= 860);
     }
 
     #[test]
@@ -262,6 +243,16 @@ mod tests {
             .retain(|link| !(link.from == "andB3" && link.to == "orC3"));
         let error = validate_final_topology(&topology).expect_err("missing ALU path must fail");
         assert!(error.contains("andB3 -> orC3"));
+    }
+
+    #[test]
+    fn missing_logical_result_path_is_detected() {
+        let mut topology = build_topology();
+        topology
+            .links
+            .retain(|link| !(link.from == "logicOr5" && link.to == "muxR5"));
+        let error = validate_final_topology(&topology).expect_err("missing logical path must fail");
+        assert!(error.contains("logicOr5 -> muxR5"));
     }
 
     #[test]
