@@ -23,10 +23,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
       - name: Normalize formatting in CI workspace
         run: cargo fmt --all
       - name: Test
         run: cargo test --workspace
+      - name: Check WASM explorer
+        run: cargo check -p leader-explorer --target wasm32-unknown-unknown
       - name: Clippy
         run: cargo clippy --workspace --all-targets
       - name: Generate smoke artifact
