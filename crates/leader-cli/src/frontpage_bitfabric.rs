@@ -63,12 +63,11 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace) -> String
         svg.insert_str(index, &fabric);
     }
 
-    // Keep the older byte-cell layer as a very faint address lattice behind
-    // the true bit-cell fabric. The page-local bit pattern becomes the visual
-    // density authority while byte boundaries remain readable on close zoom.
+    // Keep the older byte-cell layer as a faint address lattice behind the
+    // true bit-cell fabric while preserving a single valid opacity attribute.
     svg = svg.replace(
-        "data-byte-cells=\"256\" d=",
-        "opacity=\".08\" data-byte-cells=\"256\" d=",
+        "opacity=\".30\" data-memory-page=",
+        "opacity=\".08\" data-memory-page=",
     );
     svg
 }
@@ -249,18 +248,19 @@ mod tests {
     fn bitfabric_adds_all_memory_bit_sites_without_dom_explosion() {
         let topology = build_topology();
         let trace = Machine::run_match("v2-bitfabric", 5000);
-        let source = crate::frontpage::render(&topology, &trace, RenderConfig::default());
+        let source = crate::frontpage::physical_die::render(&topology, &trace, RenderConfig::default());
         let output = apply(source, &topology, &trace);
         assert!(output.contains("id=\"v2-memory-bitcell-fabric\""));
         assert_eq!(output.matches("data-bitcell-sites=\"2048\"").count(), 136);
         assert!(output.contains("aria-label=\"278528 physical memory bit-cell sites\""));
+        assert!(!output.contains("opacity=\".08\" opacity="));
     }
 
     #[test]
     fn microcode_fabric_is_256_by_24_and_uses_native_control_words() {
         let topology = build_topology();
         let trace = Machine::run_match("v2-microcode-fabric", 5000);
-        let source = crate::frontpage::render(&topology, &trace, RenderConfig::default());
+        let source = crate::frontpage::physical_die::render(&topology, &trace, RenderConfig::default());
         let output = apply(source, &topology, &trace);
         assert!(output.contains("data-microcode-rows=\"256\""));
         assert!(output.contains("data-microcode-bits=\"24\""));
