@@ -5,10 +5,13 @@ use leader_core::{
 };
 use leader_svg::RenderConfig;
 
+// Keep a dedicated right-hand sidebar for the CRT. The hardware camera never
+// renders underneath the display, eliminating panel/topology overlap while
+// preserving the full 1200x675 GitHub canvas.
 const VIEWPORT: Rect = Rect {
     x: 24.0,
     y: 92.0,
-    w: 1152.0,
+    w: 900.0,
     h: 548.0,
 };
 
@@ -131,28 +134,28 @@ fn camera_keys(topology: &Topology, trace: &MatchTrace, config: RenderConfig) ->
         8.0,
         0.0,
     );
-    let cpu = focus_groups(topology, &["pc", "decode"], 90.0, 0.78).unwrap_or(overview);
+    let cpu = focus_groups(topology, &["pc", "decode"], 70.0, 0.64).unwrap_or(overview);
     let micro = topology
         .node("microRom")
-        .map(|node| fit_pose(node.bounds, 170.0, 1.35))
+        .map(|node| fit_pose(node.bounds, 12.0, 3.8))
         .unwrap_or(cpu);
     let alu = topology
         .group("alu")
-        .map(|group| fit_pose(group.bounds, 80.0, 0.62))
+        .map(|group| fit_pose(group.bounds, 55.0, 0.52))
         .unwrap_or(overview);
     let rom = memory_focus(topology, trace, config, MemoryOwner::Rom, 15.0)
-        .or_else(|| topology.group("romsys").map(|group| fit_pose(group.bounds, 60.0, 0.52)))
+        .or_else(|| topology.group("romsys").map(|group| fit_pose(group.bounds, 45.0, 0.42)))
         .unwrap_or(overview);
     let ram = memory_focus(topology, trace, config, MemoryOwner::Ram, 22.0)
-        .or_else(|| topology.group("ramsys").map(|group| fit_pose(group.bounds, 60.0, 0.48)))
+        .or_else(|| topology.group("ramsys").map(|group| fit_pose(group.bounds, 45.0, 0.40)))
         .unwrap_or(overview);
     let vram = memory_focus(topology, trace, config, MemoryOwner::Vram, 37.0)
-        .or_else(|| topology.group("vramsys").map(|group| fit_pose(group.bounds, 60.0, 0.68)))
+        .or_else(|| topology.group("vramsys").map(|group| fit_pose(group.bounds, 45.0, 0.58)))
         .unwrap_or(overview);
     let late_memory = memory_focus_any(topology, trace, config, 50.0).unwrap_or(ram);
     let gpu = topology
         .group("gpu")
-        .map(|group| fit_pose(group.bounds, 70.0, 0.58))
+        .map(|group| fit_pose(group.bounds, 50.0, 0.50))
         .unwrap_or(overview);
 
     let total = config.total();
@@ -229,7 +232,7 @@ fn memory_focus(
         MemoryOwner::Mmio | MemoryOwner::Unmapped => return None,
     };
     let node = topology.node(&format!("{prefix}{}", event.1.page))?;
-    Some(fit_pose(node.bounds, 155.0, 1.30))
+    Some(fit_pose(node.bounds, 10.0, 3.0))
 }
 
 fn memory_focus_any(
@@ -256,7 +259,7 @@ fn memory_focus_any(
         MemoryOwner::Mmio | MemoryOwner::Unmapped => return None,
     };
     let node = topology.node(&format!("{prefix}{}", event.0.page))?;
-    Some(fit_pose(node.bounds, 150.0, 1.32))
+    Some(fit_pose(node.bounds, 10.0, 3.0))
 }
 
 fn fit_pose(bounds: Rect, padding: f32, max_scale: f32) -> Pose {
@@ -318,5 +321,6 @@ mod tests {
         assert!((keys.first().unwrap().pose.scale - keys.last().unwrap().pose.scale).abs() < 0.000_1);
         assert_eq!(keys.first().unwrap().time, 0.0);
         assert!((keys.last().unwrap().time - config.total()).abs() < 0.001);
+        assert!(keys.iter().any(|key| key.pose.scale >= 2.8));
     }
 }
