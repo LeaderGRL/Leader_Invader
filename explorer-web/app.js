@@ -135,6 +135,17 @@ function activityLinks(activity) {
   return parseJson(activityResolver.links_json(activity.phase, activity.address ?? -1, activity.data ?? -1)) ?? [];
 }
 
+function currentBusLinks(bus) {
+  if (!bus || bus.address === null || bus.address === undefined) return [];
+  return parseJson(activityResolver.bus_links_json(
+    bus.address,
+    bus.data ?? -1,
+    bus.addressSource ?? "",
+    bus.dataSource ?? "",
+    bus.kind ?? "",
+  )) ?? [];
+}
+
 function currentBitChanges() {
   return parseJson(playback.current_bit_changes_json()) ?? [];
 }
@@ -220,6 +231,52 @@ function applyActivity(activity) {
       "text-anchor": "middle",
     });
     label.textContent = valueText;
+    linkLayer.append(label);
+  }
+}
+
+function clearBusLinks() {
+  svg.querySelectorAll(".has-bus-link-value").forEach((path) => {
+    path.classList.remove(
+      "has-bus-link-value",
+      "bus-link-address",
+      "bus-link-data",
+      "bus-link-control",
+    );
+    delete path.dataset.busRank;
+    delete path.dataset.busStage;
+    delete path.dataset.busValue;
+    delete path.dataset.busWidth;
+  });
+  svg.querySelectorAll(".bus-link-value").forEach((element) => element.remove());
+}
+
+function applyBusLinks(values) {
+  clearBusLinks();
+  if (!Array.isArray(values) || values.length === 0) return;
+  const camera = parseJson(explorer.camera_json());
+  const cameraScale = camera ? camera.w / Math.max(svg.clientWidth, 1) : Number.POSITIVE_INFINITY;
+  const linkLayer = svg.querySelector(".link-layer");
+  for (const state of values) {
+    const path = svg.querySelector(`[data-link-id="${CSS.escape(state.id)}"]`);
+    if (!path) continue;
+    path.classList.add("has-bus-link-value", `bus-link-${state.signal}`);
+    path.dataset.busRank = String(state.rank);
+    path.dataset.busStage = state.stage;
+    path.dataset.busValue = String(state.value);
+    path.dataset.busWidth = String(state.width);
+    if (!linkLayer || cameraScale >= 1.45 || state.width <= 1) continue;
+    const length = path.getTotalLength();
+    if (!Number.isFinite(length) || length <= 0) continue;
+    const point = path.getPointAtLength(length * 0.5);
+    const label = makeSvg("text", {
+      x: point.x,
+      y: point.y - Math.max(13, cameraScale * 5),
+      class: `bus-link-value signal-value-${state.signal}`,
+      "text-anchor": "middle",
+    });
+    const valueText = signalValueText(state, cameraScale);
+    label.textContent = `${valueText ?? state.value} · r${state.rank}`;
     linkLayer.append(label);
   }
 }
@@ -356,8 +413,9 @@ function applyBitChanges(changes) {
   }
 }
 
-function applyLiveState(activity, aluValues, aluLinks, changes) {
+function applyLiveState(activity, aluValues, aluLinks, busLinks, changes) {
   applyActivity(activity);
+  applyBusLinks(busLinks);
   applyAluLinks(aluLinks);
   applyAluValues(aluValues);
   applyBitChanges(changes);
@@ -413,10 +471,12 @@ function renderGraph() {
   }
   svg.append(linkLayer, nodeLayer);
   renderNavigation(currentView, crumbs, children);
+  const bus = parseJson(playback.current_bus_json());
   applyLiveState(
     parseJson(playback.current_activity_json()),
     currentAluValues(),
     currentAluLinks(),
+    currentBusLinks(bus),
     currentBitChanges(),
   );
 }
@@ -474,8 +534,11 @@ function renderPlayback() {
   const aluValues = currentAluValues();
   const aluLinks = currentAluLinks();
   const bitChanges = currentBitChanges();
-  renderCrt(currentVram());
-  applyLiveState(activity, aluValues, aluLinks, bitChanges);
+  const bus = parseJson(playback.current_bus_json());
+  const busLinks = currentBusLinks(bus);
+  const vram = currentVram();
+  renderCrt(vram);
+  applyLiveState(activity, aluValues, aluLinks, busLinks, bitChanges);
   if (!summary) {
     playbackState.textContent = "No trace loaded.";
     progressFill.style.width = "0%";
@@ -486,9 +549,7 @@ function renderPlayback() {
     return;
   }
   const micro = parseJson(playback.current_microcycle_json());
-  const bus = parseJson(playback.current_bus_json());
   const frame = parseJson(playback.current_frame_json());
-  const vram = currentVram();
   const lastCursor = Math.max(0, summary.microcycles - 1);
   timelineScrubber.disabled = false;
   timelineScrubber.max = String(lastCursor);
@@ -501,6 +562,7 @@ function renderPlayback() {
   const aluOnes = aluValues.filter((state) => state.value).length;
   const selectedAluLinks = aluLinks.filter((state) => state.selected);
   const maxAluRank = selectedAluLinks.reduce((max, state) => Math.max(max, state.rank), 0);
+  const maxBusRank = busLinks.reduce((max, state) => Math.max(max, state.rank), 0);
   const lines = [
     `seed      ${summary.seed}`,
     `cursor    ${summary.cursor}/${lastCursor}`,
@@ -516,6 +578,7 @@ function renderPlayback() {
     `bus data  ${bus ? hex(bus.data, 2) : "—"}`,
     `addr src  ${bus?.addressSource ?? "—"}`,
     `data src  ${bus?.dataSource ?? "—"}`,
+    `bus path  ${busLinks.length ? `${busLinks.length} links · rank ${maxBusRank}` : "—"}`,
     `active    ${activity?.nodes?.length ?? 0} nodes / ${links.length} links`,
     `ALU gates ${aluValues.length ? `${aluOnes}/${aluValues.length} high` : "—"}`,
     `ALU path  ${aluLinks.length ? `${selectedAluLinks.length}/${aluLinks.length} selected · rank ${maxAluRank}` : "—"}`,
