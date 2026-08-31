@@ -14,6 +14,10 @@ const playbackState = document.querySelector("#playback-state");
 const progressFill = document.querySelector("#progress-fill");
 const timelineScrubber = document.querySelector("#timeline-scrubber");
 const timelineLabel = document.querySelector("#timeline-label");
+const crtCanvas = document.querySelector("#crt-canvas");
+const crtContext = crtCanvas.getContext("2d", { alpha: false });
+const crtFrame = document.querySelector("#crt-frame");
+const crtState = document.querySelector("#crt-state");
 const NS = "http://www.w3.org/2000/svg";
 
 const activePointers = new Map();
@@ -22,6 +26,7 @@ let tapTravel = 0;
 let pinchState = null;
 let rafHandle = 0;
 let highlightedNode = null;
+let renderedVramChecksum = null;
 
 function parseJson(value) {
   try {
@@ -140,6 +145,49 @@ function currentAluValues() {
 
 function currentAluLinks() {
   return parseJson(playback.current_alu_links_json()) ?? [];
+}
+
+function currentVram() {
+  return parseJson(playback.current_vram_json());
+}
+
+function renderCrt(vram) {
+  if (
+    !vram
+    || vram.width !== 128
+    || vram.height !== 96
+    || vram.format !== "1bpp-msb-first-row-major"
+    || !Array.isArray(vram.bytes)
+    || vram.bytes.length !== (vram.width * vram.height) / 8
+  ) {
+    if (renderedVramChecksum !== null) {
+      crtContext.fillStyle = "#000";
+      crtContext.fillRect(0, 0, crtCanvas.width, crtCanvas.height);
+    }
+    renderedVramChecksum = null;
+    crtFrame.value = "—";
+    crtState.textContent = "No native raster loaded.";
+    return;
+  }
+
+  crtFrame.value = `frame ${vram.frame}`;
+  crtState.textContent = `${vram.format}\nchecksum ${hex(vram.checksum, 8)}\n${vram.bytes.length} native bytes`;
+  if (renderedVramChecksum === vram.checksum) return;
+
+  crtCanvas.width = vram.width;
+  crtCanvas.height = vram.height;
+  const image = crtContext.createImageData(vram.width, vram.height);
+  for (let index = 0; index < vram.width * vram.height; index += 1) {
+    const byte = vram.bytes[index >> 3];
+    const lit = ((byte >> (7 - (index & 7))) & 1) !== 0;
+    const offset = index * 4;
+    image.data[offset] = lit ? 180 : 0;
+    image.data[offset + 1] = lit ? 255 : 7;
+    image.data[offset + 2] = lit ? 190 : 3;
+    image.data[offset + 3] = 255;
+  }
+  crtContext.putImageData(image, 0, 0);
+  renderedVramChecksum = vram.checksum;
 }
 
 function applyActivity(activity) {
@@ -426,6 +474,7 @@ function renderPlayback() {
   const aluValues = currentAluValues();
   const aluLinks = currentAluLinks();
   const bitChanges = currentBitChanges();
+  renderCrt(currentVram());
   applyLiveState(activity, aluValues, aluLinks, bitChanges);
   if (!summary) {
     playbackState.textContent = "No trace loaded.";
@@ -439,6 +488,7 @@ function renderPlayback() {
   const micro = parseJson(playback.current_microcycle_json());
   const bus = parseJson(playback.current_bus_json());
   const frame = parseJson(playback.current_frame_json());
+  const vram = currentVram();
   const lastCursor = Math.max(0, summary.microcycles - 1);
   timelineScrubber.disabled = false;
   timelineScrubber.max = String(lastCursor);
@@ -469,6 +519,7 @@ function renderPlayback() {
     `active    ${activity?.nodes?.length ?? 0} nodes / ${links.length} links`,
     `ALU gates ${aluValues.length ? `${aluOnes}/${aluValues.length} high` : "—"}`,
     `ALU path  ${aluLinks.length ? `${selectedAluLinks.length}/${aluLinks.length} selected · rank ${maxAluRank}` : "—"}`,
+    `VRAM      ${vram ? `frame ${vram.frame} · ${hex(vram.checksum, 8)}` : "—"}`,
     `bit flips ${bitChanges.length}`,
     `mutations ${mutations || "—"}`,
     `score     ${frame?.score ?? "—"}`,
@@ -567,6 +618,7 @@ document.querySelector("#fit-button").addEventListener("click", () => { explorer
 document.querySelector("#load-button").addEventListener("click", () => {
   const seed = document.querySelector("#seed-input").value.trim();
   const frames = Number(document.querySelector("#frames-input").value);
+  renderedVramChecksum = null;
   playback.load_match(seed, Math.max(1, Math.trunc(frames)));
   renderPlayback();
 });
