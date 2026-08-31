@@ -13,6 +13,10 @@ mod quality {
     include!("frontpage_quality.rs");
 }
 
+mod crt_contract {
+    include!("frontpage_crt_contract.rs");
+}
+
 mod camera {
     include!("frontpage_camera.rs");
 }
@@ -35,13 +39,15 @@ pub const fn render_config() -> RenderConfig {
 }
 
 /// Render the complete physical machine, enrich it with true memory/microcode
-/// bit-cell fabrics, enforce scale-independent readability, then apply a
-/// trace-driven camera without altering topology or native signal propagation.
+/// bit-cell fabrics, enforce scale-independent readability and CRT continuity,
+/// then apply a trace-driven camera without altering topology or native signal
+/// propagation.
 #[must_use]
 pub fn render(topology: &Topology, trace: &MatchTrace, _legacy_config: RenderConfig) -> String {
     let config = render_config();
     let svg = physical_die::render(topology, trace, config);
     let svg = bitfabric::apply(svg, topology, trace);
     let svg = quality::apply(svg, topology);
+    let svg = crt_contract::apply(svg, config);
     camera::apply(svg, topology, trace, config)
 }
