@@ -321,7 +321,10 @@ mod tests {
             .any(|value| value.node_id == "passR0" && value.value));
         assert!(values
             .iter()
-            .any(|value| value.node_id == "logicOr4" && value.value));
+            .any(|value| value.node_id == "logicOr0" && value.value));
+        assert!(values
+            .iter()
+            .any(|value| value.node_id == "logicOr4" && !value.value));
         assert!(values
             .iter()
             .any(|value| value.node_id == "muxR4" && value.value));
@@ -361,11 +364,14 @@ mod tests {
         assert!(values
             .iter()
             .any(|value| value.node_id == "logicOr0" && value.value));
+        assert!(values
+            .iter()
+            .any(|value| value.node_id == "muxR0" && value.value));
     }
 
     #[test]
     fn architectural_register_changes_map_to_final_aligned_register_nodes() {
-        let changes = physical_register_bit_changes(Reg::C, 0b0000_0001, 0b0000_0101);
+        let changes = physical_register_bit_changes(Reg::C, 0b0000_0010, 0b0000_0110);
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].node_id, "regC2");
         assert!(!changes[0].before);
@@ -378,12 +384,12 @@ mod tests {
         assert_eq!(pc.len(), 9);
         assert!(pc.iter().any(|change| change.node_id == "pcBit8" && change.after));
 
-        let sp = physical_sp_bit_changes(0x7fff, 0x7ffe);
-        assert_eq!(sp.len(), 1);
-        assert_eq!(sp[0].node_id, "spBit0");
+        let sp = physical_sp_bit_changes(0x7f00, 0x7eff);
+        assert_eq!(sp.len(), 9);
+        assert!(sp.iter().any(|change| change.node_id == "spBit8" && !change.after));
 
         let flags = physical_flag_bit_changes(0b001, 0b110);
         assert_eq!(flags.len(), 3);
-        assert!(flags.iter().any(|change| change.node_id == "flagN" && change.after));
+        assert!(flags.iter().any(|change| change.node_id == "flagC" && change.after));
     }
 }
