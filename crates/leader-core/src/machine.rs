@@ -21,7 +21,7 @@ use crate::trace::{
     AluEvent, BusAddressSource, BusDataSource, BusTransactionEvent, BusTransactionKind,
     ControlLatchEvent, ControlLatchKind, FlagEvent, FormationCadenceTraceEvent, FrameState,
     KillEvent, MatchTrace, MicroAddressEvent, MicroCycleEvent, MicroSample, PcEvent, PcEventKind,
-    PhaseKind, RegisterWriteEvent, ShiftRegisterEvent, SpEvent, SpEventKind,
+    PhaseKind, RegisterWriteEvent, ShiftRegisterEvent, SpEvent, SpEventKind, VramCheckpoint,
 };
 use crate::video_timing::VideoTiming;
 
@@ -81,6 +81,7 @@ impl Machine {
         machine.mem[..rom.len()].copy_from_slice(rom);
         machine.sync_game_to_ram();
         machine.last_vram_checksum = machine.render_vram();
+        machine.checkpoint_vram();
         machine.trace.frames.push(FrameState::from_game(
             &machine.game,
             machine.enemy_shots.slots(),
@@ -441,6 +442,7 @@ impl Machine {
 
     fn render_video_device(&mut self, pc: u16) {
         self.last_vram_checksum = self.render_vram();
+        self.checkpoint_vram();
         let data = (self.last_vram_checksum & 0xFF) as u8;
         self.record_bus_transaction(
             pc,
@@ -699,12 +701,24 @@ impl Machine {
         for x in 0..SCREEN_W {
             pixel(&mut self.mem, x, SCREEN_H - 3);
         }
-        let mut hash = 0x811c_9dc5_u32;
-        for byte in &self.mem[VRAM..VRAM + VRAM_BYTES] {
-            hash ^= u32::from(*byte);
-            hash = hash.wrapping_mul(0x0100_0193);
+        vram_checksum(&self.mem[VRAM..VRAM + VRAM_BYTES])
+    }
+
+    fn checkpoint_vram(&mut self) {
+        let checkpoint = VramCheckpoint {
+            frame: self.game.frame,
+            checksum: self.last_vram_checksum,
+            bytes: self.mem[VRAM..VRAM + VRAM_BYTES]
+                .to_vec()
+                .into_boxed_slice(),
+        };
+        if let Some(last) = self.trace.vram_checkpoints.last_mut() {
+            if last.frame == checkpoint.frame {
+                *last = checkpoint;
+                return;
+            }
         }
-        hash
+        self.trace.vram_checkpoints.push(checkpoint);
     }
 }
 
@@ -955,6 +969,15 @@ fn encode_input(input: InputState) -> u8 {
     horizontal | if input.fire { 4 } else { 0 }
 }
 
+fn vram_checksum(bytes: &[u8]) -> u32 {
+    let mut hash = 0x811c_9dc5_u32;
+    for byte in bytes {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
 fn pixel(memory: &mut [u8; 65_536], x: i16, y: i16) {
     if !(0..SCREEN_W).contains(&x) || !(0..SCREEN_H).contains(&y) {
         return;
@@ -1022,6 +1045,22 @@ mod tests {
         assert_eq!(a.kills, b.kills);
         assert_eq!(a.total_frames, b.total_frames);
         assert_eq!(a.frames, b.frames);
+        assert_eq!(a.vram_checkpoints, b.vram_checkpoints);
+    }
+
+    #[test]
+    fn native_vram_checkpoints_match_the_raster_bytes() {
+        let trace = Machine::run_match("vram-checkpoints", 16);
+        assert!(!trace.vram_checkpoints.is_empty());
+        assert_eq!(trace.vram_checkpoints[0].frame, 0);
+        assert!(trace
+            .vram_checkpoints
+            .windows(2)
+            .all(|pair| pair[0].frame < pair[1].frame));
+        for checkpoint in &trace.vram_checkpoints {
+            assert_eq!(checkpoint.bytes.len(), VRAM_BYTES);
+            assert_eq!(vram_checksum(&checkpoint.bytes), checkpoint.checksum);
+        }
     }
 
     #[test]
@@ -1059,6 +1098,7 @@ mod tests {
         assert!(!trace.register_writes.is_empty());
         assert!(!trace.pc_events.is_empty());
         assert!(!trace.sp_events.is_empty());
+        assert!(!trace.vram_checkpoints.is_empty());
         assert!(trace
             .formation_cadence_events
             .iter()
