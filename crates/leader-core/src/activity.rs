@@ -79,6 +79,7 @@ pub fn physical_activity_nodes(phase: PhaseKind, address: Option<u16>) -> Vec<St
     if phase == PhaseKind::Alu {
         for bit in 0..8 {
             for prefix in [
+                "rhsXor",
                 "xorA",
                 "xorB",
                 "andA",
@@ -145,11 +146,11 @@ pub fn physical_activity_links(
 
 /// Expands one authoritative native ALU trace into every visible function and
 /// ripple node of each physical bit slice. Logical gates use the original RHS;
-/// arithmetic full-adder gates use `rhs_effective`, which includes the native
-/// one's-complement subtraction input when appropriate.
+/// arithmetic gates use `rhs_effective`, including the physical B XOR SUB
+/// conditioning stage used by subtraction and compare.
 #[must_use]
 pub fn physical_alu_node_values(trace: AluTrace) -> Vec<PhysicalAluNodeValue> {
-    let mut values = Vec::with_capacity(72);
+    let mut values = Vec::with_capacity(80);
     for bit in 0..8_u8 {
         let shift = u32::from(bit);
         let lhs = trace.lhs & (1_u8 << shift) != 0;
@@ -167,6 +168,7 @@ pub fn physical_alu_node_values(trace: AluTrace) -> Vec<PhysicalAluNodeValue> {
         let result = trace.result & (1_u8 << shift) != 0;
 
         for (prefix, stage, value) in [
+            ("rhsXor", "rhs_effective", rhs_effective),
             ("xorA", "xor_ab", xor_ab),
             ("xorB", "sum", sum),
             ("andA", "generate", generate),
@@ -258,6 +260,7 @@ mod tests {
         let ids = physical_activity_nodes(PhaseKind::Alu, None);
         for bit in 0..8 {
             for prefix in [
+                "rhsXor",
                 "xorA",
                 "xorB",
                 "andA",
@@ -303,7 +306,10 @@ mod tests {
     fn alu_node_values_resolve_each_visible_ripple_and_function_stage_in_core() {
         let trace = ripple_add(0b0000_1111, 1, false, AluOp::Add);
         let values = physical_alu_node_values(trace);
-        assert_eq!(values.len(), 72);
+        assert_eq!(values.len(), 80);
+        assert!(values
+            .iter()
+            .any(|value| value.node_id == "rhsXor0" && value.value));
         assert!(values
             .iter()
             .any(|value| value.node_id == "orC0" && value.value));
@@ -343,9 +349,12 @@ mod tests {
     }
 
     #[test]
-    fn subtraction_function_nodes_preserve_original_rhs_beside_effective_adder_rhs() {
+    fn subtraction_function_nodes_preserve_original_and_effective_rhs() {
         let trace = crate::logic::ripple_sub(0b0000_0000, 0b0000_0001, AluOp::Sub);
         let values = physical_alu_node_values(trace);
+        assert!(values
+            .iter()
+            .any(|value| value.node_id == "rhsXor0" && !value.value));
         assert!(values
             .iter()
             .any(|value| value.node_id == "xorA0" && !value.value));
