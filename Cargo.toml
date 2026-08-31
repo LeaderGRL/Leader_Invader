@@ -3,6 +3,7 @@ members = [
   "crates/leader-core",
   "crates/leader-svg",
   "crates/leader-cli",
+  "crates/leader-explorer",
 ]
 resolver = "2"
 
