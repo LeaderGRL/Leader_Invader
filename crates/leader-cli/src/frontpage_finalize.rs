@@ -3,6 +3,15 @@
 #[must_use]
 pub fn apply(mut svg: String) -> String {
     if svg.contains("data-frontpage-version=\"physical-die-v2\"") {
+        // The framebuffer geometry is already exactly bounded to 128×96 before
+        // scaling. A root-space clip attached to the transformed raster group
+        // can be evaluated in the transformed user space by SVG renderers and
+        // hide the native image, so V2 deliberately does not clip this group.
+        svg = svg.replace(
+            "<g clip-path=\"url(#v2-crt-clip)\" transform=",
+            "<g transform=",
+        );
+
         // Keep the historical validator alive while V2 is reviewed. These
         // markers are non-rendering compatibility metadata only; no Observatory
         // graphics or camera behavior are restored.
@@ -39,11 +48,15 @@ mod tests {
 
     #[test]
     fn physical_die_receives_only_hidden_contract_compatibility() {
-        let source = String::from("<svg data-frontpage-version=\"physical-die-v2\"></svg>");
+        let source = String::from(
+            "<svg data-frontpage-version=\"physical-die-v2\"><g clip-path=\"url(#v2-crt-clip)\" transform=\"scale(2)\"></g></svg>",
+        );
         let output = apply(source);
         assert!(output.contains("id=\"v2-legacy-contract-compat\""));
         assert!(output.contains("display=\"none\""));
         assert!(!output.contains("leaderCamera"));
+        assert!(!output.contains("clip-path=\"url(#v2-crt-clip)\" transform="));
+        assert!(output.contains("<g transform=\"scale(2)\""));
     }
 
     #[test]
