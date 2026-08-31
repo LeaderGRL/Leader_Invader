@@ -28,6 +28,7 @@ mod navigation_query;
 pub mod pc_datapath;
 pub mod program;
 pub mod rng;
+pub mod routing;
 pub mod shield_bank;
 pub mod shield_contract;
 pub mod shield_layout;
@@ -96,6 +97,7 @@ pub use navigation::{
     NavigationModel,
 };
 pub use pc_datapath::{derive_pc_datapath, PcDatapathEvent, PcDatapathKind};
+pub use routing::{orthogonal_route_between, orthogonal_route_for_link, OrthogonalRoute};
 pub use shield_bank::{
     bit_address as shield_bit_address, bit_mask as shield_bit_mask,
     byte_offset as shield_byte_offset, locate_world as locate_shield_world, ShieldBank, ShieldDamage,
