@@ -78,7 +78,17 @@ pub fn physical_activity_nodes(phase: PhaseKind, address: Option<u16>) -> Vec<St
 
     if phase == PhaseKind::Alu {
         for bit in 0..8 {
-            for prefix in ["xorA", "xorB", "andA", "andB", "orC", "muxR"] {
+            for prefix in [
+                "xorA",
+                "xorB",
+                "andA",
+                "andB",
+                "orC",
+                "passR",
+                "logicAnd",
+                "logicOr",
+                "muxR",
+            ] {
                 ids.push(format!("{prefix}{bit}"));
             }
         }
@@ -133,22 +143,27 @@ pub fn physical_activity_links(
         .collect()
 }
 
-/// Expands one authoritative native ALU trace into the six visible logic nodes
-/// of each physical bit slice. The renderer receives already-resolved boolean
-/// state and therefore never needs to reimplement adder or logic semantics.
+/// Expands one authoritative native ALU trace into every visible function and
+/// ripple node of each physical bit slice. Logical gates use the original RHS;
+/// arithmetic full-adder gates use `rhs_effective`, which includes the native
+/// one's-complement subtraction input when appropriate.
 #[must_use]
 pub fn physical_alu_node_values(trace: AluTrace) -> Vec<PhysicalAluNodeValue> {
-    let mut values = Vec::with_capacity(48);
+    let mut values = Vec::with_capacity(72);
     for bit in 0..8_u8 {
         let shift = u32::from(bit);
         let lhs = trace.lhs & (1_u8 << shift) != 0;
-        let rhs = trace.rhs_effective & (1_u8 << shift) != 0;
+        let rhs_original = trace.rhs & (1_u8 << shift) != 0;
+        let rhs_effective = trace.rhs_effective & (1_u8 << shift) != 0;
         let carry_in = trace.carry_in(usize::from(bit));
-        let xor_ab = lhs ^ rhs;
+        let xor_ab = lhs ^ rhs_effective;
         let sum = xor_ab ^ carry_in;
-        let generate = lhs & rhs;
+        let generate = lhs & rhs_effective;
         let propagate = xor_ab & carry_in;
         let carry_out = trace.carry_out(usize::from(bit));
+        let pass = lhs;
+        let logical_and = lhs & rhs_original;
+        let logical_or = lhs | rhs_original;
         let result = trace.result & (1_u8 << shift) != 0;
 
         for (prefix, stage, value) in [
@@ -157,6 +172,9 @@ pub fn physical_alu_node_values(trace: AluTrace) -> Vec<PhysicalAluNodeValue> {
             ("andA", "generate", generate),
             ("andB", "propagate", propagate),
             ("orC", "carry_out", carry_out),
+            ("passR", "pass", pass),
+            ("logicAnd", "logical_and", logical_and),
+            ("logicOr", "logical_or", logical_or),
             ("muxR", "result", result),
         ] {
             values.push(PhysicalAluNodeValue {
@@ -239,7 +257,17 @@ mod tests {
     fn alu_activity_expands_to_all_eight_physical_slices() {
         let ids = physical_activity_nodes(PhaseKind::Alu, None);
         for bit in 0..8 {
-            for prefix in ["xorA", "xorB", "andA", "andB", "orC", "muxR"] {
+            for prefix in [
+                "xorA",
+                "xorB",
+                "andA",
+                "andB",
+                "orC",
+                "passR",
+                "logicAnd",
+                "logicOr",
+                "muxR",
+            ] {
                 assert!(ids.contains(&format!("{prefix}{bit}")));
             }
         }
@@ -272,10 +300,10 @@ mod tests {
     }
 
     #[test]
-    fn alu_node_values_resolve_each_visible_ripple_stage_in_core() {
+    fn alu_node_values_resolve_each_visible_ripple_and_function_stage_in_core() {
         let trace = ripple_add(0b0000_1111, 1, false, AluOp::Add);
         let values = physical_alu_node_values(trace);
-        assert_eq!(values.len(), 48);
+        assert_eq!(values.len(), 72);
         assert!(values
             .iter()
             .any(|value| value.node_id == "orC0" && value.value));
@@ -284,19 +312,46 @@ mod tests {
             .any(|value| value.node_id == "orC3" && value.value));
         assert!(values
             .iter()
+            .any(|value| value.node_id == "passR0" && value.value));
+        assert!(values
+            .iter()
+            .any(|value| value.node_id == "logicOr4" && value.value));
+        assert!(values
+            .iter()
             .any(|value| value.node_id == "muxR4" && value.value));
     }
 
     #[test]
-    fn alu_result_mux_uses_native_result_for_logic_operations() {
+    fn logical_function_nodes_use_original_operands_and_native_result() {
         let trace = logic_trace(AluOp::And, 0b1010_1010, 0b1111_0000, 0b1010_0000);
         let values = physical_alu_node_values(trace);
+        assert!(values
+            .iter()
+            .any(|value| value.node_id == "logicAnd7" && value.value));
+        assert!(values
+            .iter()
+            .any(|value| value.node_id == "logicAnd4" && !value.value));
+        assert!(values
+            .iter()
+            .any(|value| value.node_id == "logicOr4" && value.value));
         assert!(values
             .iter()
             .any(|value| value.node_id == "muxR7" && value.value));
         assert!(values
             .iter()
             .any(|value| value.node_id == "muxR4" && !value.value));
+    }
+
+    #[test]
+    fn subtraction_function_nodes_preserve_original_rhs_beside_effective_adder_rhs() {
+        let trace = crate::logic::ripple_sub(0b0000_0000, 0b0000_0001, AluOp::Sub);
+        let values = physical_alu_node_values(trace);
+        assert!(values
+            .iter()
+            .any(|value| value.node_id == "xorA0" && !value.value));
+        assert!(values
+            .iter()
+            .any(|value| value.node_id == "logicOr0" && value.value));
     }
 
     #[test]
