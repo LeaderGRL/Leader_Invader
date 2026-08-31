@@ -129,21 +129,72 @@ pub fn validate_final_topology(topology: &Topology) -> Result<TopologyValidation
         ("ctrlWait", "vblankWaitGate"),
         ("vblankWaitGate", "irqLatch"),
     ] {
-        if !topology
-            .links
-            .iter()
-            .any(|link| link.from == from && link.to == to)
-        {
-            return Err(format!(
-                "final topology missing required video path {from} -> {to}"
-            ));
+        require_path(topology, from, to, "video/control")?;
+    }
+
+    for bit in 0..8 {
+        let xor_a = format!("xorA{bit}");
+        let xor_b = format!("xorB{bit}");
+        let and_a = format!("andA{bit}");
+        let and_b = format!("andB{bit}");
+        let or_c = format!("orC{bit}");
+        let mux_r = format!("muxR{bit}");
+        for (from, to) in [
+            ("readMuxA", xor_a.as_str()),
+            ("readMuxB", xor_a.as_str()),
+            ("readMuxA", and_a.as_str()),
+            ("readMuxB", and_a.as_str()),
+            (xor_a.as_str(), xor_b.as_str()),
+            (xor_a.as_str(), and_b.as_str()),
+            (and_a.as_str(), or_c.as_str()),
+            (and_b.as_str(), or_c.as_str()),
+            (xor_b.as_str(), mux_r.as_str()),
+            ("aluSel", mux_r.as_str()),
+            (mux_r.as_str(), "writeBus"),
+        ] {
+            require_path(topology, from, to, "ALU")?;
         }
+        if bit > 0 {
+            let previous_carry = format!("orC{}", bit - 1);
+            require_path(topology, &previous_carry, &xor_b, "ALU carry")?;
+            require_path(topology, &previous_carry, &and_b, "ALU carry")?;
+        }
+    }
+
+    for page in 0..32 {
+        let node = format!("romPage{page}");
+        require_path(topology, "romRowDec", &node, "ROM select")?;
+        require_path(topology, &node, "dataBuf", "ROM read")?;
+    }
+    for page in 0..96 {
+        let node = format!("ramPage{page}");
+        require_path(topology, "ramPageDec", &node, "RAM select")?;
+        require_path(topology, &node, "dataBuf", "RAM read")?;
+        require_path(topology, "dataBuf", &node, "RAM write")?;
+    }
+    for page in 0..8 {
+        let node = format!("vramPage{page}");
+        require_path(topology, "vramPageDec", &node, "VRAM select")?;
+        require_path(topology, &node, "dataBuf", "VRAM read")?;
+        require_path(topology, "dataBuf", &node, "VRAM write")?;
     }
 
     Ok(TopologyValidation {
         nodes: topology.nodes.len(),
         links: topology.links.len(),
     })
+}
+
+fn require_path(topology: &Topology, from: &str, to: &str, family: &str) -> Result<(), String> {
+    if topology
+        .links
+        .iter()
+        .any(|link| link.from == from && link.to == to)
+    {
+        Ok(())
+    } else {
+        Err(format!("final topology missing required {family} path {from} -> {to}"))
+    }
 }
 
 #[cfg(test)]
@@ -156,7 +207,7 @@ mod tests {
         let topology = build_topology();
         let validation = validate_final_topology(&topology).expect("valid final topology");
         assert!(validation.nodes >= 466);
-        assert!(validation.links >= 534);
+        assert!(validation.links >= 800);
     }
 
     #[test]
@@ -201,5 +252,25 @@ mod tests {
             .retain(|link| !(link.from == "ctrlWait" && link.to == "vblankWaitGate"));
         let error = validate_final_topology(&topology).expect_err("missing VBlank wait gate must fail");
         assert!(error.contains("ctrlWait -> vblankWaitGate"));
+    }
+
+    #[test]
+    fn missing_alu_internal_link_is_detected() {
+        let mut topology = build_topology();
+        topology
+            .links
+            .retain(|link| !(link.from == "andB3" && link.to == "orC3"));
+        let error = validate_final_topology(&topology).expect_err("missing ALU path must fail");
+        assert!(error.contains("andB3 -> orC3"));
+    }
+
+    #[test]
+    fn missing_memory_page_link_is_detected() {
+        let mut topology = build_topology();
+        topology
+            .links
+            .retain(|link| !(link.from == "ramPage37" && link.to == "dataBuf"));
+        let error = validate_final_topology(&topology).expect_err("missing RAM path must fail");
+        assert!(error.contains("ramPage37 -> dataBuf"));
     }
 }
