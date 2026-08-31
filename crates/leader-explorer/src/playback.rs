@@ -1,6 +1,6 @@
 use leader_core::{
-    BusTransactionEvent, BusTransactionKind, FrameState, Machine, MatchTrace, MicroCycleEvent,
-    MicroCycleKind, MicroSample, PhaseKind,
+    physical_activity_nodes, BusTransactionEvent, BusTransactionKind, FrameState, Machine,
+    MatchTrace, MicroCycleEvent, MicroCycleKind, MicroSample, PhaseKind,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -241,6 +241,27 @@ impl Playback {
     }
 
     #[must_use]
+    pub fn current_activity_json(&self) -> String {
+        let Some((phase, address, data)) = self.current_activity() else {
+            return "null".to_owned();
+        };
+        let nodes = physical_activity_nodes(phase, address)
+            .iter()
+            .map(|id| format!("\"{}\"", json_escape(id)))
+            .collect::<Vec<_>>()
+            .join(",");
+        let address = address.map_or_else(|| "null".to_owned(), |value| value.to_string());
+        let data = data.map_or_else(|| "null".to_owned(), |value| value.to_string());
+        format!(
+            "{{\"phase\":\"{}\",\"address\":{},\"data\":{},\"nodes\":[{}]}}",
+            phase.as_str(),
+            address,
+            data,
+            nodes
+        )
+    }
+
+    #[must_use]
     pub fn follow_pc_json(&self) -> String {
         let Some(event) = self.current_event() else {
             return "null".to_owned();
@@ -339,6 +360,46 @@ impl Playback {
 
     fn current_key(&self) -> Option<(u32, u16)> {
         self.current_event().map(microcycle_key)
+    }
+
+    fn current_activity(&self) -> Option<(PhaseKind, Option<u16>, Option<u8>)> {
+        let trace = self.trace.as_ref()?;
+        let key = self.current_key()?;
+
+        if self.vblank_focus.is_some() {
+            if let Some(sample) = self.focused_vblank_sample() {
+                return Some((PhaseKind::VBlank, sample.address, sample.data));
+            }
+        }
+
+        if let Some(event) = self.focused_bus_event() {
+            return Some((bus_phase(event.kind), event.address, event.data));
+        }
+
+        if let Some(event) = trace
+            .bus_transactions
+            .iter()
+            .find(|event| bus_key(event) == key)
+        {
+            return Some((bus_phase(event.kind), event.address, event.data));
+        }
+
+        if trace
+            .alu_events
+            .iter()
+            .any(|event| (event.frame, event.ordinal) == key)
+        {
+            return Some((PhaseKind::Alu, None, None));
+        }
+
+        let event = self.current_event()?;
+        match event.kind {
+            MicroCycleKind::FetchAddress | MicroCycleKind::FetchData => {
+                Some((PhaseKind::Fetch, Some(event.mar), Some(event.mdr)))
+            }
+            MicroCycleKind::DecodeLatch => Some((PhaseKind::Decode, None, Some(event.ir))),
+            _ => None,
+        }
     }
 
     fn focused_bus_event(&self) -> Option<&BusTransactionEvent> {
@@ -474,6 +535,17 @@ impl Playback {
     }
 }
 
+fn bus_phase(kind: BusTransactionKind) -> PhaseKind {
+    match kind {
+        BusTransactionKind::Fetch => PhaseKind::Fetch,
+        BusTransactionKind::Read => PhaseKind::MemoryRead,
+        BusTransactionKind::Write => PhaseKind::MemoryWrite,
+        BusTransactionKind::Input => PhaseKind::Input,
+        BusTransactionKind::Dma => PhaseKind::Dma,
+        BusTransactionKind::Scanout => PhaseKind::Scanout,
+    }
+}
+
 fn microcycle_key(event: &MicroCycleEvent) -> (u32, u16) {
     (event.frame, event.ordinal)
 }
@@ -560,6 +632,9 @@ mod tests {
         assert!(playback
             .current_microcycle_json()
             .contains("\"kind\":\"fetch_address\""));
+        let activity = playback.current_activity_json();
+        assert!(activity.contains("\"phase\":\"fetch\""));
+        assert!(activity.contains("\"pcMuxLo\""));
     }
 
     #[test]
@@ -637,8 +712,14 @@ mod tests {
         assert!(playback.seek_next_dma());
         assert!(playback.follow_dma_json().contains("view-gpu.dma"));
         assert!(playback.current_bus_json().contains("\"kind\":\"dma\""));
+        let dma_activity = playback.current_activity_json();
+        assert!(dma_activity.contains("\"phase\":\"dma\""));
+        assert!(dma_activity.contains("\"dmaAddr\""));
         assert!(playback.seek_next_vblank());
         assert!(playback.follow_vblank_json().contains("view-gpu.timing"));
+        assert!(playback
+            .current_activity_json()
+            .contains("\"phase\":\"vblank\""));
     }
 
     #[test]
