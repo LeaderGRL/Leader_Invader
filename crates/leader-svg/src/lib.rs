@@ -5,7 +5,10 @@ use std::fmt::Write;
 
 use leader_core::game::{ALIEN_COLS, ALIEN_ROWS, PLAYER_Y};
 use leader_core::rng::hash_seed;
-use leader_core::{FrameState, MatchTrace, PhaseKind, ProjectileSnapshot, Rect, Topology, ENEMY_SHOT_SLOTS};
+use leader_core::{
+    orthogonal_route_for_link, physical_activity_nodes, FrameState, MatchTrace, PhaseKind,
+    ProjectileSnapshot, Rect, Topology, ENEMY_SHOT_SLOTS,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct RenderConfig {
@@ -215,9 +218,6 @@ fn render_wires(
     total: f32,
 ) {
     for link in &topology.links {
-        let (Some(from), Some(to)) = (topology.node(&link.from), topology.node(&link.to)) else {
-            continue;
-        };
         let start = schedule
             .get(&link.from)
             .copied()
@@ -227,7 +227,10 @@ fn render_wires(
         let done = start + 0.42;
         let k1 = norm(start, total);
         let k2 = norm(done, total);
-        let path = orthogonal_path(from.bounds, to.bounds);
+        let Some(route) = orthogonal_route_for_link(topology, link) else {
+            continue;
+        };
+        let path = svg_route_path(route);
         let _ = writeln!(
             out,
             r##"<path class="wire {}" d="{}" pathLength="1" stroke-dasharray="1" stroke-dashoffset="1"><animate attributeName="stroke-dashoffset" values="1;1;0;0" keyTimes="0;{k1:.6};{k2:.6};1" dur="{total:.3}s" repeatCount="indefinite"/></path>"##,
@@ -256,7 +259,7 @@ fn render_activity(out: &mut String, topology: &Topology, trace: &MatchTrace, co
         let k1 = norm(moment, total);
         let k2 = norm(moment + 0.03, total);
         let k3 = norm(moment + 0.20, total);
-        let ids = active_nodes(sample.phase, sample.address, topology);
+        let ids = physical_activity_nodes(sample.phase, sample.address);
         if ids.is_empty() {
             continue;
         }
@@ -503,7 +506,15 @@ fn render_camera(out: &mut String, topology: &Topology, config: RenderConfig) {
 
     let values = track
         .iter()
-        .map(|(_, rect)| format!("{:.1} {:.1} {:.1} {:.1}", rect.x, rect.y, rect.w.max(1.0), rect.h.max(1.0)))
+        .map(|(_, rect)| {
+            format!(
+                "{:.1} {:.1} {:.1} {:.1}",
+                rect.x,
+                rect.y,
+                rect.w.max(1.0),
+                rect.h.max(1.0)
+            )
+        })
         .collect::<Vec<_>>()
         .join(";");
     let keys = track
@@ -548,51 +559,6 @@ fn assembly_schedule(topology: &Topology, seconds: f32) -> HashMap<String, f32> 
         }
     }
     schedule
-}
-
-fn active_nodes(phase: PhaseKind, address: Option<u16>, topology: &Topology) -> Vec<String> {
-    let mut ids = match phase {
-        PhaseKind::Fetch => vec!["clock", "clkGate", "phase0", "pcMuxLo", "pcMuxHi", "addrBuf"],
-        PhaseKind::Decode => vec!["opHi", "opLo", "decA", "decB", "microAddr", "microRom"],
-        PhaseKind::Input => vec!["kbd", "inputLatch", "dataBuf"],
-        PhaseKind::MemoryRead => vec!["addrBuf", "dataBuf"],
-        PhaseKind::Alu => vec!["readMuxA", "readMuxB", "aluSel", "writeBus", "flagZ", "flagC", "flagN"],
-        PhaseKind::MemoryWrite => vec!["writeBus", "dataBuf", "ctrlBuf"],
-        PhaseKind::Dma => vec!["arb", "dmaAddr", "dmaData", "dataBuf", "vramPageDec", "vramPage0"],
-        PhaseKind::Scanout => vec!["spriteRom", "xCounter", "yCounter", "pixelMux", "scanShift", "hsync", "vsync", "display"],
-        PhaseKind::VBlank => vec!["vsync", "timer", "irqAnd", "irqLatch", "microAddr"],
-    }
-    .into_iter()
-    .map(str::to_owned)
-    .collect::<Vec<_>>();
-
-    if phase == PhaseKind::Alu {
-        for bit in 0..8 {
-            for prefix in ["xorA", "xorB", "andA", "andB", "orC", "muxR"] {
-                ids.push(format!("{prefix}{bit}"));
-            }
-        }
-    }
-
-    if let Some(address) = address {
-        match address {
-            0x0000..=0x1fff => {
-                ids.push("romRowDec".to_owned());
-                ids.push(format!("romPage{}", address >> 8));
-            }
-            0x2000..=0x7fff => {
-                ids.push("ramPageDec".to_owned());
-                ids.push(format!("ramPage{}", ((address - 0x2000) >> 8).min(95)));
-            }
-            0x8000..=0x87ff => {
-                ids.push("vramPageDec".to_owned());
-                ids.push(format!("vramPage{}", ((address - 0x8000) >> 8).min(7)));
-            }
-            _ => {}
-        }
-    }
-    ids.retain(|id| topology.node(id).is_some());
-    ids
 }
 
 fn sample_frames(frames: &[FrameState], max_samples: usize) -> Vec<&FrameState> {
@@ -665,13 +631,11 @@ fn spawn_offset(id: &str) -> (f32, f32) {
     }
 }
 
-fn orthogonal_path(from: Rect, to: Rect) -> String {
-    let from_center = (from.x + from.w / 2.0, from.y + from.h / 2.0);
-    let to_center = (to.x + to.w / 2.0, to.y + to.h / 2.0);
-    let x1 = if to_center.0 >= from_center.0 { from.x + from.w } else { from.x };
-    let x2 = if to_center.0 >= from_center.0 { to.x } else { to.x + to.w };
-    let middle = (x1 + x2) / 2.0;
-    format!("M{x1:.1} {:.1}H{middle:.1}V{:.1}H{x2:.1}", from_center.1, to_center.1)
+fn svg_route_path(route: [[f32; 2]; 4]) -> String {
+    format!(
+        "M{:.1} {:.1}H{:.1}V{:.1}H{:.1}",
+        route[0][0], route[0][1], route[1][0], route[2][1], route[3][0]
+    )
 }
 
 fn xml_escape(value: &str) -> String {
