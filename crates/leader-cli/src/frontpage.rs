@@ -5,6 +5,10 @@ mod physical_die {
     include!("frontpage_v2.rs");
 }
 
+mod bitfabric {
+    include!("frontpage_bitfabric.rs");
+}
+
 /// Canonical timing for the GitHub front-page artifact.
 ///
 /// The full machine is visible from t=0. Native propagation starts after a
@@ -27,5 +31,6 @@ pub const fn render_config() -> RenderConfig {
 /// the first few seconds.
 #[must_use]
 pub fn render(topology: &Topology, trace: &MatchTrace, _legacy_config: RenderConfig) -> String {
-    physical_die::render(topology, trace, render_config())
+    let svg = physical_die::render(topology, trace, render_config());
+    bitfabric::apply(svg, topology, trace)
 }
