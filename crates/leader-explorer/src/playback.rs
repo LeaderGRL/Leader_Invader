@@ -25,7 +25,7 @@ impl Default for Playback {
 impl Playback {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(constructor))]
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             trace: None,
             cursor: 0,
@@ -56,7 +56,7 @@ impl Playback {
     }
 
     #[must_use]
-    pub const fn is_playing(&self) -> bool {
+    pub fn is_playing(&self) -> bool {
         self.playing
     }
 
