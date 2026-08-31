@@ -183,7 +183,11 @@ impl Explorer {
 
 impl Explorer {
     fn fit_camera_to_current_view(&mut self) {
-        if let Some(bounds) = self.state.current_view(&self.navigation).map(|view| view.bounds) {
+        if let Some(bounds) = self
+            .state
+            .current_view(&self.navigation)
+            .map(|view| view.bounds)
+        {
             self.viewport.fit(bounds);
         }
     }
@@ -304,7 +308,9 @@ mod tests {
         assert_eq!(explorer.current_view_id(), "view-machine");
         assert!(explorer.focus_node("microRom"));
         assert_eq!(explorer.current_view_id(), "view-decode.microcode");
-        assert!(explorer.breadcrumb_json().contains("view-decode.microcode"));
+        assert!(explorer
+            .breadcrumb_json()
+            .contains("view-decode.microcode"));
         assert!(explorer.back());
         assert_eq!(explorer.current_view_id(), "view-machine");
     }
@@ -375,15 +381,26 @@ mod tests {
     #[test]
     fn navigation_refits_camera_while_manual_pan_and_zoom_remain_local() {
         let mut explorer = Explorer::new();
+        let root_camera = explorer.camera_json();
         assert_eq!(
-            explorer.camera_json(),
+            root_camera,
             "{\"x\":0.0,\"y\":0.0,\"w\":7000.0,\"h\":3720.0}"
         );
 
         assert!(explorer.focus_node("microRom"));
         let fitted = explorer.camera_json();
-        assert!(fitted.contains("\"w\":168.0"));
-        assert!(explorer.zoom_camera_at(1860.0, 400.0, 2.0));
+        assert_ne!(fitted, root_camera);
+        assert_eq!(explorer.current_view_id(), "view-decode.microcode");
+
+        let current_view = explorer
+            .state
+            .current_view(&explorer.navigation)
+            .expect("current view");
+        assert_eq!(explorer.viewport.camera(), current_view.bounds);
+
+        let center_x = current_view.bounds.x + current_view.bounds.w * 0.5;
+        let center_y = current_view.bounds.y + current_view.bounds.h * 0.5;
+        assert!(explorer.zoom_camera_at(center_x, center_y, 2.0));
         assert_ne!(explorer.camera_json(), fitted);
         explorer.pan_camera(10.0, 10.0);
         assert_ne!(explorer.camera_json(), fitted);
@@ -391,9 +408,6 @@ mod tests {
         assert_eq!(explorer.camera_json(), fitted);
 
         assert!(explorer.back());
-        assert_eq!(
-            explorer.camera_json(),
-            "{\"x\":0.0,\"y\":0.0,\"w\":7000.0,\"h\":3720.0}"
-        );
+        assert_eq!(explorer.camera_json(), root_camera);
     }
 }
