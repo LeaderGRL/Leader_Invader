@@ -21,6 +21,7 @@ mod formation_cadence_overlay;
 mod frontpage;
 mod frontpage_finalize;
 mod frontpage_live;
+mod frontpage_ram_exact;
 #[cfg(test)]
 mod microcode_overlay;
 #[cfg(test)]
@@ -198,6 +199,7 @@ fn validate_frontpage_svg(svg: &str) -> Result<(), String> {
         "id=\"frontpage-native-video-replay\"",
         "id=\"frontpage-native-telemetry\"",
         "id=\"frontpage-readable-native-state\"",
+        "id=\"frontpage-exact-ram-page-state\"",
         "data-bus-address=\"",
         "data-bus-data=\"",
         "data-detail-module=\"ramsys.pages\"",
@@ -205,6 +207,8 @@ fn validate_frontpage_svg(svg: &str) -> Result<(), String> {
         "data-held-ucontrol=\"",
         "data-held-ram-page=\"",
         "data-held-alu-result=\"",
+        "data-exact-ram-page=\"",
+        "1-BIT CRT DISPLAY",
     ] {
         if !svg.contains(marker) {
             return Err(format!("frontpage SVG is missing required marker {marker}"));
@@ -218,6 +222,9 @@ fn validate_frontpage_svg(svg: &str) -> Result<(), String> {
     }
     if svg.contains("values=\"0;1;1;0\"") {
         return Err("frontpage SVG contains accumulating VRAM frame opacity".to_owned());
+    }
+    if svg.contains("RGB332 SCREEN") {
+        return Err("frontpage SVG must describe the native 1bpp display accurately".to_owned());
     }
     Ok(())
 }
@@ -249,6 +256,7 @@ fn render_cmd(options: Options) -> Result<(), String> {
     let svg = frontpage::render(&topology, &trace, config);
     let svg = frontpage_finalize::apply(svg);
     let svg = frontpage_live::apply(svg, &topology, &trace, config);
+    let svg = frontpage_ram_exact::apply(svg, &topology, &trace, config);
     validate_frontpage_svg(&svg)?;
     write(&options.output, svg.as_bytes())?;
     let trace_path = options.output.with_file_name("trace.json");
