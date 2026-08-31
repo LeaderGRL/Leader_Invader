@@ -60,6 +60,11 @@
             <button id="micro-step-button" type="button">µ-step</button>
             <button id="instruction-step-button" type="button">Instruction</button>
           </div>
+          <label class="timeline-field" for="timeline-scrubber">
+            <span>Microcycle cursor</span>
+            <output id="timeline-label">—</output>
+          </label>
+          <input id="timeline-scrubber" class="timeline-scrubber" type="range" min="0" max="0" value="0" step="1" disabled aria-label="Native microcycle cursor">
         </div>
 
         <div class="panel-section">

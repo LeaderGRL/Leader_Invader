@@ -11,6 +11,8 @@ const viewInfo = document.querySelector("#view-info");
 const inspector = document.querySelector("#node-inspector");
 const playbackState = document.querySelector("#playback-state");
 const progressFill = document.querySelector("#progress-fill");
+const timelineScrubber = document.querySelector("#timeline-scrubber");
+const timelineLabel = document.querySelector("#timeline-label");
 const NS = "http://www.w3.org/2000/svg";
 
 let dragging = false;
@@ -34,6 +36,11 @@ function center(bounds) {
   };
 }
 
+function hex(value, width) {
+  if (value === null || value === undefined) return "—";
+  return `0x${Number(value).toString(16).padStart(width, "0")}`;
+}
+
 function worldPoint(event) {
   const camera = parseJson(explorer.camera_json());
   const rect = svg.getBoundingClientRect();
@@ -49,6 +56,17 @@ function makeSvg(tag, attributes = {}) {
     element.setAttribute(name, String(value));
   }
   return element;
+}
+
+function setHighlightedNode(nodeId) {
+  if (highlightedNode === nodeId) return;
+  if (highlightedNode) {
+    svg.querySelector(`[data-node-id="${CSS.escape(highlightedNode)}"]`)?.classList.remove("is-highlighted");
+  }
+  highlightedNode = nodeId;
+  if (highlightedNode) {
+    svg.querySelector(`[data-node-id="${CSS.escape(highlightedNode)}"]`)?.classList.add("is-highlighted");
+  }
 }
 
 function renderGraph() {
@@ -149,11 +167,11 @@ function renderInspector(event) {
   const point = worldPoint(event);
   const node = parseJson(explorer.node_at_json(point.x, point.y));
   if (!node) {
-    highlightedNode = null;
+    setHighlightedNode(null);
     inspector.textContent = "Move the pointer over a physical node.";
     return;
   }
-  highlightedNode = node.id;
+  setHighlightedNode(node.id);
   inspector.textContent = `${node.title}\n${node.kind}\n${node.id}\n${node.subsystem}\n→ ${node.targetView ?? "subsystem"}`;
 }
 
@@ -162,21 +180,36 @@ function renderPlayback() {
   if (!summary) {
     playbackState.textContent = "No trace loaded.";
     progressFill.style.width = "0%";
+    timelineScrubber.disabled = true;
+    timelineScrubber.max = "0";
+    timelineScrubber.value = "0";
+    timelineLabel.value = "—";
     return;
   }
+
   const micro = parseJson(playback.current_microcycle_json());
   const bus = parseJson(playback.current_bus_json());
   const frame = parseJson(playback.current_frame_json());
+  const lastCursor = Math.max(0, summary.microcycles - 1);
+  timelineScrubber.disabled = false;
+  timelineScrubber.max = String(lastCursor);
+  timelineScrubber.value = String(summary.cursor);
+  timelineLabel.value = `${summary.cursor} / ${lastCursor}`;
+
   const lines = [
     `seed      ${summary.seed}`,
-    `cursor    ${summary.cursor}/${summary.microcycles - 1}`,
+    `cursor    ${summary.cursor}/${lastCursor}`,
     `frame     ${micro?.frame ?? "—"}`,
     `phase     ${micro?.phase ?? "—"}`,
     `µkind     ${micro?.kind ?? "—"}`,
-    `PC        ${micro ? `0x${micro.pc.toString(16).padStart(4, "0")}` : "—"}`,
-    `MAR       ${micro ? `0x${micro.mar.toString(16).padStart(4, "0")}` : "—"}`,
-    `MDR / IR  ${micro ? `${micro.mdr} / ${micro.ir}` : "—"}`,
-    `bus       ${bus ? `${bus.kind} @ ${bus.address ?? "—"}` : "—"}`,
+    `PC        ${micro ? hex(micro.pc, 4) : "—"}`,
+    `MAR       ${micro ? hex(micro.mar, 4) : "—"}`,
+    `MDR / IR  ${micro ? `${hex(micro.mdr, 2)} / ${hex(micro.ir, 2)}` : "—"}`,
+    `bus kind  ${bus?.kind ?? "—"}`,
+    `bus addr  ${bus ? hex(bus.address, 4) : "—"}`,
+    `bus data  ${bus ? hex(bus.data, 2) : "—"}`,
+    `addr src  ${bus?.addressSource ?? "—"}`,
+    `data src  ${bus?.dataSource ?? "—"}`,
     `score     ${frame?.score ?? "—"}`,
     `lives     ${frame?.lives ?? "—"}`,
   ];
@@ -197,7 +230,9 @@ function playbackLoop() {
   if (!playback.is_playing()) return;
   playback.tick(48);
   renderPlayback();
-  rafHandle = requestAnimationFrame(playbackLoop);
+  if (playback.is_playing()) {
+    rafHandle = requestAnimationFrame(playbackLoop);
+  }
 }
 
 function ensurePlaybackLoop() {
@@ -226,6 +261,13 @@ svg.addEventListener("pointermove", (event) => {
     return;
   }
   renderInspector(event);
+});
+
+svg.addEventListener("pointerleave", () => {
+  if (!dragging) {
+    setHighlightedNode(null);
+    inspector.textContent = "Move the pointer over a physical node.";
+  }
 });
 
 svg.addEventListener("pointerup", (event) => {
@@ -281,6 +323,10 @@ document.querySelector("#micro-step-button").addEventListener("click", () => {
 });
 document.querySelector("#instruction-step-button").addEventListener("click", () => {
   playback.step_instruction();
+  renderPlayback();
+});
+timelineScrubber.addEventListener("input", () => {
+  playback.seek_cursor(Number(timelineScrubber.value));
   renderPlayback();
 });
 document.querySelector("#follow-pc-button").addEventListener("click", () => {

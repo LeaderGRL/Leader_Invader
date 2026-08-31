@@ -42,6 +42,10 @@ button.primary { width: 100%; border-color: #4777af; background: linear-gradient
 .field { display: grid; gap: 5px; margin-bottom: 10px; color: #8fa0b8; font-size: 12px; }
 .field input { width: 100%; border: 1px solid #273247; border-radius: 7px; background: #070b11; color: #e4edff; padding: 8px 9px; outline: none; }
 .field input:focus { border-color: #6789bd; box-shadow: 0 0 0 3px rgba(75, 119, 176, .15); }
+.timeline-field { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 14px 0 6px; color: #8fa0b8; font-size: 11px; }
+.timeline-field output { color: #c8d9f2; font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.timeline-scrubber { width: 100%; accent-color: #6ca8e8; cursor: ew-resize; }
+.timeline-scrubber:disabled { opacity: .35; cursor: default; }
 
 .canvas-panel { min-width: 0; min-height: 0; position: relative; overflow: hidden; background: #070b10; }
 #hardware-canvas { display: block; width: 100%; height: 100%; min-height: 480px; touch-action: none; user-select: none; cursor: grab; background-image: linear-gradient(rgba(75, 104, 145, .08) 1px, transparent 1px), linear-gradient(90deg, rgba(75, 104, 145, .08) 1px, transparent 1px); background-size: 24px 24px; }
