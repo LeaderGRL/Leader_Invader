@@ -29,16 +29,16 @@ function parseJson(value) {
   }
 }
 
-function center(bounds) {
-  return {
-    x: bounds.x + bounds.w * 0.5,
-    y: bounds.y + bounds.h * 0.5,
-  };
-}
-
 function hex(value, width) {
   if (value === null || value === undefined) return "—";
   return `0x${Number(value).toString(16).padStart(width, "0")}`;
+}
+
+function routePath(route) {
+  if (!Array.isArray(route) || route.length < 2) return null;
+  return route
+    .map((point, index) => `${index === 0 ? "M" : "L"}${point[0]} ${point[1]}`)
+    .join(" ");
 }
 
 function worldPoint(event) {
@@ -80,23 +80,18 @@ function renderGraph() {
   svg.replaceChildren();
   svg.setAttribute("viewBox", `${camera.x} ${camera.y} ${camera.w} ${camera.h}`);
 
-  const nodeMap = new Map(graph.nodes.map((node) => [node.id, node]));
   const linkLayer = makeSvg("g", { class: "link-layer" });
   const nodeLayer = makeSvg("g", { class: "node-layer" });
 
   for (const link of graph.links) {
-    const from = nodeMap.get(link.from);
-    const to = nodeMap.get(link.to);
-    if (!from || !to) continue;
-    const a = center(from.bounds);
-    const b = center(to.bounds);
-    linkLayer.append(makeSvg("line", {
-      x1: a.x,
-      y1: a.y,
-      x2: b.x,
-      y2: b.y,
+    const path = routePath(link.route);
+    if (!path) continue;
+    linkLayer.append(makeSvg("path", {
+      d: path,
       class: `hardware-link signal-${link.signal}`,
       "data-link-id": link.id,
+      "data-from-node": link.from,
+      "data-to-node": link.to,
     }));
   }
 
