@@ -9,6 +9,7 @@ if (!generatedModule) {
 const wasm = require(path.resolve(generatedModule));
 assert.equal(typeof wasm.Explorer, 'function', 'Explorer export missing');
 assert.equal(typeof wasm.Playback, 'function', 'Playback export missing');
+assert.equal(typeof wasm.ActivityResolver, 'function', 'ActivityResolver export missing');
 
 const explorer = new wasm.Explorer();
 const topology = JSON.parse(explorer.topology_json());
@@ -32,4 +33,10 @@ assert.ok(activity && typeof activity === 'object', 'current physical activity m
 const aluLinks = JSON.parse(playback.current_alu_links_json());
 assert.ok(Array.isArray(aluLinks), 'ALU propagation API is not JSON array shaped');
 
-console.log(`WASM smoke OK: ${topology.nodes.length} nodes, ${topology.links.length} links, VRAM ${vram.width}x${vram.height}`);
+const resolver = new wasm.ActivityResolver();
+const busLinks = JSON.parse(resolver.bus_links_json(0x83fe, 0x5a, 'dma', 'vram', 'dma'));
+assert.ok(Array.isArray(busLinks) && busLinks.length > 0, 'bus propagation API returned no physical links');
+assert.ok(busLinks.some((link) => link.stage === 'page_select' && link.rank === 4), 'VRAM page selection missing');
+assert.ok(busLinks.some((link) => link.stage === 'dma_data_latch' && link.rank === 6), 'DMA data latch propagation missing');
+
+console.log(`WASM smoke OK: ${topology.nodes.length} nodes, ${topology.links.length} links, VRAM ${vram.width}x${vram.height}, ${busLinks.length} bus stages`);
