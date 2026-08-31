@@ -2,6 +2,7 @@
 pub mod activity;
 pub mod alu_layout;
 pub mod assembler;
+pub mod bus_layout;
 pub mod call_stack_contract;
 pub mod control_contract;
 pub mod control_layout;
@@ -148,6 +149,7 @@ pub fn build_topology() -> Topology {
     let mut topology = topology::build_topology();
     layout::apply_visual_layout(&mut topology);
     alu_layout::inject_alu_wiring(&mut topology);
+    bus_layout::inject_system_bus_wiring(&mut topology);
     control_layout::inject_internal_control_lines(&mut topology);
     shift_register_layout::inject_shift_register(&mut topology);
     formation_cadence_layout::inject_formation_cadence(&mut topology);
