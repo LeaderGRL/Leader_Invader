@@ -146,8 +146,8 @@ impl Explorer {
     #[must_use]
     pub fn topology_json(&self) -> String {
         graph_json(
-            self.topology.width,
-            self.topology.height,
+            &self.topology,
+            &self.navigation,
             self.topology.nodes.iter().collect(),
             self.topology.links.iter().collect(),
         )
@@ -157,8 +157,8 @@ impl Explorer {
     pub fn current_view_graph_json(&self) -> String {
         let view_id = self.state.current_view_id();
         graph_json(
-            self.topology.width,
-            self.topology.height,
+            &self.topology,
+            &self.navigation,
             self.navigation.nodes_for_view(&self.topology, view_id),
             self.navigation.links_for_view(&self.topology, view_id),
         )
@@ -193,7 +193,12 @@ impl Explorer {
     }
 }
 
-fn graph_json(width: f32, height: f32, nodes: Vec<&Node>, links: Vec<&Link>) -> String {
+fn graph_json(
+    topology: &Topology,
+    navigation: &NavigationModel,
+    nodes: Vec<&Node>,
+    links: Vec<&Link>,
+) -> String {
     let nodes = nodes
         .iter()
         .map(|node| simple_node_json(node))
@@ -201,11 +206,12 @@ fn graph_json(width: f32, height: f32, nodes: Vec<&Node>, links: Vec<&Link>) -> 
         .join(",");
     let links = links
         .iter()
-        .map(|link| link_json(link))
+        .map(|link| link_json(link, topology, navigation))
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"width\":{width:.1},\"height\":{height:.1},\"nodes\":[{nodes}],\"links\":[{links}]}}"
+        "{{\"width\":{:.1},\"height\":{:.1},\"nodes\":[{nodes}],\"links\":[{links}]}}",
+        topology.width, topology.height
     )
 }
 
@@ -244,14 +250,31 @@ fn node_json(node: &Node, navigation: &NavigationModel) -> String {
     )
 }
 
-fn link_json(link: &Link) -> String {
+fn link_json(link: &Link, topology: &Topology, navigation: &NavigationModel) -> String {
+    let route = navigation.route_for_link(topology, link).map_or_else(
+        || "[]".to_owned(),
+        |points| {
+            format!(
+                "[[{:.1},{:.1}],[{:.1},{:.1}],[{:.1},{:.1}],[{:.1},{:.1}]]",
+                points[0][0],
+                points[0][1],
+                points[1][0],
+                points[1][1],
+                points[2][0],
+                points[2][1],
+                points[3][0],
+                points[3][1]
+            )
+        },
+    );
     format!(
-        "{{\"id\":\"{}\",\"from\":\"{}\",\"to\":\"{}\",\"signal\":\"{}\",\"label\":\"{}\"}}",
+        "{{\"id\":\"{}\",\"from\":\"{}\",\"to\":\"{}\",\"signal\":\"{}\",\"label\":\"{}\",\"route\":{}}}",
         json_escape(&link.id),
         json_escape(&link.from),
         json_escape(&link.to),
         link.signal.css_class(),
-        json_escape(&link.label)
+        json_escape(&link.label),
+        route
     )
 }
 
@@ -356,11 +379,13 @@ mod tests {
         assert!(topology.contains("\"id\":\"microRom\""));
         assert!(topology.contains("\"id\":\"shieldAddr\""));
         assert!(topology.contains("\"signal\":\"control\""));
+        assert!(topology.contains("\"route\":[["));
 
         assert!(explorer.focus_node("microRom"));
         let detail = explorer.current_view_graph_json();
         assert!(detail.contains("\"id\":\"microRom\""));
         assert!(detail.contains("\"id\":\"microAddr\""));
+        assert!(detail.contains("\"route\":[["));
         assert!(!detail.contains("\"id\":\"shieldAddr\""));
     }
 
