@@ -51,19 +51,30 @@ button.primary { width: 100%; border-color: #4777af; background: linear-gradient
 #hardware-canvas { display: block; width: 100%; height: 100%; min-height: 480px; touch-action: none; user-select: none; cursor: grab; background-image: linear-gradient(rgba(75, 104, 145, .08) 1px, transparent 1px), linear-gradient(90deg, rgba(75, 104, 145, .08) 1px, transparent 1px); background-size: 24px 24px; }
 #hardware-canvas:active { cursor: grabbing; }
 .canvas-hint { position: absolute; left: 12px; bottom: 12px; padding: 7px 10px; border: 1px solid rgba(75, 93, 123, .45); border-radius: 7px; background: rgba(5, 8, 13, .82); color: #73839a; font-size: 11px; pointer-events: none; backdrop-filter: blur(8px); }
-.hardware-link { fill: none; stroke-width: 3; vector-effect: non-scaling-stroke; opacity: .42; stroke-linecap: round; stroke-linejoin: round; }
+.hardware-link { fill: none; stroke-width: 3; vector-effect: non-scaling-stroke; opacity: .42; stroke-linecap: round; stroke-linejoin: round; transition: opacity 80ms linear, stroke-width 80ms linear; }
 .signal-address { stroke: #72a7ff; }
 .signal-data { stroke: #62dfc8; }
 .signal-control { stroke: #d991ff; }
 .signal-clock { stroke: #ffce6a; }
 .signal-carry { stroke: #ff8b72; }
 .signal-video { stroke: #8fe46f; }
-.hardware-node rect { fill: #111a27; stroke: #4c6080; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.hardware-link.is-active { opacity: 1; stroke-width: 5; stroke-dasharray: 12 8; animation: signal-flow .42s linear infinite; }
+.hardware-node rect { fill: #111a27; stroke: #4c6080; stroke-width: 1.5; vector-effect: non-scaling-stroke; transition: fill 80ms linear, stroke 80ms linear, filter 80ms linear; }
 .hardware-node text { fill: #d8e4f8; pointer-events: none; font: 700 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.hardware-node.is-active rect { fill: #23445d; stroke: #a9d8ff; stroke-width: 2.5; filter: drop-shadow(0 0 7px rgba(126, 194, 255, .55)); }
 .hardware-node.is-highlighted rect { fill: #253d59; stroke: #9bc9ff; stroke-width: 2.5; }
+.hardware-node.is-active.is-highlighted rect { fill: #315675; stroke: #d3ebff; }
+
+@keyframes signal-flow {
+  to { stroke-dashoffset: -20; }
+}
 
 .progress-track { height: 5px; margin-top: 12px; overflow: hidden; border-radius: 999px; background: #17202d; }
 #progress-fill { width: 0; height: 100%; background: #6ca8e8; transition: width 80ms linear; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hardware-link.is-active { animation: none; }
+}
 
 @media (max-width: 1050px) {
   .workspace { grid-template-columns: 220px minmax(0, 1fr); }
