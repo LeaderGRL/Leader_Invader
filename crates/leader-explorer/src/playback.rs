@@ -1,8 +1,9 @@
 use leader_core::{
-    physical_activity_nodes, physical_alu_node_values, physical_flag_bit_changes,
-    physical_pc_bit_changes, physical_register_bit_changes, physical_sp_bit_changes,
-    BusTransactionEvent, BusTransactionKind, FrameState, Machine, MatchTrace, MicroCycleEvent,
-    MicroCycleKind, MicroSample, PcEventKind, PhaseKind, PhysicalBitChange,
+    physical_activity_nodes, physical_alu_link_values, physical_alu_node_values,
+    physical_flag_bit_changes, physical_pc_bit_changes, physical_register_bit_changes,
+    physical_sp_bit_changes, BusTransactionEvent, BusTransactionKind, FrameState, Machine,
+    MatchTrace, MicroCycleEvent, MicroCycleKind, MicroSample, PcEventKind, PhaseKind,
+    PhysicalBitChange,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -287,6 +288,39 @@ impl Playback {
                     value.bit,
                     json_escape(value.stage),
                     value.value
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("[{values}]")
+    }
+
+    #[must_use]
+    pub fn current_alu_links_json(&self) -> String {
+        let Some(trace) = &self.trace else {
+            return "[]".to_owned();
+        };
+        let Some(key) = self.current_key() else {
+            return "[]".to_owned();
+        };
+        let Some(event) = trace
+            .alu_events
+            .iter()
+            .find(|event| (event.frame, event.ordinal) == key)
+        else {
+            return "[]".to_owned();
+        };
+        let values = physical_alu_link_values(event.trace)
+            .into_iter()
+            .map(|value| {
+                format!(
+                    "{{\"link\":\"{}\",\"bit\":{},\"rank\":{},\"stage\":\"{}\",\"value\":{},\"selected\":{}}}",
+                    json_escape(&value.link_id),
+                    value.bit,
+                    value.rank,
+                    json_escape(value.stage),
+                    value.value,
+                    value.selected
                 )
             })
             .collect::<Vec<_>>()
@@ -868,10 +902,31 @@ mod tests {
             }
         }
         let json = found.expect("native trace contains ALU activity");
-        assert!(json.contains("\"node\":\"xorA0\""));
+        assert!(json.contains("\"node\":\"rhsXor0\""));
         assert!(json.contains("\"node\":\"orC7\""));
         assert!(json.contains("\"stage\":\"result\""));
         assert!(json.contains("\"value\":"));
+    }
+
+    #[test]
+    fn exact_native_alu_link_propagation_is_exposed_without_frontend_inference() {
+        let mut playback = Playback::new();
+        assert!(playback.load_match("explorer-alu-links", 64));
+        let count = playback.microcycle_count();
+        let mut found = None;
+        for cursor in 0..count {
+            assert!(playback.seek_cursor(cursor));
+            let json = playback.current_alu_links_json();
+            if json != "[]" {
+                found = Some(json);
+                break;
+            }
+        }
+        let json = found.expect("native trace contains ALU propagation");
+        assert!(json.contains("\"link\":"));
+        assert!(json.contains("\"rank\":"));
+        assert!(json.contains("\"selected\":"));
+        assert!(json.contains("\"stage\":"));
     }
 
     #[test]
