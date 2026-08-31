@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use crate::isa::Reg;
+use crate::logic::AluTrace;
 use crate::topology::{SignalKind, Topology};
 use crate::trace::PhaseKind;
 
@@ -15,6 +16,14 @@ pub struct PhysicalBitChange {
     pub node_id: String,
     pub before: bool,
     pub after: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhysicalAluNodeValue {
+    pub node_id: String,
+    pub bit: u8,
+    pub stage: &'static str,
+    pub value: bool,
 }
 
 /// Returns the physical node ids that participate in a native trace phase.
@@ -124,6 +133,43 @@ pub fn physical_activity_links(
         .collect()
 }
 
+/// Expands one authoritative native ALU trace into the six visible logic nodes
+/// of each physical bit slice. The renderer receives already-resolved boolean
+/// state and therefore never needs to reimplement adder or logic semantics.
+#[must_use]
+pub fn physical_alu_node_values(trace: AluTrace) -> Vec<PhysicalAluNodeValue> {
+    let mut values = Vec::with_capacity(48);
+    for bit in 0..8_u8 {
+        let shift = u32::from(bit);
+        let lhs = trace.lhs & (1_u8 << shift) != 0;
+        let rhs = trace.rhs_effective & (1_u8 << shift) != 0;
+        let carry_in = trace.carry_in(usize::from(bit));
+        let xor_ab = lhs ^ rhs;
+        let sum = xor_ab ^ carry_in;
+        let generate = lhs & rhs;
+        let propagate = xor_ab & carry_in;
+        let carry_out = trace.carry_out(usize::from(bit));
+        let result = trace.result & (1_u8 << shift) != 0;
+
+        for (prefix, stage, value) in [
+            ("xorA", "xor_ab", xor_ab),
+            ("xorB", "sum", sum),
+            ("andA", "generate", generate),
+            ("andB", "propagate", propagate),
+            ("orC", "carry_out", carry_out),
+            ("muxR", "result", result),
+        ] {
+            values.push(PhysicalAluNodeValue {
+                node_id: format!("{prefix}{bit}"),
+                bit,
+                stage,
+                value,
+            });
+        }
+    }
+    values
+}
+
 #[must_use]
 pub fn physical_register_bit_changes(reg: Reg, before: u8, after: u8) -> Vec<PhysicalBitChange> {
     physical_byte_bit_changes(&format!("reg{}", reg.name()), before, after)
@@ -187,6 +233,7 @@ fn physical_word_bit_changes(prefix: &str, before: u16, after: u16) -> Vec<Physi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logic::{logic_trace, ripple_add, AluOp};
 
     #[test]
     fn alu_activity_expands_to_all_eight_physical_slices() {
@@ -222,6 +269,34 @@ mod tests {
                 candidate.id == link.id && candidate.signal == link.signal
             })
         }));
+    }
+
+    #[test]
+    fn alu_node_values_resolve_each_visible_ripple_stage_in_core() {
+        let trace = ripple_add(0b0000_1111, 1, false, AluOp::Add);
+        let values = physical_alu_node_values(trace);
+        assert_eq!(values.len(), 48);
+        assert!(values
+            .iter()
+            .any(|value| value.node_id == "orC0" && value.value));
+        assert!(values
+            .iter()
+            .any(|value| value.node_id == "orC3" && value.value));
+        assert!(values
+            .iter()
+            .any(|value| value.node_id == "muxR4" && value.value));
+    }
+
+    #[test]
+    fn alu_result_mux_uses_native_result_for_logic_operations() {
+        let trace = logic_trace(AluOp::And, 0b1010_1010, 0b1111_0000, 0b1010_0000);
+        let values = physical_alu_node_values(trace);
+        assert!(values
+            .iter()
+            .any(|value| value.node_id == "muxR7" && value.value));
+        assert!(values
+            .iter()
+            .any(|value| value.node_id == "muxR4" && !value.value));
     }
 
     #[test]
