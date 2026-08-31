@@ -19,6 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Capture the committed production SVG, not the live WASM explorer.
       - name: Install Playwright
         run: |
           npm install --no-save playwright@1.58.2
