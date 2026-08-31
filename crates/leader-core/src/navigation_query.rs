@@ -49,8 +49,8 @@ mod tests {
     use super::*;
     use crate::build_navigation;
 
-    fn ids(views: &[&CameraView]) -> Vec<&str> {
-        views.iter().map(|view| view.id.as_str()).collect()
+    fn ids(views: &[&CameraView]) -> Vec<String> {
+        views.iter().map(|view| view.id.clone()).collect()
     }
 
     #[test]
@@ -59,11 +59,19 @@ mod tests {
         let navigation = build_navigation(&topology);
         assert_eq!(
             ids(&navigation.view_path_for_node("microRom")),
-            vec!["view-machine", "view-decode", "view-decode.microcode"]
+            vec![
+                "view-machine".to_owned(),
+                "view-decode".to_owned(),
+                "view-decode.microcode".to_owned(),
+            ]
         );
         assert_eq!(
             ids(&navigation.view_path_for_node("shieldAddr")),
-            vec!["view-machine", "view-io", "view-io.shields"]
+            vec![
+                "view-machine".to_owned(),
+                "view-io".to_owned(),
+                "view-io.shields".to_owned(),
+            ]
         );
         assert_eq!(
             navigation
