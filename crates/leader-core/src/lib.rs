@@ -20,6 +20,7 @@ pub mod memory_map;
 pub mod memory_map_contract;
 pub mod microcode;
 pub mod navigation;
+mod navigation_query;
 pub mod pc_datapath;
 pub mod program;
 pub mod rng;
