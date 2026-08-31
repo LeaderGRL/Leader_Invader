@@ -42,7 +42,10 @@ pub mod video_pipeline_contract;
 pub mod video_timing;
 pub mod video_timing_layout;
 
-pub use activity::physical_activity_nodes;
+pub use activity::{
+    physical_activity_nodes, physical_flag_bit_changes, physical_pc_bit_changes,
+    physical_register_bit_changes, physical_sp_bit_changes, PhysicalBitChange,
+};
 pub use call_stack_contract::{validate_call_stack_contract, CallStackValidation};
 pub use control_contract::{
     control_topology_violations, physical_control_lines, physically_used_control_mask,
