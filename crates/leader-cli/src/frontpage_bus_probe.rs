@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use leader_core::{BusTransactionEvent, MatchTrace};
+use leader_core::MatchTrace;
 use leader_svg::RenderConfig;
 
 const MAX_VISIBLE_BUS_EVENTS: usize = 96;

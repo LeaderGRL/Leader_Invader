@@ -156,9 +156,9 @@ Artifact size is intentionally observational. Native semantic completeness and i
 - continue reducing presentation duplication while maintaining inspectable metadata;
 - eventually deprecate historical `MicroSample`/bus reconstruction helper APIs when compatibility is no longer needed.
 
-## M4 — live WASM explorer 🚧
+## M4 — live WASM explorer + GitHub front-page instrument 🚧
 
-The README remains a zero-JavaScript cinematic artifact, while the same Rust core now also powers a live browser explorer. The frontend is deliberately presentation-only: it may transform pointer coordinates and render native data, but it must not duplicate CPU, device, memory-map, topology, routing, hit-test or gameplay semantics.
+The README remains a zero-JavaScript autonomous SVG while the same Rust core also powers a live browser explorer. Both presentations consume the same physical topology and native trace authority; neither may reconstruct CPU, device, memory-map, routing, framebuffer or gameplay semantics independently.
 
 ### Shared navigation substrate ✅
 
@@ -170,7 +170,7 @@ The README remains a zero-JavaScript cinematic artifact, while the same Rust cor
 - hierarchy validation is a production gate;
 - `child_views()`, `view_path_for_node()` and `deepest_view_for_node()` provide direct traversal queries;
 - every rendered physical node carries subsystem/detail membership plus `target-view`, `parent-view` and complete `view-path` metadata;
-- deterministic `CameraCue` scenes drive README framing and level-of-detail presentation;
+- deterministic camera scenes drive README framing and level-of-detail presentation;
 - README replay already uses the hierarchy for CPU/M3/video close-ups without JavaScript.
 
 ### Live explorer foundation ✅
@@ -182,9 +182,8 @@ The README remains a zero-JavaScript cinematic artifact, while the same Rust cor
 - click-to-enter uses `deepest_view_for_node()` rather than frontend heuristics;
 - breadcrumb, parent, back, home and child-view navigation use canonical hierarchy edges;
 - hover inspection exposes real node id, kind, subsystem, bounds and target path;
-- canonical orthogonal routing now lives in renderer-independent `leader-core::routing`;
-- live navigation consumes that shared router and serializes canonical paths to WASM;
-- the browser renders those routes rather than inventing center-to-center wiring.
+- canonical orthogonal routing lives in renderer-independent `leader-core::routing` for the explorer path;
+- live navigation serializes canonical routes to WASM instead of inventing center-to-center wiring in JavaScript.
 
 ### Native deterministic playback ✅
 
@@ -194,38 +193,48 @@ The README remains a zero-JavaScript cinematic artifact, while the same Rust cor
 - exact event focus is retained for bus, DMA and VBlank seeks even when the nearest microcycle key differs;
 - follow PC / bus / DMA / VBlank navigates to canonical physical views;
 - PC, MAR, MDR, IR, bus address/data/source and frame state are inspectable in the browser;
+- native VRAM checkpoints retain the exact 1536-byte 128×96 1bpp framebuffer at raster boundaries;
+- `Playback::current_vram_json()` exposes checkpointed framebuffer bytes, dimensions, format and checksum without gameplay reconstruction;
 - seed and frame-count selection regenerate deterministic native traces;
 - CI compiles the explorer for `wasm32-unknown-unknown`, checks browser JavaScript syntax, and runs native workspace tests + Clippy.
 
-### Live physical activity ✅
+### Exact physical propagation ✅
 
 - `leader-core` owns `phase → physical node ids` activity mapping;
 - addressed ROM/RAM/VRAM activity selects the exact canonical physical page;
-- WASM exposes the current native physical-activity snapshot;
-- `leader-core` derives a canonical conservative active-link subgraph from the physical topology, so the frontend no longer infers wire activity from active endpoints;
-- address/data values are attached to core-owned active links and rendered as hexadecimal or binary at deep zoom;
-- native register/flag/PC/SP mutations are mapped to exact physical bit nodes and exposed by playback;
-- the browser renders `0→1` and `1→0` mutations independently from generic phase activity, including transition/source inspection;
-- `leader-core` resolves the native `AluTrace` into gate values for every visible XOR/SUM/GEN/PROP/CARRY/RES node across all eight slices;
-- `Playback` exposes those exact 48 gate states for the current microcycle;
-- the browser displays ALU gate `0/1` state, bit/stage metadata and deep-zoom values without reimplementing ALU semantics in JavaScript;
-- the final topology now materializes previously sampled full-adder internal wiring and complete ROM/RAM/VRAM/system-bus page read/write paths;
+- native register/flag/PC/SP mutations are mapped to exact physical bit nodes;
+- the final topology materializes complete full-adder internal wiring plus ROM/RAM/VRAM/system-bus page read/write paths;
 - production topology validation requires every full-adder slice and every memory page path to remain connected;
-- `prefers-reduced-motion` disables signal-flow animation without hiding activity state;
-- source commit `0e7bea520277c7aeb0eb3fb49a68300bedbee8e6` passed workspace tests, WASM compilation, JS syntax, Clippy, smoke render and SVG validation in CI #1098.
+- bus propagation is dependency-ordered from address source through arbitration/decoder/page and back through the data path from the same native transaction;
+- DMA propagation has explicit address, VRAM page, data and latch stages;
+- ALU propagation covers `PASS`, `AND`, `OR`, `XOR`, `ADD`, `SUB` and `COMPARE`, including selected result links, carry/borrow chains and dependency ranks;
+- every reported physical ALU link is checked against the canonical topology;
+- address/data values are attached to core-owned active links and rendered as hexadecimal or binary at deep zoom;
+- `prefers-reduced-motion` disables signal-flow animation without hiding authoritative activity state.
+
+### GitHub autonomous front-page replay ✅
+
+- a single GitHub-safe SVG remains the production front-page artifact: no JavaScript, event handlers or remote runtime dependency;
+- trace-driven camera holds are centered on exact native events rather than decorative timestamps;
+- a fixed native BUS ANALYZER exposes transaction kind, address, data, address source, data source and PC with short event-bound pulses so stale values are never presented as current state;
+- the sidebar CRT is an exact uniformly-scaled 4:3 view of native 128×96 VRAM checkpoints;
+- the outro transitions to a large terminal CRT sourced from the exact final native VRAM path and holds it until the deterministic SVG loop resets;
+- the terminal raster is 760×570, preserving the native 4:3 aspect ratio with no semantic redraw of Space Invaders;
+- SVG byte size is telemetry only and is not a validity ceiling;
+- structural validation requires the physical die, native bus analyzer and terminal native CRT markers before production may continue;
+- production `render-readme` now runs Playwright against the newly generated SVG **before committing it**;
+- 11 browser checkpoints validate overview, fetch/decode, microcode, ALU, ROM, RAM, late ALU, VRAM, DMA/GPU, late memory and final CRT focus;
+- failed browser validation uploads partial screenshots for inspection and prevents the generated SVG from reaching the branch;
+- the validated production replay at source commit `97b96efeab3232946de7c6d5275006094af880ab` passed all 11 Chromium checkpoints and was committed by the render workflow as `37ebd190c34e35592208b5708786595b210d3f65`.
 
 ### Remaining M4 work
 
-- complete the physical ALU result-selection network for every operation (`PASS`, `AND`, `OR`, `XOR`, arithmetic SUM/COMPARE) before claiming exact dependency propagation for all opcodes;
-- refine the conservative active-link subgraph into dependency-ordered per-stage propagation after those missing physical result paths exist;
-- animate ordered address → decoder/page → data/control propagation from same-tick native bus events;
-- expose carry/control/per-gate values on exact active links in addition to address/data values;
-- add native VRAM checkpoints to `MatchTrace`: frame records currently contain only `vram_checksum`, so the live CRT must not be reconstructed from gameplay in JavaScript;
-- expose checkpointed framebuffer/CRT state through `Playback` and synchronize it with DMA/scan timing;
-- replay/scrub deterministic camera scenes in addition to raw microcycle time;
-- add bot-policy selection once multiple deterministic policies are first-class core inputs;
-- migrate the README renderer from its historical local `orthogonal_path` helper to `leader-core::routing` so both renderers share one route implementation;
-- add browser-level smoke tests for generated WASM package + interactions;
+- expose additional control/carry/per-gate values directly on exact active links where that improves inspection without turning the full view into unreadable telemetry;
+- migrate the README renderer from its remaining historical local route helper to `leader-core::routing` so static and live renderers use one routing implementation;
+- replay/scrub deterministic camera scenes in the WASM explorer in addition to raw microcycle time;
+- add browser-level interaction smoke tests for the generated WASM package, not only compilation/JS syntax checks;
+- add multiple deterministic bot policies as first-class core inputs before exposing policy selection;
+- experimentally evaluate GitHub-native `<details>` / anchor / named-SVG-view affordances only as optional navigation around the autonomous SVG, never as fake in-image controls;
 - optional user-created groups/layout state layered above, never replacing physical topology authority.
 
 ## M5 — generated match seasons

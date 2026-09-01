@@ -2,11 +2,6 @@ name: capture-frontpage
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - feat/deterministic-svg-engine
-    paths:
-      - 'generated/Leader.svg'
 
 permissions:
   contents: read
@@ -17,10 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Review the exact committed SVG artifact that the GitHub front page loads.
-      # Source/test edits are validated by the normal CI pipeline; this workflow
-      # intentionally runs only after render-readme commits a fresh production
-      # artifact so it never judges stale SVG against newer assertions.
+      # Manual inspection helper for the exact committed SVG artifact.
+      # Production render-readme already runs this same Playwright contract
+      # before it is allowed to commit a regenerated front-page SVG.
       - name: Install Playwright
         run: |
           npm install --no-save playwright@1.58.2
