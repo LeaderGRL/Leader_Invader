@@ -42,7 +42,8 @@ pub fn apply(mut svg: String, trace: &MatchTrace, config: RenderConfig) -> Strin
         overlay,
         r##"<g id="v2-final-crt-focus" opacity="0" data-final-focus="native-vram" data-vram-frame="{}" data-vram-checksum="{:08X}" data-focus-start="{focus_start:.3}" data-focus-end="{focus_end:.3}">
 <animate attributeName="opacity" values="0;0;1;1" keyTimes="0;{k1:.7};{k2:.7};1" keySplines="0 0 1 1;0.16 1 0.3 1;0 0 1 1" calcMode="spline" dur="{:.3}s" repeatCount="indefinite"/>
-<animateTransform attributeName="transform" attributeType="XML" type="matrix" values="{FOCUS_ZOOM_FROM:.5} 0 0 {FOCUS_ZOOM_FROM:.5} {zoom_tx:.5} {zoom_ty:.5};{FOCUS_ZOOM_FROM:.5} 0 0 {FOCUS_ZOOM_FROM:.5} {zoom_tx:.5} {zoom_ty:.5};1 0 0 1 0 0;1 0 0 1 0 0" keyTimes="0;{k1:.7};{k2:.7};1" keySplines="0 0 1 1;0.16 1 0.3 1;0 0 1 1" calcMode="spline" dur="{:.3}s" repeatCount="indefinite"/>
+<g id="v2-final-crt-translate" transform="translate({zoom_tx:.5} {zoom_ty:.5})"><animateTransform attributeName="transform" attributeType="XML" type="translate" values="{zoom_tx:.5} {zoom_ty:.5};{zoom_tx:.5} {zoom_ty:.5};0 0;0 0" keyTimes="0;{k1:.7};{k2:.7};1" keySplines="0 0 1 1;0.16 1 0.3 1;0 0 1 1" calcMode="spline" dur="{:.3}s" repeatCount="indefinite"/>
+<g id="v2-final-crt-scale" transform="scale({FOCUS_ZOOM_FROM:.5})"><animateTransform attributeName="transform" attributeType="XML" type="scale" values="{FOCUS_ZOOM_FROM:.5};{FOCUS_ZOOM_FROM:.5};1;1" keyTimes="0;{k1:.7};{k2:.7};1" keySplines="0 0 1 1;0.16 1 0.3 1;0 0 1 1" calcMode="spline" dur="{:.3}s" repeatCount="indefinite"/>
 <rect x="0" y="0" width="1200" height="675" fill="#020406" opacity=".985"/>
 <rect x="{FINAL_OUTER_X}" y="{FINAL_OUTER_Y}" width="{FINAL_OUTER_W}" height="{FINAL_OUTER_H}" rx="34" fill="#071019" stroke="#657d89" stroke-width="5"/>
 <rect x="194" y="49" width="812" height="572" rx="27" fill="#030807" stroke="#243c35" stroke-width="2"/>
@@ -52,9 +53,10 @@ pub fn apply(mut svg: String, trace: &MatchTrace, config: RenderConfig) -> Strin
 <path d="M232 86 C390 63 808 63 968 86" fill="none" stroke="#e8ffe0" stroke-width="2" opacity=".055"/>
 <text x="{FINAL_RASTER_X}" y="65" fill="#8fb09b" font-size="10" font-weight="900">FINAL NATIVE VRAM · FRAME {:05} · CHECKSUM {:08X}</text>
 <text x="980" y="65" text-anchor="end" fill="#657f70" font-size="9" font-weight="900">VRAM → DMA → SCANOUT · 128×96 · 1 BPP</text>
-</g>"##,
+</g></g></g>"##,
         checkpoint.frame,
         checkpoint.checksum,
+        config.total(),
         config.total(),
         config.total(),
         checkpoint.frame,
@@ -118,7 +120,9 @@ mod tests {
         );
         let output = apply(source, &trace, crate::frontpage::render_config());
         assert!(output.contains("values=\"0;0;1;1\""));
-        assert!(output.contains("type=\"matrix\""));
+        assert!(output.contains("type=\"translate\""));
+        assert!(output.contains("type=\"scale\""));
+        assert!(!output.contains("type=\"matrix\""));
         assert!(!output.contains("<script"));
         assert!(!output.contains("javascript:"));
     }
