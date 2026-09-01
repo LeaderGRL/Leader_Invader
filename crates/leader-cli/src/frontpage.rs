@@ -21,6 +21,10 @@ mod crt_contract {
     include!("frontpage_crt_contract.rs");
 }
 
+mod memory_focus {
+    include!("frontpage_memory_focus.rs");
+}
+
 mod dma_focus {
     include!("frontpage_dma_focus.rs");
 }
@@ -58,12 +62,12 @@ pub const fn render_config() -> RenderConfig {
 
 /// Render the complete physical machine, enrich it with true memory/microcode
 /// bit-cell fabrics, layer electrical propagation beneath component bodies,
-/// enforce scale-independent readability and CRT continuity, guarantee one
-/// native full-trace DMA probe for the GPU scene, then apply the trace-driven
-/// camera. A fixed bus analyzer exposes exact transaction values while the
-/// large gameplay CRT replays exact 1536-byte VRAM checkpoints selected from
-/// an active portion of the native match. No layer reconstructs game semantics
-/// from presentation data.
+/// enforce scale-independent readability and CRT continuity, guarantee exact
+/// full-trace ROM/RAM/VRAM and DMA probes for their technical scenes, then
+/// apply the trace-driven camera. A fixed bus analyzer exposes exact transaction
+/// values while the large gameplay CRT replays exact 1536-byte VRAM checkpoints
+/// selected from an active portion of the native match. No layer reconstructs
+/// game semantics from presentation data.
 #[must_use]
 pub fn render(topology: &Topology, trace: &MatchTrace, _legacy_config: RenderConfig) -> String {
     let config = render_config();
@@ -72,6 +76,7 @@ pub fn render(topology: &Topology, trace: &MatchTrace, _legacy_config: RenderCon
     let svg = layers::apply(svg);
     let svg = quality::apply(svg, topology);
     let svg = crt_contract::apply(svg, config);
+    let svg = memory_focus::apply(svg, topology, trace, config);
     let svg = dma_focus::apply(svg, topology, trace, config);
     let svg = camera::apply(svg, topology, trace, config);
     let svg = bus_probe::apply(svg, trace, config);
