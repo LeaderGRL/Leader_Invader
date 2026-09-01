@@ -28,6 +28,7 @@ try {
     const bitFabric = document.querySelector("#v2-memory-bitcell-fabric");
     const microFabric = document.querySelector("#v2-microcode-bitcell-fabric");
     const camera = document.querySelector("#v2-camera-contract");
+    const finalFocus = document.querySelector("#v2-final-crt-focus");
     const scene = (name) => Number(camera?.getAttribute(`data-scene-${name}`));
     return {
       nodes: document.querySelectorAll("#v2-logic-nodes > g").length,
@@ -39,6 +40,9 @@ try {
       rootViewBoxAnimations: document.querySelectorAll('animate[attributeName="viewBox"]').length,
       cameraTranslate: Boolean(document.querySelector("#v2-camera-translate")),
       cameraScale: Boolean(document.querySelector("#v2-camera-scale")),
+      finalCrtFocus: Boolean(finalFocus),
+      finalCrtSource: finalFocus?.getAttribute("data-final-focus") ?? null,
+      finalCrtRaster: document.querySelector("#v2-final-crt-focus [data-final-native-raster]")?.getAttribute("data-final-native-raster") ?? null,
       viewportClip: viewport?.getAttribute("clip-path") ?? null,
       machineClip: machine?.getAttribute("clip-path") ?? null,
       clip: clipRect ? {
@@ -61,6 +65,7 @@ try {
   if (staticContract.memoryBitCells !== "278528 physical memory bit-cell sites" || staticContract.microcodeCells !== "6144") throw new Error(`Low-level fabrics are incomplete: ${JSON.stringify(staticContract)}`);
   if (staticContract.particles !== 0 || staticContract.rootViewBoxAnimations !== 0) throw new Error(`Particles or root viewBox camera motion are forbidden: ${JSON.stringify(staticContract)}`);
   if (!staticContract.cameraTranslate || !staticContract.cameraScale || staticContract.viewportClip !== "url(#v2-machine-clip)") throw new Error(`Technical camera rig is incomplete: ${JSON.stringify(staticContract)}`);
+  if (!staticContract.finalCrtFocus || staticContract.finalCrtSource !== "native-vram" || staticContract.finalCrtRaster !== "128x96") throw new Error(`Terminal CRT must reuse the native 128x96 VRAM raster: ${JSON.stringify(staticContract)}`);
   if (staticContract.machineClip !== null) throw new Error(`Raw topology must never carry a transformed clipPath: ${staticContract.machineClip}`);
   if (!staticContract.clip || staticContract.clip.x !== 24 || staticContract.clip.width !== 900 || staticContract.clip.x + staticContract.clip.width >= 934) throw new Error(`Hardware viewport must reserve a non-overlapping CRT sidebar: ${JSON.stringify(staticContract.clip)}`);
   for (const [name, value] of Object.entries(staticContract.scenes)) {
@@ -78,7 +83,7 @@ try {
     { name: "08-vram", time: staticContract.scenes.vram, selector: "#v2-exact-memory-cell-activity > g[data-memory-owner=\"vram\"]", focus: "native VRAM page/byte" },
     { name: "09-gpu", time: staticContract.scenes.gpu, selector: "#v2-native-bus-propagation .v2-active-wire[data-stage=\"dma_data_latch\"]", focus: "native DMA latch" },
     { name: "10-late-memory", time: staticContract.scenes.lateMemory, selector: "#v2-exact-memory-cell-activity > g", focus: "late native memory access" },
-    { name: "11-outro-overview", time: 58.0, focus: "full die + final native CRT" },
+    { name: "11-final-crt", time: 58.0, selector: "#v2-final-crt-focus", focus: "terminal native Space Invaders CRT" },
   ];
 
   const manifest = [];
@@ -97,6 +102,7 @@ try {
     if (state.rasterTransform !== "translate(950.000 127.000) scale(1.5000000 1.5000000)" || state.rasterClip !== null) throw new Error(`CRT raster must be exact 4:3, uniformly scaled and unclipped: ${JSON.stringify(state)}`);
     if (checkpoint.time >= 2.5 && state.visibleCrtFrames.length !== 1) throw new Error(`Exactly one native VRAM framebuffer must be visible at ${checkpoint.time}s: ${JSON.stringify(state.visibleCrtFrames)}`);
     for (const frame of state.visibleCrtFrames) if (frame.box.width > 192.5 || frame.box.height > 144.5) throw new Error(`Native framebuffer escapes the 192x144 CRT raster at ${checkpoint.time}s: ${JSON.stringify(frame)}`);
+    if (checkpoint.name === "11-final-crt" && (!state.finalFocus.visible || state.finalFocus.raster.width < 755 || state.finalFocus.raster.height < 565)) throw new Error(`Terminal CRT is not full readable focus at ${checkpoint.time}s: ${JSON.stringify(state.finalFocus)}`);
 
     const file = `${checkpoint.name}.png`;
     await root.screenshot({ path: path.join(outputDir, file), animations: "allow" });
@@ -146,10 +152,16 @@ async function inspectFrame(page) {
       .filter((element) => Number.parseFloat(getComputedStyle(element).opacity || "0") > 0.5)
       .map((element) => ({ frame: element.getAttribute("data-vram-frame"), pixels: element.getAttribute("data-vram-pixels"), checksum: element.getAttribute("data-vram-checksum"), box: rect(element.getBoundingClientRect()) }));
     const crtRasterGroup = [...document.querySelectorAll("#v2-crt g")].find((element) => element.getAttribute("transform")?.includes("scale(1.5000000 1.5000000)"));
+    const finalFocus = document.querySelector("#v2-final-crt-focus");
+    const finalRaster = finalFocus?.querySelector("[data-final-native-raster]");
     return {
       labelFailures, textOverlaps, visibleLabels: visibleTitleRects.length, visibleCrtFrames,
       rasterTransform: crtRasterGroup?.getAttribute("transform") ?? null,
       rasterClip: crtRasterGroup?.getAttribute("clip-path") ?? null,
+      finalFocus: {
+        visible: Boolean(finalFocus && Number.parseFloat(getComputedStyle(finalFocus).opacity || "0") > 0.5),
+        raster: finalRaster ? rect(finalRaster.getBoundingClientRect()) : { x: 0, y: 0, width: 0, height: 0 },
+      },
       activeWires: [...document.querySelectorAll("#v2-native-bus-propagation .v2-active-wire, #v2-native-alu-propagation .v2-active-wire")].filter((element) => Number.parseFloat(getComputedStyle(element).opacity || "0") > 0.05).length,
     };
 
