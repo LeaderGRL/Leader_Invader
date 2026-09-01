@@ -15,6 +15,7 @@ const ROOT_CENTER_X: f32 = 600.0;
 const ROOT_CENTER_Y: f32 = 337.5;
 const MAX_SHOWCASE_FRAMES: usize = 28;
 const SHOWCASE_SECONDS: f32 = 4.8;
+const SHOWCASE_PRESENTATION_FRACTION: f32 = 0.56;
 
 #[derive(Debug, Clone, Copy)]
 struct Showcase<'a> {
@@ -23,11 +24,11 @@ struct Showcase<'a> {
     end_time: f32,
 }
 
-/// Adds a large native CRT during an active portion of the match. Unlike the
-/// previous terminal snapshot, this overlay does not wait for game completion
-/// and does not freeze the cleared framebuffer. It replays a bounded sequence
-/// of exact 1536-byte VRAM checkpoints while a substantial alien formation and
-/// live projectile activity are still present.
+/// Adds a large native CRT replay sourced from an active portion of the match.
+/// The source frames are exact 1536-byte VRAM checkpoints selected while a
+/// substantial alien formation and live projectile activity still exist. The
+/// replay itself is scheduled into a reserved presentation window, so it never
+/// masks a named technical camera scene and never waits for game completion.
 #[must_use]
 pub fn apply(mut svg: String, trace: &MatchTrace, config: RenderConfig) -> String {
     if !svg.contains("data-frontpage-version=\"physical-die-v2\"") || trace.total_frames == 0 {
@@ -92,7 +93,7 @@ pub fn apply(mut svg: String, trace: &MatchTrace, config: RenderConfig) -> Strin
     let _ = writeln!(
         overlay,
         r##"<path d="M232 86 C390 63 808 63 968 86" fill="none" stroke="#e8ffe0" stroke-width="2" opacity=".055"/>
-<text x="{FINAL_RASTER_X}" y="65" fill="#8fb09b" font-size="10" font-weight="900">LIVE NATIVE VRAM · ACTIVE MATCH · {} ALIENS · SCORE {}</text>
+<text x="{FINAL_RASTER_X}" y="65" fill="#8fb09b" font-size="10" font-weight="900">ACTIVE NATIVE VRAM REPLAY · {} ALIENS · SCORE {}</text>
 <text x="980" y="65" text-anchor="end" fill="#657f70" font-size="9" font-weight="900">VRAM → DMA → SCANOUT · 128×96 · 1 BPP</text>
 </g></g></g>"##,
         alive_count(showcase.state),
@@ -120,13 +121,23 @@ fn select_showcase(trace: &MatchTrace, config: RenderConfig) -> Option<Showcase<
         })
         .min_by_key(|state| state.frame.abs_diff(target_frame))
         .or_else(|| {
-            trace.frames.iter().filter(|state| alive_count(state) >= 8).min_by_key(|state| state.frame.abs_diff(target_frame))
+            trace
+                .frames
+                .iter()
+                .filter(|state| alive_count(state) >= 8)
+                .min_by_key(|state| state.frame.abs_diff(target_frame))
         })?;
-    let center = config.game_start()
-        + state.frame as f32 / trace.total_frames.max(1) as f32 * config.game_seconds;
-    let start_time = (center - SHOWCASE_SECONDS * 0.45).max(config.game_start() + 2.0);
+
+    // Presentation timing is intentionally independent from the source frame.
+    // The CRT is an explicit native replay window, placed between technical
+    // scenes so it cannot hide ROM/ALU/RAM inspection and never lands in outro.
+    let start_time = config.game_start() + config.game_seconds * SHOWCASE_PRESENTATION_FRACTION;
     let end_time = (start_time + SHOWCASE_SECONDS).min(config.game_end() - 1.2);
-    Some(Showcase { state, start_time, end_time })
+    Some(Showcase {
+        state,
+        start_time,
+        end_time,
+    })
 }
 
 fn showcase_checkpoints(trace: &MatchTrace, center_frame: u32) -> Vec<&VramCheckpoint> {
@@ -220,7 +231,7 @@ mod tests {
         assert!(output.contains("data-showcase-live=\"true\""));
         assert!(output.contains("data-showcase-alive=\""));
         assert!(output.matches("data-showcase-vram-frame=\"").count() >= 8);
-        assert!(output.contains("LIVE NATIVE VRAM · ACTIVE MATCH"));
+        assert!(output.contains("ACTIVE NATIVE VRAM REPLAY"));
         assert!(!output.contains("FINAL NATIVE VRAM"));
         assert!(!output.contains("<script"));
     }
