@@ -20,7 +20,7 @@ const MAX_SHOWCASE_FRAMES: usize = 28;
 const SHOWCASE_SECONDS: f32 = 4.8;
 const SHOWCASE_PRESENTATION_FRACTION: f32 = 0.56;
 const TARGET_ALIENS: u32 = 18;
-const TARGET_SCORE: u32 = 140;
+const TARGET_SCORE: u16 = 140;
 
 #[derive(Debug, Clone, Copy)]
 struct Showcase<'a> {
