@@ -4,36 +4,106 @@ import path from "node:path";
 
 const input = path.resolve(process.env.LEADER_SVG ?? "generated/Leader.svg");
 const outputDir = path.resolve(process.env.LEADER_FRONT_PAGE_CAPTURE_OUTPUT ?? "generated/frontpage-captures");
-const svg = await readFile(input, "utf8");
+const svgText = await readFile(input, "utf8");
 await mkdir(outputDir, { recursive: true });
 
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1200, height: 675 }, deviceScaleFactor: 1 });
 
 try {
-  await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:1200px;height:675px;overflow:hidden;background:#04080d}svg{display:block;width:1200px;height:675px}</style></head><body>${svg}</body></html>`, { waitUntil: "load" });
-
+  await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:1200px;height:675px;overflow:hidden;background:#04080d}svg{display:block;width:1200px;height:675px}</style></head><body>${svgText}</body></html>`, { waitUntil: "load" });
   const root = page.locator("svg").first();
-  const supportsTimeline = await page.evaluate(() => {
-    const svgRoot = document.querySelector("svg");
-    return Boolean(svgRoot && typeof svgRoot.setCurrentTime === "function" && typeof svgRoot.pauseAnimations === "function");
+  const timelineAvailable = await page.evaluate(() => {
+    const root = document.querySelector("svg");
+    return Boolean(root && typeof root.setCurrentTime === "function" && typeof root.pauseAnimations === "function");
   });
-  if (!supportsTimeline) throw new Error("Browser SVG timeline seeking is unavailable");
+  if (!timelineAvailable) throw new Error("Browser SVG timeline seeking is unavailable");
   await page.evaluate(() => document.querySelector("svg").pauseAnimations());
 
-  const staticContract = await page.evaluate(() => {
+  const contract = await readContract(page);
+  validateStaticContract(contract);
+
+  const checkpoints = buildCheckpoints(contract)
+    .sort((left, right) => left.time - right.time)
+    .map((checkpoint, index) => ({
+      ...checkpoint,
+      name: `${String(index + 1).padStart(2, "0")}-${checkpoint.slug}`,
+    }));
+
+  const manifest = [];
+  for (const checkpoint of checkpoints) {
+    await seek(page, checkpoint.time);
+    await page.waitForTimeout(80);
+
+    if (checkpoint.selector) {
+      const count = await visibleCount(page, checkpoint.selector);
+      if (count <= 0) {
+        throw new Error(`Native activity for ${checkpoint.slug} is not visible at ${checkpoint.time}s: ${checkpoint.selector}`);
+      }
+      checkpoint.activityScore = count;
+    }
+
+    const state = await inspectFrame(page);
+    if (state.labelFailures.length) {
+      throw new Error(`Node labels escape physical components at ${checkpoint.time}s: ${JSON.stringify(state.labelFailures.slice(0, 8))}`);
+    }
+    if (state.textOverlaps.length) {
+      throw new Error(`Readable node labels overlap at ${checkpoint.time}s: ${JSON.stringify(state.textOverlaps)}`);
+    }
+    if (state.rasterTransform !== "translate(950.000 127.000) scale(1.5000000 1.5000000)" || state.rasterClip !== null) {
+      throw new Error(`Sidebar CRT raster contract failed: ${JSON.stringify(state)}`);
+    }
+
+    if (checkpoint.pose) assertCameraPose(checkpoint, state.cameraMatrix);
+
+    if (checkpoint.slug === "live-crt") {
+      if (!state.finalFocus.visible || state.finalFocus.raster.width < 755 || state.finalFocus.raster.height < 565) {
+        throw new Error(`Large native CRT is not fully readable: ${JSON.stringify(state.finalFocus)}`);
+      }
+      if (state.finalFocus.visibleNativeFrames !== 1) {
+        throw new Error(`Large native CRT must display exactly one checkpoint at a time: ${JSON.stringify(state.finalFocus)}`);
+      }
+    } else if (checkpoint.time >= 2.5 && state.visibleCrtFrames.length !== 1) {
+      throw new Error(`Sidebar CRT must expose exactly one native framebuffer at ${checkpoint.time}s: ${JSON.stringify(state.visibleCrtFrames)}`);
+    }
+
+    for (const frame of state.visibleCrtFrames) {
+      if (frame.box.width > 192.5 || frame.box.height > 144.5) {
+        throw new Error(`Sidebar native framebuffer escapes 192x144 raster: ${JSON.stringify(frame)}`);
+      }
+    }
+
+    const file = `${checkpoint.name}.png`;
+    await root.screenshot({ path: path.join(outputDir, file), animations: "allow" });
+    manifest.push({ ...checkpoint, file, state });
+    console.log(`captured ${checkpoint.time.toFixed(4)}s ${checkpoint.focus} -> ${file}`);
+  }
+
+  await writeFile(
+    path.join(outputDir, "manifest.json"),
+    `${JSON.stringify({ source: path.basename(input), contract, checkpoints: manifest }, null, 2)}\n`,
+    "utf8",
+  );
+} finally {
+  await browser.close();
+}
+
+async function readContract(page) {
+  return page.evaluate(() => {
+    const camera = document.querySelector("#v2-camera-contract");
+    const finalFocus = document.querySelector("#v2-final-crt-focus");
     const viewport = document.querySelector("#v2-machine-viewport");
     const machine = document.querySelector("#v2-machine");
     const clipRect = document.querySelector("#v2-machine-clip rect");
     const bitFabric = document.querySelector("#v2-memory-bitcell-fabric");
     const microFabric = document.querySelector("#v2-microcode-bitcell-fabric");
-    const camera = document.querySelector("#v2-camera-contract");
-    const finalFocus = document.querySelector("#v2-final-crt-focus");
-    const scene = (name) => Number(camera?.getAttribute(`data-scene-${name}`));
-    const scenePose = (name) => ({
-      tx: Number(camera?.getAttribute(`data-scene-${name}-tx`)),
-      ty: Number(camera?.getAttribute(`data-scene-${name}-ty`)),
-      scale: Number(camera?.getAttribute(`data-scene-${name}-scale`)),
+    const scene = (name) => ({
+      time: Number(camera?.getAttribute(`data-scene-${name}`)),
+      pose: {
+        tx: Number(camera?.getAttribute(`data-scene-${name}-tx`)),
+        ty: Number(camera?.getAttribute(`data-scene-${name}-ty`)),
+        scale: Number(camera?.getAttribute(`data-scene-${name}-scale`)),
+      },
     });
     const focusStart = Number(finalFocus?.getAttribute("data-focus-start"));
     const focusEnd = Number(finalFocus?.getAttribute("data-focus-end"));
@@ -47,7 +117,14 @@ try {
       rootViewBoxAnimations: document.querySelectorAll('animate[attributeName="viewBox"]').length,
       cameraTranslate: Boolean(document.querySelector("#v2-camera-translate")),
       cameraScale: Boolean(document.querySelector("#v2-camera-scale")),
-      finalCrtFocus: Boolean(finalFocus),
+      viewportClip: viewport?.getAttribute("clip-path") ?? null,
+      machineClip: machine?.getAttribute("clip-path") ?? null,
+      clip: clipRect ? {
+        x: Number(clipRect.getAttribute("x")),
+        width: Number(clipRect.getAttribute("width")),
+      } : null,
+      memoryBitCells: bitFabric?.getAttribute("aria-label") ?? null,
+      microcodeCells: microFabric?.getAttribute("data-microcode-cells") ?? null,
       finalCrtSource: finalFocus?.getAttribute("data-final-focus") ?? null,
       finalCrtLive: finalFocus?.getAttribute("data-showcase-live") ?? null,
       finalCrtAlive: Number(finalFocus?.getAttribute("data-showcase-alive")),
@@ -55,129 +132,96 @@ try {
       finalCrtFrameCount: document.querySelectorAll("#v2-final-crt-focus [data-showcase-vram-frame]").length,
       finalCrtRaster: document.querySelector("#v2-final-crt-focus [data-final-native-raster]")?.getAttribute("data-final-native-raster") ?? null,
       finalCrtFocusTime: Number.isFinite(focusStart) && Number.isFinite(focusEnd) ? (focusStart + focusEnd) * 0.5 : NaN,
-      viewportClip: viewport?.getAttribute("clip-path") ?? null,
-      machineClip: machine?.getAttribute("clip-path") ?? null,
-      clip: clipRect ? {
-        x: Number(clipRect.getAttribute("x")), y: Number(clipRect.getAttribute("y")),
-        width: Number(clipRect.getAttribute("width")), height: Number(clipRect.getAttribute("height")),
-      } : null,
-      memoryBitCells: bitFabric?.getAttribute("aria-label") ?? null,
-      microcodeCells: microFabric?.getAttribute("data-microcode-cells") ?? null,
       scenes: {
-        fetch: { time: scene("fetch"), pose: scenePose("fetch") },
-        vram: { time: scene("vram"), pose: scenePose("vram") },
-        micro: { time: scene("micro"), pose: scenePose("micro") },
-        rom: { time: scene("rom"), pose: scenePose("rom") },
-        alu: { time: scene("alu"), pose: scenePose("alu") },
-        gpu: { time: scene("gpu"), pose: scenePose("gpu") },
-        ram: { time: scene("ram"), pose: scenePose("ram") },
-        lateMemory: { time: scene("late-memory"), pose: scenePose("late-memory") },
+        fetch: scene("fetch"),
+        micro: scene("micro"),
+        rom: scene("rom"),
+        alu: scene("alu"),
+        ram: scene("ram"),
+        vram: scene("vram"),
+        gpu: scene("gpu"),
+        lateMemory: scene("late-memory"),
       },
     };
   });
+}
 
-  if (staticContract.nodes < 498 || staticContract.nodeLabels !== staticContract.nodes) throw new Error(`Every physical node must exist and have a camera-readable label: ${JSON.stringify(staticContract)}`);
-  if (staticContract.staticWires < 1000) throw new Error(`Physical wiring is incomplete: ${JSON.stringify(staticContract)}`);
-  if (staticContract.memoryPages !== 136 || staticContract.bitcellPages !== 136) throw new Error(`Expected all 136 physical memory pages and bit fabrics: ${JSON.stringify(staticContract)}`);
-  if (staticContract.memoryBitCells !== "278528 physical memory bit-cell sites" || staticContract.microcodeCells !== "6144") throw new Error(`Low-level fabrics are incomplete: ${JSON.stringify(staticContract)}`);
-  if (staticContract.particles !== 0 || staticContract.rootViewBoxAnimations !== 0) throw new Error(`Particles or root viewBox camera motion are forbidden: ${JSON.stringify(staticContract)}`);
-  if (!staticContract.cameraTranslate || !staticContract.cameraScale || staticContract.viewportClip !== "url(#v2-machine-clip)") throw new Error(`Technical camera rig is incomplete: ${JSON.stringify(staticContract)}`);
-  if (!staticContract.finalCrtFocus || staticContract.finalCrtSource !== "native-vram" || staticContract.finalCrtRaster !== "128x96") throw new Error(`Large CRT must use the native 128x96 VRAM raster: ${JSON.stringify(staticContract)}`);
-  if (staticContract.finalCrtLive !== "true" || staticContract.finalCrtAlive < 8 || staticContract.finalCrtScore >= 320 || staticContract.finalCrtFrameCount < 8 || !Number.isFinite(staticContract.finalCrtFocusTime)) throw new Error(`Large CRT must show an active multi-frame match, never a cleared terminal framebuffer: ${JSON.stringify(staticContract)}`);
-  if (staticContract.machineClip !== null) throw new Error(`Raw topology must never carry a transformed clipPath: ${staticContract.machineClip}`);
-  if (!staticContract.clip || staticContract.clip.x !== 24 || staticContract.clip.width !== 900 || staticContract.clip.x + staticContract.clip.width >= 934) throw new Error(`Hardware viewport must reserve a non-overlapping CRT sidebar: ${JSON.stringify(staticContract.clip)}`);
-
-  let previousSceneTime = -Infinity;
-  for (const [name, scene] of Object.entries(staticContract.scenes)) {
-    if (!Number.isFinite(scene.time) || scene.time <= 0 || scene.time >= 55) throw new Error(`Camera scene ${name} is not bound to a valid native event: ${JSON.stringify(scene)}`);
-    if (![scene.pose.tx, scene.pose.ty, scene.pose.scale].every(Number.isFinite) || scene.pose.scale <= 0) throw new Error(`Camera scene ${name} is missing its exact pose contract: ${JSON.stringify(scene)}`);
-    if (scene.time <= previousSceneTime) throw new Error(`Camera storyboard is not chronological at ${name}: ${JSON.stringify(staticContract.scenes)}`);
-    previousSceneTime = scene.time;
+function validateStaticContract(contract) {
+  if (contract.nodes < 498 || contract.nodeLabels !== contract.nodes) throw new Error(`Physical node labeling incomplete: ${JSON.stringify(contract)}`);
+  if (contract.staticWires < 1000) throw new Error(`Physical wiring incomplete: ${JSON.stringify(contract)}`);
+  if (contract.memoryPages !== 136 || contract.bitcellPages !== 136) throw new Error(`Memory fabric incomplete: ${JSON.stringify(contract)}`);
+  if (contract.memoryBitCells !== "278528 physical memory bit-cell sites" || contract.microcodeCells !== "6144") throw new Error(`Bit-level fabrics incomplete: ${JSON.stringify(contract)}`);
+  if (contract.particles !== 0 || contract.rootViewBoxAnimations !== 0) throw new Error(`Forbidden presentation animation found: ${JSON.stringify(contract)}`);
+  if (!contract.cameraTranslate || !contract.cameraScale || contract.viewportClip !== "url(#v2-machine-clip)") throw new Error(`Technical camera rig incomplete: ${JSON.stringify(contract)}`);
+  if (contract.machineClip !== null) throw new Error(`Raw transformed machine must not carry clipPath: ${contract.machineClip}`);
+  if (!contract.clip || contract.clip.x !== 24 || contract.clip.width !== 900) throw new Error(`Hardware viewport contract failed: ${JSON.stringify(contract.clip)}`);
+  if (contract.finalCrtSource !== "native-vram" || contract.finalCrtLive !== "true" || contract.finalCrtRaster !== "128x96") throw new Error(`Large CRT is not native VRAM: ${JSON.stringify(contract)}`);
+  if (contract.finalCrtAlive < 8 || contract.finalCrtScore >= 320 || contract.finalCrtFrameCount < 8 || !Number.isFinite(contract.finalCrtFocusTime)) throw new Error(`Large CRT selected a completed/dead match state: ${JSON.stringify(contract)}`);
+  for (const [name, scene] of Object.entries(contract.scenes)) {
+    if (!Number.isFinite(scene.time) || scene.time <= 0 || scene.time >= 55) throw new Error(`Scene ${name} has invalid native time: ${JSON.stringify(scene)}`);
+    if (![scene.pose.tx, scene.pose.ty, scene.pose.scale].every(Number.isFinite) || scene.pose.scale <= 0) throw new Error(`Scene ${name} has invalid expected camera pose: ${JSON.stringify(scene)}`);
   }
+}
 
-  const checkpoints = [
-    { name: "01-overview", time: 0.25, focus: "full die" },
-    { name: "02-fetch-decode", ...staticContract.scenes.fetch, selector: "#v2-native-bus-propagation .v2-active-wire", focus: "PC + native fetch/decode" },
-    { name: "03-vram", ...staticContract.scenes.vram, selector: "#v2-exact-memory-cell-activity > g[data-memory-owner=\"vram\"]", focus: "native VRAM page/byte" },
-    { name: "04-microcode", ...staticContract.scenes.micro, selector: "#v2-microcode-bitcell-fabric > g", focus: "single native 256x24 control-ROM visit" },
-    { name: "05-rom", ...staticContract.scenes.rom, selector: "#v2-exact-memory-cell-activity > g[data-memory-owner=\"rom\"]", focus: "native ROM page/byte" },
-    { name: "06-alu", ...staticContract.scenes.alu, selector: "#v2-native-alu-propagation .v2-active-wire", focus: "native ripple ALU" },
-    { name: "07-gpu", ...staticContract.scenes.gpu, selector: "#v2-native-bus-propagation .v2-active-wire[data-stage=\"dma_data_latch\"]", focus: "native DMA latch" },
-    { name: "08-ram", ...staticContract.scenes.ram, selector: "#v2-exact-memory-cell-activity > g[data-memory-owner=\"ram\"]", focus: "native RAM page/byte" },
-    { name: "09-late-memory", ...staticContract.scenes.lateMemory, selector: "#v2-exact-memory-cell-activity > g", focus: "late native memory access" },
-    { name: "10-live-crt", time: staticContract.finalCrtFocusTime, selector: "#v2-final-crt-focus", focus: "live native Space Invaders CRT" },
+function buildCheckpoints(contract) {
+  return [
+    { slug: "overview", time: 0.25, focus: "full die" },
+    { slug: "fetch-decode", ...contract.scenes.fetch, selector: "#v2-native-bus-propagation .v2-active-wire", focus: "PC + native fetch/decode" },
+    { slug: "microcode", ...contract.scenes.micro, selector: "#v2-microcode-bitcell-fabric > g", focus: "single native control-ROM visit" },
+    { slug: "rom", ...contract.scenes.rom, selector: "#v2-exact-memory-cell-activity > g[data-memory-owner=\"rom\"]", focus: "native ROM page/byte" },
+    { slug: "alu", ...contract.scenes.alu, selector: "#v2-native-alu-propagation .v2-active-wire", focus: "native ripple ALU" },
+    { slug: "ram", ...contract.scenes.ram, selector: "#v2-exact-memory-cell-activity > g[data-memory-owner=\"ram\"]", focus: "native RAM page/byte" },
+    { slug: "vram", ...contract.scenes.vram, selector: "#v2-exact-memory-cell-activity > g[data-memory-owner=\"vram\"]", focus: "native VRAM page/byte" },
+    { slug: "gpu", ...contract.scenes.gpu, selector: "#v2-native-bus-propagation .v2-active-wire[data-stage=\"dma_data_latch\"]", focus: "native DMA latch" },
+    { slug: "late-memory", ...contract.scenes.lateMemory, selector: "#v2-exact-memory-cell-activity > g", focus: "late native memory access" },
+    { slug: "live-crt", time: contract.finalCrtFocusTime, selector: "#v2-final-crt-focus", focus: "active native Space Invaders replay" },
   ];
-
-  const manifest = [];
-  for (const checkpoint of checkpoints) {
-    await seek(page, checkpoint.time);
-    await page.waitForTimeout(80);
-    if (checkpoint.selector) {
-      const activeCount = await visibleCount(page, checkpoint.selector);
-      if (activeCount <= 0) throw new Error(`Camera ${checkpoint.name} is not synchronized with ${checkpoint.selector} at ${checkpoint.time}s`);
-      checkpoint.activityScore = activeCount;
-    }
-
-    const state = await inspectFrame(page);
-    if (state.labelFailures.length > 0) throw new Error(`Node labels escape their physical components at ${checkpoint.time}s: ${JSON.stringify(state.labelFailures.slice(0, 8))}`);
-    if (state.textOverlaps.length > 0) throw new Error(`Readable node labels overlap at ${checkpoint.time}s: ${JSON.stringify(state.textOverlaps)}`);
-    if (state.rasterTransform !== "translate(950.000 127.000) scale(1.5000000 1.5000000)" || state.rasterClip !== null) throw new Error(`CRT raster must be exact 4:3, uniformly scaled and unclipped: ${JSON.stringify(state)}`);
-
-    if (checkpoint.pose) assertCameraPose(checkpoint, state.cameraMatrix);
-
-    const isLiveCrt = checkpoint.name === "10-live-crt";
-    if (!isLiveCrt && checkpoint.time >= 2.5 && state.visibleCrtFrames.length !== 1) throw new Error(`Exactly one sidebar native VRAM framebuffer must be visible at ${checkpoint.time}s: ${JSON.stringify(state.visibleCrtFrames)}`);
-    if (isLiveCrt && state.visibleCrtFrames.length > 1) throw new Error(`At most one sidebar framebuffer may remain below the live CRT overlay: ${JSON.stringify(state.visibleCrtFrames)}`);
-    for (const frame of state.visibleCrtFrames) if (frame.box.width > 192.5 || frame.box.height > 144.5) throw new Error(`Native framebuffer escapes the 192x144 CRT raster at ${checkpoint.time}s: ${JSON.stringify(frame)}`);
-    if (isLiveCrt && (!state.finalFocus.visible || state.finalFocus.raster.width < 755 || state.finalFocus.raster.height < 565 || state.finalFocus.visibleNativeFrames !== 1)) throw new Error(`Live CRT is not a full readable single native framebuffer at ${checkpoint.time}s: ${JSON.stringify(state.finalFocus)}`);
-
-    const file = `${checkpoint.name}.png`;
-    await root.screenshot({ path: path.join(outputDir, file), animations: "allow" });
-    manifest.push({ ...checkpoint, file, state });
-    console.log(`captured ${checkpoint.time.toFixed(4)}s ${checkpoint.focus} activity=${checkpoint.activityScore ?? "n/a"} -> ${file}`);
-  }
-
-  await writeFile(path.join(outputDir, "manifest.json"), `${JSON.stringify({ source: path.basename(input), staticContract, checkpoints: manifest }, null, 2)}\n`, "utf8");
-} finally {
-  await browser.close();
 }
 
 function assertCameraPose(checkpoint, matrix) {
-  if (!matrix) throw new Error(`Camera matrix missing at ${checkpoint.name}`);
-  const tolerancePx = 2.0;
-  const toleranceScale = 0.004;
-  if (Math.abs(matrix.a - checkpoint.pose.scale) > toleranceScale || Math.abs(matrix.d - checkpoint.pose.scale) > toleranceScale || Math.abs(matrix.e - checkpoint.pose.tx) > tolerancePx || Math.abs(matrix.f - checkpoint.pose.ty) > tolerancePx) {
-    throw new Error(`Camera ${checkpoint.name} is looking at the wrong subsystem. expected=${JSON.stringify(checkpoint.pose)} actual=${JSON.stringify(matrix)}`);
+  if (!matrix) throw new Error(`Camera matrix missing at ${checkpoint.slug}`);
+  const scaleTolerance = 0.004;
+  const pixelTolerance = 2.0;
+  if (
+    Math.abs(matrix.a - checkpoint.pose.scale) > scaleTolerance
+    || Math.abs(matrix.d - checkpoint.pose.scale) > scaleTolerance
+    || Math.abs(matrix.e - checkpoint.pose.tx) > pixelTolerance
+    || Math.abs(matrix.f - checkpoint.pose.ty) > pixelTolerance
+  ) {
+    throw new Error(`Camera ${checkpoint.slug} is looking at the wrong subsystem. expected=${JSON.stringify(checkpoint.pose)} actual=${JSON.stringify(matrix)}`);
   }
 }
 
 async function visibleCount(page, selector) {
-  return page.evaluate((candidateSelector) => [...document.querySelectorAll(candidateSelector)].filter((element) => Number.parseFloat(getComputedStyle(element).opacity || "0") > 0.05).length, selector);
+  return page.evaluate((candidate) => [...document.querySelectorAll(candidate)]
+    .filter((element) => Number.parseFloat(getComputedStyle(element).opacity || "0") > 0.05).length, selector);
 }
 
 async function inspectFrame(page) {
   return page.evaluate(() => {
-    const viewportRect = document.querySelector("#v2-machine-viewport")?.getBoundingClientRect();
+    const viewport = document.querySelector("#v2-machine-viewport")?.getBoundingClientRect();
     const labelFailures = [];
-    const visibleTitleRects = [];
+    const visibleLabels = [];
     for (const group of document.querySelectorAll("#v3-node-labels > g")) {
       const id = group.getAttribute("data-label-for-node");
       const node = document.querySelector(`#v2-node-${CSS.escape(id)}`);
       const title = group.querySelector(".v3-title");
-      if (!node || !title || !viewportRect) continue;
+      if (!node || !title || !viewport) continue;
       const nodeRect = node.getBoundingClientRect();
       const titleRect = title.getBoundingClientRect();
-      if (!intersects(nodeRect, viewportRect, 0)) continue;
+      if (!intersects(nodeRect, viewport, 0)) continue;
       const tolerance = Math.max(2, nodeRect.width * 0.035);
-      if (titleRect.x < nodeRect.x - tolerance || titleRect.y < nodeRect.y - tolerance || titleRect.x + titleRect.width > nodeRect.x + nodeRect.width + tolerance || titleRect.y + titleRect.height > nodeRect.y + nodeRect.height + tolerance) labelFailures.push({ id, node: rect(nodeRect), label: rect(titleRect) });
-      if (titleRect.width > 1 && titleRect.height > 1 && intersects(titleRect, viewportRect, 0)) visibleTitleRects.push({ id, rect: rect(titleRect) });
+      if (titleRect.x < nodeRect.x - tolerance || titleRect.y < nodeRect.y - tolerance || titleRect.right > nodeRect.right + tolerance || titleRect.bottom > nodeRect.bottom + tolerance) {
+        labelFailures.push({ id, node: rect(nodeRect), label: rect(titleRect) });
+      }
+      if (titleRect.width > 1 && titleRect.height > 1 && intersects(titleRect, viewport, 0)) visibleLabels.push({ id, rect: rect(titleRect) });
     }
 
     const textOverlaps = [];
-    for (let i = 0; i < visibleTitleRects.length; i += 1) {
-      for (let j = i + 1; j < visibleTitleRects.length; j += 1) {
-        if (intersects(visibleTitleRects[i].rect, visibleTitleRects[j].rect, 1.5)) {
-          textOverlaps.push([visibleTitleRects[i].id, visibleTitleRects[j].id]);
+    for (let left = 0; left < visibleLabels.length; left += 1) {
+      for (let right = left + 1; right < visibleLabels.length; right += 1) {
+        if (intersects(visibleLabels[left].rect, visibleLabels[right].rect, 1.5)) {
+          textOverlaps.push([visibleLabels[left].id, visibleLabels[right].id]);
           if (textOverlaps.length >= 12) break;
         }
       }
@@ -186,35 +230,51 @@ async function inspectFrame(page) {
 
     const visibleCrtFrames = [...document.querySelectorAll("#v2-crt .v2-crt-pixel")]
       .filter((element) => Number.parseFloat(getComputedStyle(element).opacity || "0") > 0.5)
-      .map((element) => ({ frame: element.getAttribute("data-vram-frame"), pixels: element.getAttribute("data-vram-pixels"), checksum: element.getAttribute("data-vram-checksum"), box: rect(element.getBoundingClientRect()) }));
-    const crtRasterGroup = [...document.querySelectorAll("#v2-crt g")].find((element) => element.getAttribute("transform")?.includes("scale(1.5000000 1.5000000)"));
+      .map((element) => ({
+        frame: element.getAttribute("data-vram-frame"),
+        checksum: element.getAttribute("data-vram-checksum"),
+        box: rect(element.getBoundingClientRect()),
+      }));
+    const rasterGroup = [...document.querySelectorAll("#v2-crt g")]
+      .find((element) => element.getAttribute("transform")?.includes("scale(1.5000000 1.5000000)"));
     const finalFocus = document.querySelector("#v2-final-crt-focus");
     const finalRaster = finalFocus?.querySelector("[data-final-native-raster]");
-    const visibleNativeFrames = finalFocus ? [...finalFocus.querySelectorAll("[data-showcase-vram-frame]")].filter((element) => Number.parseFloat(getComputedStyle(element).opacity || "0") > 0.5).length : 0;
-    const cameraScale = document.querySelector("#v2-camera-scale");
-    const ctm = cameraScale?.getCTM();
+    const visibleNativeFrames = finalFocus
+      ? [...finalFocus.querySelectorAll("[data-showcase-vram-frame]")]
+        .filter((element) => Number.parseFloat(getComputedStyle(element).opacity || "0") > 0.5).length
+      : 0;
+    const ctm = document.querySelector("#v2-camera-scale")?.getCTM();
+
     return {
-      labelFailures, textOverlaps, visibleLabels: visibleTitleRects.length, visibleCrtFrames,
-      rasterTransform: crtRasterGroup?.getAttribute("transform") ?? null,
-      rasterClip: crtRasterGroup?.getAttribute("clip-path") ?? null,
+      labelFailures,
+      textOverlaps,
+      rasterTransform: rasterGroup?.getAttribute("transform") ?? null,
+      rasterClip: rasterGroup?.getAttribute("clip-path") ?? null,
+      visibleCrtFrames,
       cameraMatrix: ctm ? { a: ctm.a, d: ctm.d, e: ctm.e, f: ctm.f } : null,
       finalFocus: {
         visible: Boolean(finalFocus && Number.parseFloat(getComputedStyle(finalFocus).opacity || "0") > 0.5),
         visibleNativeFrames,
         raster: finalRaster ? rect(finalRaster.getBoundingClientRect()) : { x: 0, y: 0, width: 0, height: 0 },
       },
-      activeWires: [...document.querySelectorAll("#v2-native-bus-propagation .v2-active-wire, #v2-native-alu-propagation .v2-active-wire")].filter((element) => Number.parseFloat(getComputedStyle(element).opacity || "0") > 0.05).length,
     };
 
-    function rect(value) { return { x: value.x, y: value.y, width: value.width, height: value.height }; }
-    function intersects(a, b, tolerance = 1.5) { return a.x + a.width - tolerance > b.x && b.x + b.width - tolerance > a.x && a.y + a.height - tolerance > b.y && b.y + b.height - tolerance > a.y; }
+    function rect(value) {
+      return { x: value.x, y: value.y, width: value.width, height: value.height };
+    }
+    function intersects(a, b, tolerance = 1.5) {
+      return a.x + a.width - tolerance > b.x
+        && b.x + b.width - tolerance > a.x
+        && a.y + a.height - tolerance > b.y
+        && b.y + b.height - tolerance > a.y;
+    }
   });
 }
 
 async function seek(page, time) {
   await page.evaluate((target) => {
-    const svgRoot = document.querySelector("svg");
-    svgRoot.pauseAnimations();
-    svgRoot.setCurrentTime(target);
+    const root = document.querySelector("svg");
+    root.pauseAnimations();
+    root.setCurrentTime(target);
   }, time);
 }
