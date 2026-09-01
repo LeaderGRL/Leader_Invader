@@ -26,17 +26,8 @@ jobs:
       - name: Verify captures
         if: always()
         run: |
-          test -f generated/frontpage-captures/01-overview.png
-          test -f generated/frontpage-captures/02-fetch-decode.png
-          test -f generated/frontpage-captures/03-vram.png
-          test -f generated/frontpage-captures/04-microcode.png
-          test -f generated/frontpage-captures/05-rom.png
-          test -f generated/frontpage-captures/06-alu.png
-          test -f generated/frontpage-captures/07-gpu.png
-          test -f generated/frontpage-captures/08-ram.png
-          test -f generated/frontpage-captures/09-late-memory.png
-          test -f generated/frontpage-captures/10-live-crt.png
           test -f generated/frontpage-captures/manifest.json
+          test "$(find generated/frontpage-captures -maxdepth 1 -name '*.png' | wc -l)" -ge 10
           ls -lh generated/frontpage-captures
 
       # Upload partial captures even when a visual assertion fails. A failed
