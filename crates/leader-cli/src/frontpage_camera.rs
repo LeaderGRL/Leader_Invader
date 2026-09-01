@@ -1,8 +1,8 @@
 use std::fmt::Write as _;
 
 use leader_core::{
-    physical_alu_link_values, resolve_physical_memory_address, AluEvent, BusTransactionEvent,
-    BusTransactionKind, MatchTrace, MemoryOwner, MicroAddressEvent, Rect, Topology,
+    resolve_physical_memory_address, AluEvent, BusTransactionEvent, BusTransactionKind, MatchTrace,
+    MemoryOwner, Rect, Topology,
 };
 use leader_svg::RenderConfig;
 
@@ -181,14 +181,28 @@ fn camera_plan(topology: &Topology, trace: &MatchTrace, config: RenderConfig) ->
     let micro_time = select_micro_time(trace, config, 7.0);
     let alu_time = select_alu_time(trace, config, 11.5, false);
     let alu_late_time = select_alu_time(trace, config, 29.0, true);
-    let rom = memory_focus(topology, trace, config, MemoryOwner::Rom, 16.0)
-        .unwrap_or(SceneFocus { pose: topology.group("romsys").map_or(overview, |g| fit_pose(g.bounds, 45.0, 0.42)), event_time: 16.0 });
-    let ram = memory_focus(topology, trace, config, MemoryOwner::Ram, 22.0)
-        .unwrap_or(SceneFocus { pose: topology.group("ramsys").map_or(overview, |g| fit_pose(g.bounds, 45.0, 0.40)), event_time: 22.0 });
-    let vram = memory_focus(topology, trace, config, MemoryOwner::Vram, 37.0)
-        .unwrap_or(SceneFocus { pose: topology.group("vramsys").map_or(overview, |g| fit_pose(g.bounds, 45.0, 0.58)), event_time: 37.0 });
-    let late_memory = memory_focus_any(topology, trace, config, 50.0)
-        .unwrap_or(SceneFocus { pose: ram.pose, event_time: 50.0 });
+    let rom = memory_focus(topology, trace, config, MemoryOwner::Rom, 16.0).unwrap_or(SceneFocus {
+        pose: topology
+            .group("romsys")
+            .map_or(overview, |group| fit_pose(group.bounds, 45.0, 0.42)),
+        event_time: 16.0,
+    });
+    let ram = memory_focus(topology, trace, config, MemoryOwner::Ram, 22.0).unwrap_or(SceneFocus {
+        pose: topology
+            .group("ramsys")
+            .map_or(overview, |group| fit_pose(group.bounds, 45.0, 0.40)),
+        event_time: 22.0,
+    });
+    let vram = memory_focus(topology, trace, config, MemoryOwner::Vram, 37.0).unwrap_or(SceneFocus {
+        pose: topology
+            .group("vramsys")
+            .map_or(overview, |group| fit_pose(group.bounds, 45.0, 0.58)),
+        event_time: 37.0,
+    });
+    let late_memory = memory_focus_any(topology, trace, config, 50.0).unwrap_or(SceneFocus {
+        pose: ram.pose,
+        event_time: 50.0,
+    });
     let gpu_time = select_dma_time(trace, config, 44.0);
 
     let scenes = [
@@ -204,18 +218,36 @@ fn camera_plan(topology: &Topology, trace: &MatchTrace, config: RenderConfig) ->
     ];
 
     let mut keys = vec![
-        CameraKey { time: 0.0, pose: overview },
-        CameraKey { time: 0.9, pose: overview },
+        CameraKey {
+            time: 0.0,
+            pose: overview,
+        },
+        CameraKey {
+            time: 0.9,
+            pose: overview,
+        },
     ];
     for (event_time, pose, lead, hold) in scenes {
         let center = event_time.clamp(2.0, config.total() - 2.0);
-        keys.push(CameraKey { time: (center - lead).max(1.0), pose });
-        keys.push(CameraKey { time: (center + hold).min(config.total() - 1.0), pose });
+        keys.push(CameraKey {
+            time: (center - lead).max(1.0),
+            pose,
+        });
+        keys.push(CameraKey {
+            time: (center + hold).min(config.total() - 1.0),
+            pose,
+        });
     }
-    keys.push(CameraKey { time: (config.total() - 3.6).max(1.0), pose: overview });
-    keys.push(CameraKey { time: config.total(), pose: overview });
-    keys.sort_by(|a, b| a.time.total_cmp(&b.time));
-    keys.dedup_by(|a, b| (a.time - b.time).abs() < 0.015);
+    keys.push(CameraKey {
+        time: (config.total() - 3.6).max(1.0),
+        pose: overview,
+    });
+    keys.push(CameraKey {
+        time: config.total(),
+        pose: overview,
+    });
+    keys.sort_by(|left, right| left.time.total_cmp(&right.time));
+    keys.dedup_by(|left, right| (left.time - right.time).abs() < 0.015);
 
     CameraPlan {
         keys,
@@ -261,11 +293,12 @@ fn memory_focus(
             let time = trace_moment(event.frame, event.ordinal, trace, config) + 0.17;
             Some((physical, time, (time - desired_time).abs()))
         })
-        .min_by(|a, b| a.2.total_cmp(&b.2))?;
+        .min_by(|left, right| left.2.total_cmp(&right.2))?;
     let prefix = owner_prefix(owner)?;
     let node = topology.node(&format!("{prefix}{}", event.0.page))?;
     Some(SceneFocus {
-        pose: memory_bank_pose(topology, owner, event.0.page).unwrap_or_else(|| fit_pose(node.bounds, 10.0, 3.0)),
+        pose: memory_bank_pose(topology, owner, event.0.page)
+            .unwrap_or_else(|| fit_pose(node.bounds, 10.0, 3.0)),
         event_time: event.1,
     })
 }
@@ -284,7 +317,7 @@ fn memory_focus_any(
             let time = trace_moment(event.frame, event.ordinal, trace, config) + 0.17;
             Some((physical, time, (time - desired_time).abs()))
         })
-        .min_by(|a, b| a.2.total_cmp(&b.2))?;
+        .min_by(|left, right| left.2.total_cmp(&right.2))?;
     let prefix = owner_prefix(event.0.owner)?;
     let node = topology.node(&format!("{prefix}{}", event.0.page))?;
     Some(SceneFocus {
@@ -304,14 +337,21 @@ fn memory_bank_pose(topology: &Topology, owner: MemoryOwner, page: usize) -> Opt
     let row = page / columns;
     let col = page % columns;
     let span = if owner == MemoryOwner::Vram { 2 } else { 3 };
-    let start_col = col.saturating_sub(span / 2).min(columns.saturating_sub(span));
-    let mut bounds = topology.node(&format!("{prefix}{}", row * columns + start_col))?.bounds;
+    let start_col = col
+        .saturating_sub(span / 2)
+        .min(columns.saturating_sub(span));
+    let mut bounds = topology
+        .node(&format!("{prefix}{}", row * columns + start_col))?
+        .bounds;
     for offset in 1..span {
         let candidate = row * columns + start_col + offset;
         if candidate >= page_count {
             break;
         }
-        bounds = union_rect(bounds, topology.node(&format!("{prefix}{candidate}"))?.bounds);
+        bounds = union_rect(
+            bounds,
+            topology.node(&format!("{prefix}{candidate}"))?.bounds,
+        );
     }
     Some(fit_pose(bounds, 24.0, 2.55))
 }
@@ -330,7 +370,7 @@ fn select_fetch_time(trace: &MatchTrace, config: RenderConfig, desired: f32) -> 
         .into_iter()
         .filter(|event| event.kind == BusTransactionKind::Fetch)
         .map(|event| trace_moment(event.frame, event.ordinal, trace, config) + 0.18)
-        .min_by(|a, b| (a - desired).abs().total_cmp(&(b - desired).abs()))
+        .min_by(|left, right| (left - desired).abs().total_cmp(&(right - desired).abs()))
         .unwrap_or(desired)
 }
 
@@ -339,7 +379,7 @@ fn select_dma_time(trace: &MatchTrace, config: RenderConfig, desired: f32) -> f3
         .into_iter()
         .filter(|event| event.kind == BusTransactionKind::Dma)
         .map(|event| trace_moment(event.frame, event.ordinal, trace, config) + 0.22)
-        .min_by(|a, b| (a - desired).abs().total_cmp(&(b - desired).abs()))
+        .min_by(|left, right| (left - desired).abs().total_cmp(&(right - desired).abs()))
         .unwrap_or(desired)
 }
 
@@ -348,7 +388,7 @@ fn select_micro_time(trace: &MatchTrace, config: RenderConfig, desired: f32) -> 
         .into_iter()
         .filter(|event| event.control_bits != 0)
         .map(|event| trace_moment(event.frame, event.ordinal, trace, config) + 0.12)
-        .min_by(|a, b| (a - desired).abs().total_cmp(&(b - desired).abs()))
+        .min_by(|left, right| (left - desired).abs().total_cmp(&(right - desired).abs()))
         .unwrap_or(desired)
 }
 
@@ -358,12 +398,20 @@ fn select_alu_time(trace: &MatchTrace, config: RenderConfig, desired: f32, late:
         .into_iter()
         .filter(|event| !late || trace_moment(event.frame, event.ordinal, trace, config) >= 20.0)
         .collect::<Vec<_>>();
-    candidates.sort_by(|a, b| alu_interest(**b).cmp(&alu_interest(**a)).then_with(|| {
-        let ta = trace_moment(a.frame, a.ordinal, trace, config);
-        let tb = trace_moment(b.frame, b.ordinal, trace, config);
-        (ta - desired).abs().total_cmp(&(tb - desired).abs())
-    }));
-    candidates.first().map_or(desired, |event| trace_moment(event.frame, event.ordinal, trace, config) + 0.14)
+    candidates.sort_by(|left, right| {
+        alu_interest(**right)
+            .cmp(&alu_interest(**left))
+            .then_with(|| {
+                let left_time = trace_moment(left.frame, left.ordinal, trace, config);
+                let right_time = trace_moment(right.frame, right.ordinal, trace, config);
+                (left_time - desired)
+                    .abs()
+                    .total_cmp(&(right_time - desired).abs())
+            })
+    });
+    candidates.first().map_or(desired, |event| {
+        trace_moment(event.frame, event.ordinal, trace, config) + 0.14
+    })
 }
 
 fn alu_interest(event: AluEvent) -> u32 {
@@ -395,7 +443,7 @@ fn rendered_alu_events(trace: &MatchTrace) -> Vec<&AluEvent> {
     sample_slice(&trace.alu_events, MAX_RENDERED_ALU_EVENTS)
 }
 
-fn sample_refs<'a, T>(values: &'a [&'a T], limit: usize) -> Vec<&'a T> {
+fn sample_refs<'a, T>(values: &[&'a T], limit: usize) -> Vec<&'a T> {
     if values.len() <= limit || limit == 0 {
         return values.to_vec();
     }
@@ -414,7 +462,11 @@ fn sample_slice<T>(values: &[T], limit: usize) -> Vec<&T> {
 fn fit_pose(bounds: Rect, padding: f32, max_scale: f32) -> Pose {
     let focus = bounds.padded(padding);
     let scale = (VIEWPORT.w / focus.w.max(1.0)).min(VIEWPORT.h / focus.h.max(1.0));
-    let scale = if max_scale > 0.0 { scale.min(max_scale) } else { scale };
+    let scale = if max_scale > 0.0 {
+        scale.min(max_scale)
+    } else {
+        scale
+    };
     let rendered_w = focus.w * scale;
     let rendered_h = focus.h * scale;
     Pose {
@@ -424,11 +476,11 @@ fn fit_pose(bounds: Rect, padding: f32, max_scale: f32) -> Pose {
     }
 }
 
-fn union_rect(a: Rect, b: Rect) -> Rect {
-    let x0 = a.x.min(b.x);
-    let y0 = a.y.min(b.y);
-    let x1 = (a.x + a.w).max(b.x + b.w);
-    let y1 = (a.y + a.h).max(b.y + b.h);
+fn union_rect(left: Rect, right: Rect) -> Rect {
+    let x0 = left.x.min(right.x);
+    let y0 = left.y.min(right.y);
+    let x1 = (left.x + left.w).max(right.x + right.w);
+    let y1 = (left.y + left.h).max(right.y + right.h);
     Rect::new(x0, y0, x1 - x0, y1 - y0)
 }
 
@@ -480,6 +532,8 @@ mod tests {
         let sampled = rendered_memory_events(&trace);
         assert!(!sampled.is_empty());
         assert!(sampled.len() <= MAX_RENDERED_MEMORY_EVENTS + 1);
-        assert!(sampled.iter().all(|event| event.address.is_some() && event.data.is_some()));
+        assert!(sampled
+            .iter()
+            .all(|event| event.address.is_some() && event.data.is_some()));
     }
 }
