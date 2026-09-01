@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use leader_core::MatchTrace;
+use leader_core::{framebuffer_pixel, FrameState, MatchTrace, VramCheckpoint, FRAMEBUFFER_HEIGHT, FRAMEBUFFER_WIDTH};
 use leader_svg::RenderConfig;
 
 const FINAL_OUTER_X: f32 = 180.0;
@@ -13,54 +13,90 @@ const FINAL_RASTER_SCALE: f32 = 5.9375;
 const FOCUS_ZOOM_FROM: f32 = 0.42;
 const ROOT_CENTER_X: f32 = 600.0;
 const ROOT_CENTER_Y: f32 = 337.5;
+const MAX_SHOWCASE_FRAMES: usize = 28;
+const SHOWCASE_SECONDS: f32 = 4.8;
 
-/// Adds a terminal camera shot that is sourced from the exact final native VRAM
-/// checkpoint. The regular sidebar CRT remains authoritative during gameplay;
-/// this overlay only becomes visible during the outro and then stays on screen
-/// until the deterministic SVG loop restarts.
+#[derive(Debug, Clone, Copy)]
+struct Showcase<'a> {
+    state: &'a FrameState,
+    start_time: f32,
+    end_time: f32,
+}
+
+/// Adds a large native CRT during an active portion of the match. Unlike the
+/// previous terminal snapshot, this overlay does not wait for game completion
+/// and does not freeze the cleared framebuffer. It replays a bounded sequence
+/// of exact 1536-byte VRAM checkpoints while a substantial alien formation and
+/// live projectile activity are still present.
 #[must_use]
 pub fn apply(mut svg: String, trace: &MatchTrace, config: RenderConfig) -> String {
-    if !svg.contains("data-frontpage-version=\"physical-die-v2\"") {
+    if !svg.contains("data-frontpage-version=\"physical-die-v2\"") || trace.total_frames == 0 {
         return svg;
     }
-    let Some(checkpoint) = trace.vram_checkpoints.last() else {
+    let Some(showcase) = select_showcase(trace, config) else {
         return svg;
     };
-    let Some(path) = final_checkpoint_path(&svg, checkpoint.frame) else {
+    let frames = showcase_checkpoints(trace, showcase.state.frame);
+    if frames.is_empty() {
         return svg;
-    };
+    }
 
-    let focus_start = (config.game_end() + 0.35).min(config.total() - 1.25);
-    let focus_end = (focus_start + 1.05).min(config.total() - 0.15);
+    let focus_start = showcase.start_time;
+    let focus_end = showcase.end_time;
+    let zoom_in_end = (focus_start + 0.65).min(focus_end - 0.5);
+    let zoom_out_start = (focus_end - 0.65).max(zoom_in_end + 0.1);
     let k1 = normalized(focus_start, config.total());
-    let k2 = normalized(focus_end, config.total()).max(k1 + 0.000_01);
+    let k2 = normalized(zoom_in_end, config.total()).max(k1 + 0.000_01);
+    let k3 = normalized(zoom_out_start, config.total()).max(k2 + 0.000_01);
+    let k4 = normalized(focus_end, config.total()).max(k3 + 0.000_01);
     let zoom_tx = ROOT_CENTER_X * (1.0 - FOCUS_ZOOM_FROM);
     let zoom_ty = ROOT_CENTER_Y * (1.0 - FOCUS_ZOOM_FROM);
 
-    let mut overlay = String::with_capacity(path.len() + 4_096);
+    let mut overlay = String::with_capacity(frames.len() * 16_000 + 5_000);
     let _ = writeln!(
         overlay,
-        r##"<g id="v2-final-crt-focus" opacity="0" data-final-focus="native-vram" data-vram-frame="{}" data-vram-checksum="{:08X}" data-focus-start="{focus_start:.3}" data-focus-end="{focus_end:.3}">
-<animate attributeName="opacity" values="0;0;1;1" keyTimes="0;{k1:.7};{k2:.7};1" keySplines="0 0 1 1;0.16 1 0.3 1;0 0 1 1" calcMode="spline" dur="{:.3}s" repeatCount="indefinite"/>
-<g id="v2-final-crt-translate" transform="translate({zoom_tx:.5} {zoom_ty:.5})"><animateTransform attributeName="transform" attributeType="XML" type="translate" values="{zoom_tx:.5} {zoom_ty:.5};{zoom_tx:.5} {zoom_ty:.5};0 0;0 0" keyTimes="0;{k1:.7};{k2:.7};1" keySplines="0 0 1 1;0.16 1 0.3 1;0 0 1 1" calcMode="spline" dur="{:.3}s" repeatCount="indefinite"/>
-<g id="v2-final-crt-scale" transform="scale({FOCUS_ZOOM_FROM:.5})"><animateTransform attributeName="transform" attributeType="XML" type="scale" values="{FOCUS_ZOOM_FROM:.5};{FOCUS_ZOOM_FROM:.5};1;1" keyTimes="0;{k1:.7};{k2:.7};1" keySplines="0 0 1 1;0.16 1 0.3 1;0 0 1 1" calcMode="spline" dur="{:.3}s" repeatCount="indefinite"/>
+        r##"<g id="v2-final-crt-focus" opacity="0" data-final-focus="native-vram" data-showcase-live="true" data-vram-frame="{}" data-vram-checksum="{:08X}" data-showcase-alive="{}" data-showcase-score="{}" data-focus-start="{focus_start:.3}" data-focus-end="{focus_end:.3}">
+<animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;{k1:.7};{k2:.7};{k3:.7};{k4:.7};1" dur="{:.3}s" repeatCount="indefinite"/>
+<g id="v2-final-crt-translate" transform="translate({zoom_tx:.5} {zoom_ty:.5})"><animateTransform attributeName="transform" attributeType="XML" type="translate" values="{zoom_tx:.5} {zoom_ty:.5};{zoom_tx:.5} {zoom_ty:.5};0 0;0 0;{zoom_tx:.5} {zoom_ty:.5};{zoom_tx:.5} {zoom_ty:.5}" keyTimes="0;{k1:.7};{k2:.7};{k3:.7};{k4:.7};1" dur="{:.3}s" repeatCount="indefinite"/>
+<g id="v2-final-crt-scale" transform="scale({FOCUS_ZOOM_FROM:.5})"><animateTransform attributeName="transform" attributeType="XML" type="scale" values="{FOCUS_ZOOM_FROM:.5};{FOCUS_ZOOM_FROM:.5};1;1;{FOCUS_ZOOM_FROM:.5};{FOCUS_ZOOM_FROM:.5}" keyTimes="0;{k1:.7};{k2:.7};{k3:.7};{k4:.7};1" dur="{:.3}s" repeatCount="indefinite"/>
 <rect x="0" y="0" width="1200" height="675" fill="#020406" opacity=".985"/>
 <rect x="{FINAL_OUTER_X}" y="{FINAL_OUTER_Y}" width="{FINAL_OUTER_W}" height="{FINAL_OUTER_H}" rx="34" fill="#071019" stroke="#657d89" stroke-width="5"/>
 <rect x="194" y="49" width="812" height="572" rx="27" fill="#030807" stroke="#243c35" stroke-width="2"/>
 <rect x="{FINAL_RASTER_X}" y="{FINAL_RASTER_Y}" width="760" height="570" rx="13" fill="#010302" stroke="#41614f" stroke-width="2" data-final-native-raster="128x96"/>
-<path d="{path}" transform="translate({FINAL_RASTER_X:.3} {FINAL_RASTER_Y:.3}) scale({FINAL_RASTER_SCALE:.7})" fill="#b9ff78" shape-rendering="crispEdges" data-final-native-pixels="true"/>
-<rect x="{FINAL_RASTER_X}" y="{FINAL_RASTER_Y}" width="760" height="4" fill="#d7ffbc" opacity=".055"><animate attributeName="y" values="{FINAL_RASTER_Y};641;{FINAL_RASTER_Y}" dur="2.3s" repeatCount="indefinite"/></rect>
-<path d="M232 86 C390 63 808 63 968 86" fill="none" stroke="#e8ffe0" stroke-width="2" opacity=".055"/>
-<text x="{FINAL_RASTER_X}" y="65" fill="#8fb09b" font-size="10" font-weight="900">FINAL NATIVE VRAM · FRAME {:05} · CHECKSUM {:08X}</text>
+"##,
+        showcase.state.frame,
+        showcase.state.vram_checksum,
+        alive_count(showcase.state),
+        showcase.state.score,
+        config.total(),
+        config.total(),
+        config.total(),
+    );
+
+    let span = (focus_end - focus_start).max(0.1);
+    for (index, checkpoint) in frames.iter().enumerate() {
+        let frame_start = focus_start + index as f32 / frames.len() as f32 * span;
+        let frame_end = focus_start + (index + 1) as f32 / frames.len() as f32 * span;
+        let fk1 = normalized(frame_start, config.total());
+        let fk2 = normalized(frame_end, config.total()).max(fk1 + 0.000_01);
+        let path = framebuffer_path(&checkpoint.bytes);
+        let _ = writeln!(
+            overlay,
+            r##"<path d="{path}" transform="translate({FINAL_RASTER_X:.3} {FINAL_RASTER_Y:.3}) scale({FINAL_RASTER_SCALE:.7})" fill="#b9ff78" shape-rendering="crispEdges" opacity="0" data-final-native-pixels="true" data-showcase-vram-frame="{}" data-showcase-vram-checksum="{:08X}"><animate attributeName="opacity" values="0;1;0;0" keyTimes="0;{fk1:.7};{fk2:.7};1" calcMode="discrete" dur="{:.3}s" repeatCount="indefinite"/></path>"##,
+            checkpoint.frame,
+            checkpoint.checksum,
+            config.total(),
+        );
+    }
+
+    let _ = writeln!(
+        overlay,
+        r##"<path d="M232 86 C390 63 808 63 968 86" fill="none" stroke="#e8ffe0" stroke-width="2" opacity=".055"/>
+<text x="{FINAL_RASTER_X}" y="65" fill="#8fb09b" font-size="10" font-weight="900">LIVE NATIVE VRAM · ACTIVE MATCH · {} ALIENS · SCORE {}</text>
 <text x="980" y="65" text-anchor="end" fill="#657f70" font-size="9" font-weight="900">VRAM → DMA → SCANOUT · 128×96 · 1 BPP</text>
 </g></g></g>"##,
-        checkpoint.frame,
-        checkpoint.checksum,
-        config.total(),
-        config.total(),
-        config.total(),
-        checkpoint.frame,
-        checkpoint.checksum,
+        alive_count(showcase.state),
+        showcase.state.score,
     );
 
     if let Some(index) = svg.rfind("</svg>") {
@@ -69,20 +105,82 @@ pub fn apply(mut svg: String, trace: &MatchTrace, config: RenderConfig) -> Strin
     svg
 }
 
-fn final_checkpoint_path(svg: &str, frame: u32) -> Option<String> {
-    let marker = format!("data-vram-frame=\"{frame}\"");
-    let marker_index = svg.rfind(&marker)?;
-    let path_start = svg[..marker_index].rfind("<path class=\"v2-crt-pixel\"")?;
-    let opening_end = svg[path_start..].find('>')? + path_start;
-    let opening = &svg[path_start..=opening_end];
-    attribute_value(opening, "d")
+fn select_showcase(trace: &MatchTrace, config: RenderConfig) -> Option<Showcase<'_>> {
+    let target_frame = trace.total_frames.saturating_mul(30) / 100;
+    let state = trace
+        .frames
+        .iter()
+        .filter(|state| {
+            let alive = alive_count(state);
+            let enemy_activity = state.enemy_shots.iter().any(Option::is_some);
+            (10..=24).contains(&alive)
+                && state.score >= 80
+                && state.lives >= 1
+                && (state.player_shot.is_some() || enemy_activity)
+        })
+        .min_by_key(|state| state.frame.abs_diff(target_frame))
+        .or_else(|| {
+            trace.frames.iter().filter(|state| alive_count(state) >= 8).min_by_key(|state| state.frame.abs_diff(target_frame))
+        })?;
+    let center = config.game_start()
+        + state.frame as f32 / trace.total_frames.max(1) as f32 * config.game_seconds;
+    let start_time = (center - SHOWCASE_SECONDS * 0.45).max(config.game_start() + 2.0);
+    let end_time = (start_time + SHOWCASE_SECONDS).min(config.game_end() - 1.2);
+    Some(Showcase { state, start_time, end_time })
 }
 
-fn attribute_value(element: &str, attribute: &str) -> Option<String> {
-    let marker = format!("{attribute}=\"");
-    let start = element.find(&marker)? + marker.len();
-    let end = element[start..].find('"')? + start;
-    Some(element[start..end].to_owned())
+fn showcase_checkpoints(trace: &MatchTrace, center_frame: u32) -> Vec<&VramCheckpoint> {
+    if trace.vram_checkpoints.is_empty() {
+        return Vec::new();
+    }
+    let radius = (trace.total_frames / 18).max(24);
+    let start = center_frame.saturating_sub(radius);
+    let end = center_frame.saturating_add(radius).min(trace.total_frames);
+    let candidates = trace
+        .vram_checkpoints
+        .iter()
+        .filter(|checkpoint| checkpoint.frame >= start && checkpoint.frame <= end)
+        .collect::<Vec<_>>();
+    sample_refs(&candidates, MAX_SHOWCASE_FRAMES)
+}
+
+fn alive_count(state: &FrameState) -> u32 {
+    state.alive_rows.iter().map(|row| row.count_ones()).sum()
+}
+
+fn framebuffer_path(bytes: &[u8]) -> String {
+    let mut path = String::with_capacity(30_000);
+    for y in 0..FRAMEBUFFER_HEIGHT {
+        let mut x = 0;
+        while x < FRAMEBUFFER_WIDTH {
+            if framebuffer_pixel(bytes, x, y) != Some(true) {
+                x += 1;
+                continue;
+            }
+            let start = x;
+            x += 1;
+            while x < FRAMEBUFFER_WIDTH && framebuffer_pixel(bytes, x, y) == Some(true) {
+                x += 1;
+            }
+            let width = x - start;
+            let _ = write!(path, "M{start} {y}h{width}v1h-{width}z");
+        }
+    }
+    path
+}
+
+fn sample_refs<'a, T>(values: &[&'a T], maximum: usize) -> Vec<&'a T> {
+    if values.len() <= maximum || maximum == 0 {
+        return values.to_vec();
+    }
+    let stride = values.len().div_ceil(maximum);
+    let mut sampled = values.iter().step_by(stride).copied().collect::<Vec<_>>();
+    if let (Some(sampled_last), Some(last)) = (sampled.last(), values.last()) {
+        if !std::ptr::eq(*sampled_last, *last) {
+            sampled.push(*last);
+        }
+    }
+    sampled
 }
 
 fn normalized(time: f32, total: f32) -> f32 {
@@ -95,36 +193,35 @@ mod tests {
     use leader_core::Machine;
 
     #[test]
-    fn final_focus_reuses_the_last_native_vram_path() {
-        let trace = Machine::run_match("final-crt-focus", 5000);
-        let checkpoint = trace.vram_checkpoints.last().expect("native VRAM checkpoint");
-        let source = format!(
-            "<svg data-frontpage-version=\"physical-die-v2\"><path class=\"v2-crt-pixel\" d=\"M0 0h1v1h-1z\" opacity=\"0\" data-vram-frame=\"{}\" data-vram-checksum=\"{:08X}\"></path></svg>",
-            checkpoint.frame, checkpoint.checksum,
-        );
-        let output = apply(source, &trace, crate::frontpage::render_config());
-        assert!(output.contains("id=\"v2-final-crt-focus\""));
-        assert!(output.contains("data-final-focus=\"native-vram\""));
-        assert!(output.contains(&format!("data-vram-frame=\"{}\"", checkpoint.frame)));
-        assert!(output.contains("d=\"M0 0h1v1h-1z\" transform=\"translate(220.000 75.000) scale(5.9375000)\""));
-        assert!(output.contains("data-final-native-raster=\"128x96\""));
-        assert!(output.contains("data-final-native-pixels=\"true\""));
+    fn showcase_is_selected_before_the_match_is_cleared() {
+        let trace = Machine::run_match("active-crt-showcase", 5000);
+        let showcase = select_showcase(&trace, crate::frontpage::render_config()).expect("active showcase");
+        assert!(alive_count(showcase.state) >= 8);
+        assert!(showcase.state.score < trace.final_score);
+        assert!(showcase.end_time < crate::frontpage::render_config().game_end());
     }
 
     #[test]
-    fn final_focus_remains_declarative_and_holds_until_loop_reset() {
-        let trace = Machine::run_match("final-crt-declarative", 5000);
-        let checkpoint = trace.vram_checkpoints.last().expect("native VRAM checkpoint");
-        let source = format!(
-            "<svg data-frontpage-version=\"physical-die-v2\"><path class=\"v2-crt-pixel\" d=\"M0 0h1v1h-1z\" data-vram-frame=\"{}\"></path></svg>",
-            checkpoint.frame,
-        );
+    fn showcase_uses_multiple_native_vram_checkpoints() {
+        let trace = Machine::run_match("active-crt-frames", 5000);
+        let showcase = select_showcase(&trace, crate::frontpage::render_config()).expect("active showcase");
+        let frames = showcase_checkpoints(&trace, showcase.state.frame);
+        assert!(frames.len() >= 8);
+        assert!(frames.len() <= MAX_SHOWCASE_FRAMES + 1);
+        assert!(frames.windows(2).all(|pair| pair[0].frame < pair[1].frame));
+    }
+
+    #[test]
+    fn large_crt_replays_native_frames_during_gameplay_not_outro() {
+        let trace = Machine::run_match("active-crt-render", 5000);
+        let source = String::from("<svg data-frontpage-version=\"physical-die-v2\"></svg>");
         let output = apply(source, &trace, crate::frontpage::render_config());
-        assert!(output.contains("values=\"0;0;1;1\""));
-        assert!(output.contains("type=\"translate\""));
-        assert!(output.contains("type=\"scale\""));
-        assert!(!output.contains("type=\"matrix\""));
+        assert!(output.contains("id=\"v2-final-crt-focus\""));
+        assert!(output.contains("data-showcase-live=\"true\""));
+        assert!(output.contains("data-showcase-alive=\""));
+        assert!(output.matches("data-showcase-vram-frame=\"").count() >= 8);
+        assert!(output.contains("LIVE NATIVE VRAM · ACTIVE MATCH"));
+        assert!(!output.contains("FINAL NATIVE VRAM"));
         assert!(!output.contains("<script"));
-        assert!(!output.contains("javascript:"));
     }
 }

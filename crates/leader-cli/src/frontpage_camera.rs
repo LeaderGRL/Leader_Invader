@@ -1,8 +1,8 @@
 use std::fmt::Write as _;
 
 use leader_core::{
-    resolve_physical_memory_address, AluEvent, BusTransactionEvent, BusTransactionKind, MatchTrace,
-    MemoryOwner, Rect, Topology,
+    build_navigation, resolve_physical_memory_address, AluEvent, BusTransactionEvent,
+    BusTransactionKind, MatchTrace, MemoryOwner, NavigationModel, Rect, Topology,
 };
 use leader_svg::RenderConfig;
 
@@ -15,6 +15,8 @@ const VIEWPORT: Rect = Rect {
 const MAX_RENDERED_MEMORY_EVENTS: usize = 96;
 const MAX_RENDERED_BUS_EVENTS: usize = 96;
 const MAX_RENDERED_ALU_EVENTS: usize = 54;
+const SCENE_HOLD_HALF: f32 = 0.42;
+const MIN_SCENE_HOLD_HALF: f32 = 0.12;
 
 #[derive(Debug, Clone, Copy)]
 struct Pose {
@@ -35,22 +37,23 @@ struct SceneFocus {
     event_time: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct CameraScene {
+    name: &'static str,
+    time: f32,
+    pose: Pose,
+}
+
 #[derive(Debug)]
 struct CameraPlan {
     keys: Vec<CameraKey>,
-    fetch_time: f32,
-    micro_time: f32,
-    alu_time: f32,
-    rom_time: f32,
-    ram_time: f32,
-    alu_late_time: f32,
-    vram_time: f32,
-    gpu_time: f32,
-    late_memory_time: f32,
+    scenes: Vec<CameraScene>,
 }
 
-/// Wrap the immutable physical topology in a deterministic technical camera.
-/// Camera holds are centered on the exact native trace event they display.
+/// Wraps the immutable physical topology in a deterministic technical camera.
+/// Every named scene has a serialized expected pose. Browser validation checks
+/// that the animated camera actually reaches that pose while the corresponding
+/// native trace event is visible; activity elsewhere in the SVG is not enough.
 #[must_use]
 pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
     if !svg.contains("data-frontpage-version=\"physical-die-v2\"") {
@@ -93,7 +96,7 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: R
         .collect::<Vec<_>>()
         .join(";");
 
-    let mut rig = String::with_capacity(12_000);
+    let mut rig = String::with_capacity(14_000);
     let _ = write!(
         rig,
         r##"<g id="v2-machine-viewport" clip-path="url(#v2-machine-clip)" data-camera="trace-driven" data-camera-keys="{}"><g id="v2-camera-translate" transform="translate({:.5} {:.5})"><animateTransform attributeName="transform" attributeType="XML" type="translate" values="{}" keyTimes="{}" keySplines="{}" calcMode="spline" dur="{:.3}s" repeatCount="indefinite"/><g id="v2-camera-scale" transform="scale({:.7})"><animateTransform attributeName="transform" attributeType="XML" type="scale" values="{}" keyTimes="{}" keySplines="{}" calcMode="spline" dur="{:.3}s" repeatCount="indefinite"/><g id="v2-machine" data-camera-space="topology">"##,
@@ -135,18 +138,24 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: R
         let mut metadata = String::from("<g id=\"v2-camera-contract\" display=\"none\"");
         let _ = write!(
             metadata,
-            " data-camera-key-count=\"{}\" data-scene-fetch=\"{:.4}\" data-scene-micro=\"{:.4}\" data-scene-alu=\"{:.4}\" data-scene-rom=\"{:.4}\" data-scene-ram=\"{:.4}\" data-scene-alu-late=\"{:.4}\" data-scene-vram=\"{:.4}\" data-scene-gpu=\"{:.4}\" data-scene-late-memory=\"{:.4}\"",
+            " data-camera-key-count=\"{}\" data-scene-count=\"{}\"",
             plan.keys.len(),
-            plan.fetch_time,
-            plan.micro_time,
-            plan.alu_time,
-            plan.rom_time,
-            plan.ram_time,
-            plan.alu_late_time,
-            plan.vram_time,
-            plan.gpu_time,
-            plan.late_memory_time,
+            plan.scenes.len(),
         );
+        for scene in &plan.scenes {
+            let _ = write!(
+                metadata,
+                " data-scene-{}=\"{:.4}\" data-scene-{}-tx=\"{:.5}\" data-scene-{}-ty=\"{:.5}\" data-scene-{}-scale=\"{:.7}\"",
+                scene.name,
+                scene.time,
+                scene.name,
+                scene.pose.tx,
+                scene.name,
+                scene.pose.ty,
+                scene.name,
+                scene.pose.scale,
+            );
+        }
         for (key_index, key) in plan.keys.iter().enumerate() {
             let _ = write!(
                 metadata,
@@ -163,11 +172,18 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: R
 
 fn camera_plan(topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> CameraPlan {
     let overview = fit_pose(Rect::new(0.0, 0.0, topology.width, topology.height), 8.0, 0.0);
-    let cpu_pose = focus_groups(topology, &["pc", "decode"], 70.0, 0.64).unwrap_or(overview);
+    let navigation = build_navigation(topology);
+    let fetch_pose = focus_navigation_modules(
+        &navigation,
+        &["pc.fetch", "decode.instruction"],
+        56.0,
+        0.82,
+    )
+    .unwrap_or(overview);
     let micro_pose = topology
         .node("microRom")
         .map(|node| fit_pose(node.bounds, 12.0, 3.8))
-        .unwrap_or(cpu_pose);
+        .unwrap_or(fetch_pose);
     let alu_pose = topology
         .group("alu")
         .map(|group| fit_pose(group.bounds, 55.0, 0.52))
@@ -177,99 +193,95 @@ fn camera_plan(topology: &Topology, trace: &MatchTrace, config: RenderConfig) ->
         .map(|group| fit_pose(group.bounds, 50.0, 0.50))
         .unwrap_or(overview);
 
-    let fetch_time = select_fetch_time(trace, config, 3.0);
-    let micro_time = select_micro_time(trace, config, 7.0);
-    let alu_time = select_alu_time(trace, config, 11.5, false);
-    let alu_late_time = select_alu_time(trace, config, 29.0, true);
-    let rom = memory_focus(topology, trace, config, MemoryOwner::Rom, 16.0).unwrap_or(SceneFocus {
-        pose: topology
-            .group("romsys")
-            .map_or(overview, |group| fit_pose(group.bounds, 45.0, 0.42)),
-        event_time: 16.0,
-    });
-    let ram = memory_focus(topology, trace, config, MemoryOwner::Ram, 22.0).unwrap_or(SceneFocus {
-        pose: topology
-            .group("ramsys")
-            .map_or(overview, |group| fit_pose(group.bounds, 45.0, 0.40)),
-        event_time: 22.0,
-    });
-    let vram = memory_focus(topology, trace, config, MemoryOwner::Vram, 37.0).unwrap_or(SceneFocus {
+    // Desired times are deliberately separated. The selected timestamps still
+    // come from renderer-visible native events, but the presentation no longer
+    // creates overlapping holds that bounce between two subsystems.
+    let fetch_time = select_fetch_time(trace, config, 3.2);
+    let vram = memory_focus(topology, trace, config, MemoryOwner::Vram, 5.3).unwrap_or(SceneFocus {
         pose: topology
             .group("vramsys")
             .map_or(overview, |group| fit_pose(group.bounds, 45.0, 0.58)),
-        event_time: 37.0,
+        event_time: 5.3,
     });
-    let late_memory = memory_focus_any(topology, trace, config, 50.0).unwrap_or(SceneFocus {
+    let micro_time = select_micro_time(trace, config, 7.2);
+    let rom = memory_focus(topology, trace, config, MemoryOwner::Rom, 17.4).unwrap_or(SceneFocus {
+        pose: topology
+            .group("romsys")
+            .map_or(overview, |group| fit_pose(group.bounds, 45.0, 0.42)),
+        event_time: 17.4,
+    });
+    let alu_time = select_alu_time(trace, config, 19.8);
+    let gpu_time = select_dma_time(trace, config, 21.8);
+    let ram = memory_focus(topology, trace, config, MemoryOwner::Ram, 25.5).unwrap_or(SceneFocus {
+        pose: topology
+            .group("ramsys")
+            .map_or(overview, |group| fit_pose(group.bounds, 45.0, 0.40)),
+        event_time: 25.5,
+    });
+    let late_memory = memory_focus_any(topology, trace, config, 43.0).unwrap_or(SceneFocus {
         pose: ram.pose,
-        event_time: 50.0,
+        event_time: 43.0,
     });
-    let gpu_time = select_dma_time(trace, config, 44.0);
 
-    let scenes = [
-        (fetch_time, cpu_pose, 0.8_f32, 1.15_f32),
-        (micro_time, micro_pose, 0.9, 1.25),
-        (alu_time, alu_pose, 0.8, 1.35),
-        (rom.event_time, rom.pose, 0.8, 1.35),
-        (ram.event_time, ram.pose, 0.8, 1.55),
-        (alu_late_time, alu_pose, 0.8, 1.35),
-        (vram.event_time, vram.pose, 0.8, 1.55),
-        (gpu_time, gpu_pose, 0.8, 1.45),
-        (late_memory.event_time, late_memory.pose, 0.8, 1.55),
+    let mut scenes = vec![
+        CameraScene { name: "fetch", time: fetch_time, pose: fetch_pose },
+        CameraScene { name: "vram", time: vram.event_time, pose: vram.pose },
+        CameraScene { name: "micro", time: micro_time, pose: micro_pose },
+        CameraScene { name: "rom", time: rom.event_time, pose: rom.pose },
+        CameraScene { name: "alu", time: alu_time, pose: alu_pose },
+        CameraScene { name: "gpu", time: gpu_time, pose: gpu_pose },
+        CameraScene { name: "ram", time: ram.event_time, pose: ram.pose },
+        CameraScene { name: "late-memory", time: late_memory.event_time, pose: late_memory.pose },
     ];
+    scenes.sort_by(|left, right| left.time.total_cmp(&right.time));
 
     let mut keys = vec![
-        CameraKey {
-            time: 0.0,
-            pose: overview,
-        },
-        CameraKey {
-            time: 0.9,
-            pose: overview,
-        },
+        CameraKey { time: 0.0, pose: overview },
+        CameraKey { time: 0.9, pose: overview },
     ];
-    for (event_time, pose, lead, hold) in scenes {
-        let center = event_time.clamp(2.0, config.total() - 2.0);
+    for (index, scene) in scenes.iter().enumerate() {
+        let previous_gap = index
+            .checked_sub(1)
+            .map_or(f32::INFINITY, |previous| scene.time - scenes[previous].time);
+        let next_gap = scenes
+            .get(index + 1)
+            .map_or(f32::INFINITY, |next| next.time - scene.time);
+        let half_hold = SCENE_HOLD_HALF
+            .min(previous_gap * 0.22)
+            .min(next_gap * 0.22)
+            .max(MIN_SCENE_HOLD_HALF);
         keys.push(CameraKey {
-            time: (center - lead).max(1.0),
-            pose,
+            time: (scene.time - half_hold).max(1.0),
+            pose: scene.pose,
         });
         keys.push(CameraKey {
-            time: (center + hold).min(config.total() - 1.0),
-            pose,
+            time: (scene.time + half_hold).min(config.total() - 1.0),
+            pose: scene.pose,
         });
     }
     keys.push(CameraKey {
-        time: (config.total() - 3.6).max(1.0),
+        time: (config.total() - 3.0).max(1.0),
         pose: overview,
     });
-    keys.push(CameraKey {
-        time: config.total(),
-        pose: overview,
-    });
+    keys.push(CameraKey { time: config.total(), pose: overview });
     keys.sort_by(|left, right| left.time.total_cmp(&right.time));
-    keys.dedup_by(|left, right| (left.time - right.time).abs() < 0.015);
+    dedupe_key_times(&mut keys);
 
-    CameraPlan {
-        keys,
-        fetch_time,
-        micro_time,
-        alu_time,
-        rom_time: rom.event_time,
-        ram_time: ram.event_time,
-        alu_late_time,
-        vram_time: vram.event_time,
-        gpu_time,
-        late_memory_time: late_memory.event_time,
-    }
+    CameraPlan { keys, scenes }
 }
 
-fn focus_groups(topology: &Topology, ids: &[&str], padding: f32, max_scale: f32) -> Option<Pose> {
+fn focus_navigation_modules(
+    navigation: &NavigationModel,
+    module_ids: &[&str],
+    padding: f32,
+    max_scale: f32,
+) -> Option<Pose> {
     let mut bounds = None;
-    for id in ids {
-        let group = topology.group(id)?;
+    for module_id in module_ids {
+        let view = navigation.view_for_module(module_id)?;
         bounds = Some(match bounds {
-            None => group.bounds,
-            Some(current) => union_rect(current, group.bounds),
+            None => view.bounds,
+            Some(current) => union_rect(current, view.bounds),
         });
     }
     bounds.map(|bounds| fit_pose(bounds, padding, max_scale))
@@ -392,26 +404,18 @@ fn select_micro_time(trace: &MatchTrace, config: RenderConfig, desired: f32) -> 
         .unwrap_or(desired)
 }
 
-fn select_alu_time(trace: &MatchTrace, config: RenderConfig, desired: f32, late: bool) -> f32 {
-    let events = rendered_alu_events(trace);
-    let mut candidates = events
+fn select_alu_time(trace: &MatchTrace, config: RenderConfig, desired: f32) -> f32 {
+    rendered_alu_events(trace)
         .into_iter()
-        .filter(|event| !late || trace_moment(event.frame, event.ordinal, trace, config) >= 20.0)
-        .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| {
-        alu_interest(**right)
-            .cmp(&alu_interest(**left))
-            .then_with(|| {
-                let left_time = trace_moment(left.frame, left.ordinal, trace, config);
-                let right_time = trace_moment(right.frame, right.ordinal, trace, config);
-                (left_time - desired)
-                    .abs()
-                    .total_cmp(&(right_time - desired).abs())
-            })
-    });
-    candidates.first().map_or(desired, |event| {
-        trace_moment(event.frame, event.ordinal, trace, config) + 0.14
-    })
+        .min_by(|left, right| {
+            let left_time = trace_moment(left.frame, left.ordinal, trace, config);
+            let right_time = trace_moment(right.frame, right.ordinal, trace, config);
+            (left_time - desired)
+                .abs()
+                .total_cmp(&(right_time - desired).abs())
+                .then_with(|| alu_interest(**right).cmp(&alu_interest(**left)))
+        })
+        .map_or(desired, |event| trace_moment(event.frame, event.ordinal, trace, config) + 0.14)
 }
 
 fn alu_interest(event: AluEvent) -> u32 {
@@ -493,6 +497,16 @@ fn trace_moment(frame: u32, ordinal: u16, trace: &MatchTrace, config: RenderConf
         + f32::from(ordinal.min(63)) * 0.0015
 }
 
+fn dedupe_key_times(keys: &mut [CameraKey]) {
+    let mut previous = -1.0_f32;
+    for key in keys {
+        if key.time <= previous {
+            key.time = previous + 0.001;
+        }
+        previous = key.time;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,18 +526,39 @@ mod tests {
     }
 
     #[test]
-    fn plan_exposes_native_scene_timestamps_and_deep_detail() {
+    fn scene_contract_serializes_time_and_exact_expected_pose() {
         let topology = build_topology();
-        let trace = Machine::run_match("trace-camera-overview", 5000);
-        let config = crate::frontpage::render_config();
-        let plan = camera_plan(&topology, &trace, config);
-        assert!(plan.keys.len() >= 12);
-        assert_eq!(plan.keys.first().unwrap().time, 0.0);
-        assert!((plan.keys.last().unwrap().time - config.total()).abs() < 0.001);
-        assert!(plan.keys.iter().any(|key| key.pose.scale >= 2.0));
-        assert!(plan.ram_time > 0.0);
-        assert!(plan.vram_time > 0.0);
-        assert!(plan.gpu_time > 0.0);
+        let trace = Machine::run_match("trace-camera-contract", 5000);
+        let source = "<svg data-frontpage-version=\"physical-die-v2\"><g id=\"v2-machine\"></g>\n<g id=\"v2-crt\"></g></svg>".to_string();
+        let output = apply(source, &topology, &trace, crate::frontpage::render_config());
+        assert!(output.contains("data-scene-micro=\""));
+        assert!(output.contains("data-scene-micro-tx=\""));
+        assert!(output.contains("data-scene-micro-ty=\""));
+        assert!(output.contains("data-scene-micro-scale=\""));
+        assert!(output.contains("data-scene-late-memory=\""));
+    }
+
+    #[test]
+    fn camera_visits_microcode_once_and_scene_centers_do_not_overlap() {
+        let topology = build_topology();
+        let trace = Machine::run_match("trace-camera-sequence", 5000);
+        let plan = camera_plan(&topology, &trace, crate::frontpage::render_config());
+        assert_eq!(plan.scenes.iter().filter(|scene| scene.name == "micro").count(), 1);
+        assert_eq!(plan.scenes.iter().filter(|scene| scene.name == "alu").count(), 1);
+        for pair in plan.scenes.windows(2) {
+            assert!(pair[1].time - pair[0].time > 1.0, "{} and {} overlap", pair[0].name, pair[1].name);
+        }
+    }
+
+    #[test]
+    fn fetch_pose_excludes_the_dedicated_microcode_closeup() {
+        let topology = build_topology();
+        let trace = Machine::run_match("trace-camera-fetch", 5000);
+        let plan = camera_plan(&topology, &trace, crate::frontpage::render_config());
+        let fetch = plan.scenes.iter().find(|scene| scene.name == "fetch").unwrap();
+        let micro = plan.scenes.iter().find(|scene| scene.name == "micro").unwrap();
+        assert!(micro.pose.scale > fetch.pose.scale * 2.0);
+        assert!((micro.pose.tx - fetch.pose.tx).abs() > 20.0 || (micro.pose.ty - fetch.pose.ty).abs() > 20.0);
     }
 
     #[test]
@@ -532,8 +567,6 @@ mod tests {
         let sampled = rendered_memory_events(&trace);
         assert!(!sampled.is_empty());
         assert!(sampled.len() <= MAX_RENDERED_MEMORY_EVENTS + 1);
-        assert!(sampled
-            .iter()
-            .all(|event| event.address.is_some() && event.data.is_some()));
+        assert!(sampled.iter().all(|event| event.address.is_some() && event.data.is_some()));
     }
 }

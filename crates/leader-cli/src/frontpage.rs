@@ -36,9 +36,10 @@ mod final_crt {
 /// Canonical timing for the GitHub front-page artifact.
 ///
 /// The full machine is visible from t=0. Native propagation starts after a
-/// short power-on interval, then a deterministic technical camera exposes the
-/// active low-level subsystem at a readable scale. The outro resolves onto the
-/// exact final native VRAM checkpoint and holds it until the SVG loop resets.
+/// short power-on interval, then a deterministic technical camera visits named
+/// physical subsystems with non-overlapping holds. During the match, a large
+/// CRT temporarily replays exact native VRAM checkpoints while a substantial
+/// alien formation and live projectile activity are still present.
 #[must_use]
 pub const fn render_config() -> RenderConfig {
     RenderConfig {
@@ -55,9 +56,9 @@ pub const fn render_config() -> RenderConfig {
 /// bit-cell fabrics, layer electrical propagation beneath component bodies,
 /// enforce scale-independent readability and CRT continuity, then apply a
 /// trace-driven camera. A fixed native bus analyzer exposes exact transaction
-/// values while the terminal shot is sourced from the same native VRAM
-/// checkpoint already rendered by the physical CRT; neither layer reconstructs
-/// semantic machine state.
+/// values while the large gameplay CRT replays exact 1536-byte VRAM checkpoints
+/// selected from an active portion of the native match. No layer reconstructs
+/// game semantics from presentation data.
 #[must_use]
 pub fn render(topology: &Topology, trace: &MatchTrace, _legacy_config: RenderConfig) -> String {
     let config = render_config();
