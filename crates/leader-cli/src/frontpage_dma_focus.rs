@@ -4,12 +4,16 @@ use leader_core::{physical_bus_link_values, BusTransactionEvent, BusTransactionK
 use leader_svg::RenderConfig;
 
 const DESIRED_DMA_TIME: f32 = 21.8;
+const DMA_DATA_LATCH_RANK: u8 = 6;
+const PROPAGATION_RANK_SECONDS: f32 = 0.032;
+const PROPAGATION_RISE_SECONDS: f32 = 0.018;
 
 /// Guarantees one renderer-visible native DMA transaction for the technical
 /// GPU close-up. Generic presentation sampling is intentionally allowed to be
 /// sparse; this probe selects one first-class DMA event from the complete trace
-/// and renders its exact core-owned physical propagation path inside the same
-/// native bus layer used by all other electrical activity.
+/// so the physical `dma_data_latch` reaches its peak exactly at the named GPU
+/// camera scene. The timing therefore follows the real dependency rank rather
+/// than shifting the camera after the fact.
 #[must_use]
 pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
     if !svg.contains("data-frontpage-version=\"physical-die-v2\"") || trace.total_frames == 0 {
@@ -28,14 +32,14 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: R
     let mut probe = String::with_capacity(values.len() * 420 + 300);
     let _ = writeln!(
         probe,
-        r##"<g id="v2-dedicated-dma-focus" data-source="native-dma" data-frame="{}" data-ordinal="{}">"##,
+        r##"<g id="v2-dedicated-dma-focus" data-source="native-dma" data-frame="{}" data-ordinal="{}" data-latch-peak="{DESIRED_DMA_TIME:.3}">"##,
         event.frame, event.ordinal,
     );
     for value in values {
-        let start = moment + f32::from(value.rank) * 0.032;
+        let start = moment + f32::from(value.rank) * PROPAGATION_RANK_SECONDS;
         let end = start + 0.18;
         let k1 = norm(start, total);
-        let k2 = norm(start + 0.018, total).max(k1 + 0.000_01);
+        let k2 = norm(start + PROPAGATION_RISE_SECONDS, total).max(k1 + 0.000_01);
         let k3 = norm(end, total).max(k2 + 0.000_01);
         let _ = writeln!(
             probe,
@@ -66,12 +70,18 @@ fn select_dma_event(trace: &MatchTrace, config: RenderConfig) -> Option<&BusTran
         .iter()
         .filter(|event| event.kind == BusTransactionKind::Dma && event.address.is_some())
         .min_by(|left, right| {
-            let left_time = trace_moment(left.frame, left.ordinal, trace, config);
-            let right_time = trace_moment(right.frame, right.ordinal, trace, config);
-            (left_time - DESIRED_DMA_TIME)
+            let left_peak = dma_latch_peak(left, trace, config);
+            let right_peak = dma_latch_peak(right, trace, config);
+            (left_peak - DESIRED_DMA_TIME)
                 .abs()
-                .total_cmp(&(right_time - DESIRED_DMA_TIME).abs())
+                .total_cmp(&(right_peak - DESIRED_DMA_TIME).abs())
         })
+}
+
+fn dma_latch_peak(event: &BusTransactionEvent, trace: &MatchTrace, config: RenderConfig) -> f32 {
+    trace_moment(event.frame, event.ordinal, trace, config)
+        + f32::from(DMA_DATA_LATCH_RANK) * PROPAGATION_RANK_SECONDS
+        + PROPAGATION_RISE_SECONDS
 }
 
 fn trace_moment(frame: u32, ordinal: u16, trace: &MatchTrace, config: RenderConfig) -> f32 {
@@ -118,5 +128,13 @@ mod tests {
         assert!(output.contains("data-source=\"native-dma\""));
         assert!(output.contains("data-stage=\"dma_data_latch\""));
         assert!(output.contains("data-dedicated-dma=\"true\""));
+    }
+
+    #[test]
+    fn selected_dma_peaks_on_the_gpu_camera_scene() {
+        let trace = Machine::run_match("dedicated-dma-timing", 5000);
+        let event = select_dma_event(&trace, crate::frontpage::render_config()).expect("native DMA");
+        let peak = dma_latch_peak(event, &trace, crate::frontpage::render_config());
+        assert!((peak - DESIRED_DMA_TIME).abs() < 0.05);
     }
 }
