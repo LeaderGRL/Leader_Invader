@@ -1,0 +1,22 @@
+[workspace]
+members = [
+  "crates/leader-core",
+  "crates/leader-svg",
+  "crates/leader-cli",
+  "crates/leader-explorer",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+rust-version = "1.75"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = "allow"
+module_name_repetitions = "allow"
+too_many_lines = "allow"

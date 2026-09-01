@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  pull_request:
+    paths-ignore:
+      - 'generated/**'
+  push:
+    paths-ignore:
+      - 'generated/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - name: Normalize formatting in CI workspace
+        run: cargo fmt --all
+      - name: Test
+        run: cargo test --workspace
+      - name: Check WASM explorer
+        run: cargo check -p leader-explorer --target wasm32-unknown-unknown
+      - name: Check browser shell syntax
+        run: node --check explorer-web/app.js
+      - name: Build generated WASM explorer
+        run: |
+          cargo build -p leader-explorer --target wasm32-unknown-unknown --release
+          cargo install wasm-bindgen-cli --version 0.2.106 --locked
+          wasm-bindgen \
+            target/wasm32-unknown-unknown/release/leader_explorer.wasm \
+            --target nodejs \
+            --out-dir /tmp/leader-explorer-wasm
+      - name: Smoke generated WASM API
+        run: node scripts/wasm_smoke.cjs /tmp/leader-explorer-wasm/leader_explorer.js
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
+      - name: Generate smoke artifact
+        run: cargo run -p leader-cli -- render --seed ci-smoke --output /tmp/Leader.svg
+      - name: Validate SVG
+        run: python scripts/validate_svg.py /tmp/Leader.svg

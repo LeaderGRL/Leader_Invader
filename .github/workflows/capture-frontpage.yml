@@ -1,0 +1,42 @@
+name: capture-frontpage
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Manual inspection helper for the exact committed SVG artifact.
+      # Production render-readme already runs this same Playwright contract
+      # before it is allowed to commit a regenerated front-page SVG.
+      - name: Install Playwright
+        run: |
+          npm install --no-save playwright@1.58.2
+          npx playwright install --with-deps chromium
+
+      - name: Capture production SVG checkpoints
+        run: node scripts/capture_frontpage.mjs
+
+      - name: Verify captures
+        if: always()
+        run: |
+          test -f generated/frontpage-captures/manifest.json
+          test "$(find generated/frontpage-captures -maxdepth 1 -name '*.png' | wc -l)" -ge 10
+          ls -lh generated/frontpage-captures
+
+      # Upload partial captures even when a visual assertion fails. A failed
+      # rendering must remain inspectable rather than disappearing with the job.
+      - name: Upload frontpage checkpoints
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: leader-physical-die-checkpoints-${{ github.sha }}
+          path: generated/frontpage-captures/
+          retention-days: 30
+          if-no-files-found: warn

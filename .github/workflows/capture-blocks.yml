@@ -1,0 +1,78 @@
+name: capture-hardware-blocks
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/deterministic-svg-engine
+    paths:
+      - 'crates/leader-core/**'
+      - 'crates/leader-explorer/**'
+      - 'explorer-web/**'
+      - 'scripts/capture_blocks.mjs'
+      - '.github/workflows/capture-blocks.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capture-hardware-blocks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'latest'
+
+      - name: Build live WASM explorer
+        run: wasm-pack build crates/leader-explorer --target web --release --out-dir ../../explorer-web/pkg
+
+      - name: Install Playwright
+        run: |
+          npm install --no-save --no-package-lock playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Serve explorer
+        shell: bash
+        run: |
+          python3 -m http.server 8080 --bind 127.0.0.1 > /tmp/leader-http.log 2>&1 &
+          echo $! > /tmp/leader-http.pid
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8080/explorer-web/ > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/leader-http.log
+          exit 1
+
+      - name: Capture canonical subsystem views
+        env:
+          LEADER_EXPLORER_URL: http://127.0.0.1:8080/explorer-web/
+          LEADER_CAPTURE_OUTPUT: generated/screenshots
+          LEADER_CAPTURE_WIDTH: '1800'
+        run: node scripts/capture_blocks.mjs
+
+      - name: List generated screenshots
+        run: |
+          cat generated/screenshots/manifest.json
+          find generated/screenshots -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+
+      - name: Upload subsystem screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: leader-hardware-blocks-${{ github.sha }}
+          path: generated/screenshots/
+          retention-days: 30
+          if-no-files-found: error
