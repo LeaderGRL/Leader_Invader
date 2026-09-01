@@ -25,6 +25,10 @@ mod camera {
     include!("frontpage_camera.rs");
 }
 
+mod bus_probe {
+    include!("frontpage_bus_probe.rs");
+}
+
 mod final_crt {
     include!("frontpage_final_crt.rs");
 }
@@ -50,9 +54,10 @@ pub const fn render_config() -> RenderConfig {
 /// Render the complete physical machine, enrich it with true memory/microcode
 /// bit-cell fabrics, layer electrical propagation beneath component bodies,
 /// enforce scale-independent readability and CRT continuity, then apply a
-/// trace-driven camera. The terminal shot is sourced from the same native VRAM
-/// checkpoint already rendered by the physical CRT; it never reconstructs the
-/// game from semantic state.
+/// trace-driven camera. A fixed native bus analyzer exposes exact transaction
+/// values while the terminal shot is sourced from the same native VRAM
+/// checkpoint already rendered by the physical CRT; neither layer reconstructs
+/// semantic machine state.
 #[must_use]
 pub fn render(topology: &Topology, trace: &MatchTrace, _legacy_config: RenderConfig) -> String {
     let config = render_config();
@@ -62,5 +67,6 @@ pub fn render(topology: &Topology, trace: &MatchTrace, _legacy_config: RenderCon
     let svg = quality::apply(svg, topology);
     let svg = crt_contract::apply(svg, config);
     let svg = camera::apply(svg, topology, trace, config);
+    let svg = bus_probe::apply(svg, trace, config);
     final_crt::apply(svg, trace, config)
 }
