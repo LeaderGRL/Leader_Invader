@@ -44,8 +44,12 @@ pub fn apply(mut svg: String, trace: &MatchTrace, config: RenderConfig) -> Strin
         let k1 = normalized(start, total);
         let k2 = normalized(start + 0.008, total).max(k1 + 0.000_01);
         let k3 = normalized(end, total).max(k2 + 0.000_01);
-        let address = event.address.map_or_else(|| "----".to_owned(), |value| format!("{value:04X}"));
-        let data = event.data.map_or_else(|| "--".to_owned(), |value| format!("{value:02X}"));
+        let address = event
+            .address
+            .map_or_else(|| "----".to_owned(), |value| format!("{value:04X}"));
+        let data = event
+            .data
+            .map_or_else(|| "--".to_owned(), |value| format!("{value:02X}"));
         let _ = writeln!(
             analyzer,
             r##"<g opacity="0" data-bus-kind="{}" data-frame="{}" data-ordinal="{}"><animate attributeName="opacity" values="0;0;1;0;0" keyTimes="0;{k1:.7};{k2:.7};{k3:.7};1" dur="{total:.3}s" repeatCount="indefinite"/><text x="300" y="633" fill="#ffbe64" font-size="8" font-weight="900">{} · A {address}</text><text x="470" y="633" fill="#55d9ff" font-size="8" font-weight="900">D {data}</text><text x="545" y="633" fill="#86a8bc" font-size="7.5" font-weight="900">ADDR {}</text><text x="725" y="633" fill="#ff8bd6" font-size="7.5" font-weight="900">DATA {}</text><text x="925" y="633" text-anchor="end" fill="#718795" font-size="7">PC {:04X}</text></g>"##,
@@ -87,9 +91,11 @@ fn sample_refs<'a, T>(values: &[&'a T], maximum: usize) -> Vec<&'a T> {
     }
     let stride = values.len().div_ceil(maximum);
     let mut sampled = values.iter().step_by(stride).copied().collect::<Vec<_>>();
-    if sampled.last().copied().map(std::ptr::from_ref)
-        != values.last().copied().map(std::ptr::from_ref)
-    {
+    let includes_last = match (sampled.last(), values.last()) {
+        (Some(sampled_last), Some(last)) => std::ptr::eq(*sampled_last, *last),
+        _ => false,
+    };
+    if !includes_last {
         if let Some(last) = values.last() {
             sampled.push(*last);
         }
