@@ -18,7 +18,7 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: R
     let Some(event) = select_dma_event(trace, config) else {
         return svg;
     };
-    let values = physical_bus_link_values(topology, event);
+    let values = physical_bus_link_values(topology, *event);
     if values.is_empty() {
         return svg;
     }
