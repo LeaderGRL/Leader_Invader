@@ -100,9 +100,12 @@ try {
     if (state.labelFailures.length > 0) throw new Error(`Node labels escape their physical components at ${checkpoint.time}s: ${JSON.stringify(state.labelFailures.slice(0, 8))}`);
     if (state.textOverlaps.length > 0) throw new Error(`Readable node labels overlap at ${checkpoint.time}s: ${JSON.stringify(state.textOverlaps)}`);
     if (state.rasterTransform !== "translate(950.000 127.000) scale(1.5000000 1.5000000)" || state.rasterClip !== null) throw new Error(`CRT raster must be exact 4:3, uniformly scaled and unclipped: ${JSON.stringify(state)}`);
-    if (checkpoint.time >= 2.5 && state.visibleCrtFrames.length !== 1) throw new Error(`Exactly one native VRAM framebuffer must be visible at ${checkpoint.time}s: ${JSON.stringify(state.visibleCrtFrames)}`);
+
+    const isFinalCrt = checkpoint.name === "11-final-crt";
+    if (!isFinalCrt && checkpoint.time >= 2.5 && state.visibleCrtFrames.length !== 1) throw new Error(`Exactly one sidebar native VRAM framebuffer must be visible at ${checkpoint.time}s: ${JSON.stringify(state.visibleCrtFrames)}`);
+    if (isFinalCrt && state.visibleCrtFrames.length !== 0) throw new Error(`Sidebar CRT must hand off completely to the terminal CRT during the outro: ${JSON.stringify(state.visibleCrtFrames)}`);
     for (const frame of state.visibleCrtFrames) if (frame.box.width > 192.5 || frame.box.height > 144.5) throw new Error(`Native framebuffer escapes the 192x144 CRT raster at ${checkpoint.time}s: ${JSON.stringify(frame)}`);
-    if (checkpoint.name === "11-final-crt" && (!state.finalFocus.visible || state.finalFocus.raster.width < 755 || state.finalFocus.raster.height < 565)) throw new Error(`Terminal CRT is not full readable focus at ${checkpoint.time}s: ${JSON.stringify(state.finalFocus)}`);
+    if (isFinalCrt && (!state.finalFocus.visible || state.finalFocus.raster.width < 755 || state.finalFocus.raster.height < 565)) throw new Error(`Terminal CRT is not full readable focus at ${checkpoint.time}s: ${JSON.stringify(state.finalFocus)}`);
 
     const file = `${checkpoint.name}.png`;
     await root.screenshot({ path: path.join(outputDir, file), animations: "allow" });
