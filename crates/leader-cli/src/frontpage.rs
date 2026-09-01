@@ -25,11 +25,16 @@ mod camera {
     include!("frontpage_camera.rs");
 }
 
+mod final_crt {
+    include!("frontpage_final_crt.rs");
+}
+
 /// Canonical timing for the GitHub front-page artifact.
 ///
 /// The full machine is visible from t=0. Native propagation starts after a
 /// short power-on interval, then a deterministic technical camera exposes the
-/// active low-level subsystem at a readable scale.
+/// active low-level subsystem at a readable scale. The outro resolves onto the
+/// exact final native VRAM checkpoint and holds it until the SVG loop resets.
 #[must_use]
 pub const fn render_config() -> RenderConfig {
     RenderConfig {
@@ -45,7 +50,9 @@ pub const fn render_config() -> RenderConfig {
 /// Render the complete physical machine, enrich it with true memory/microcode
 /// bit-cell fabrics, layer electrical propagation beneath component bodies,
 /// enforce scale-independent readability and CRT continuity, then apply a
-/// trace-driven camera without altering topology or native signal propagation.
+/// trace-driven camera. The terminal shot is sourced from the same native VRAM
+/// checkpoint already rendered by the physical CRT; it never reconstructs the
+/// game from semantic state.
 #[must_use]
 pub fn render(topology: &Topology, trace: &MatchTrace, _legacy_config: RenderConfig) -> String {
     let config = render_config();
@@ -54,5 +61,6 @@ pub fn render(topology: &Topology, trace: &MatchTrace, _legacy_config: RenderCon
     let svg = layers::apply(svg);
     let svg = quality::apply(svg, topology);
     let svg = crt_contract::apply(svg, config);
-    camera::apply(svg, topology, trace, config)
+    let svg = camera::apply(svg, topology, trace, config);
+    final_crt::apply(svg, trace, config)
 }
