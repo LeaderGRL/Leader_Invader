@@ -41,7 +41,7 @@ jobs:
           test -f generated/frontpage-captures/08-vram.png
           test -f generated/frontpage-captures/09-gpu.png
           test -f generated/frontpage-captures/10-late-memory.png
-          test -f generated/frontpage-captures/11-outro-overview.png
+          test -f generated/frontpage-captures/11-final-crt.png
           test -f generated/frontpage-captures/manifest.json
           ls -lh generated/frontpage-captures
 
