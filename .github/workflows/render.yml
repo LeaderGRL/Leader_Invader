@@ -38,8 +38,25 @@ jobs:
           fi
       - name: Generate deterministic replay
         run: cargo run --release -p leader-cli -- render --seed "${{ steps.seed.outputs.value }}" --output generated/Leader.svg
-      - name: Validate SVG
+      - name: Validate SVG structure
         run: python scripts/validate_svg.py generated/Leader.svg
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install visual validator
+        run: |
+          npm install --no-save playwright@1.58.2
+          npx playwright install --with-deps chromium
+      - name: Validate visual checkpoints
+        run: node scripts/capture_frontpage.mjs
+      - name: Upload frontpage checkpoints
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: leader-frontpage-checkpoints-${{ github.sha }}
+          path: generated/frontpage-captures/
+          retention-days: 30
+          if-no-files-found: warn
       - name: Preserve full execution trace
         uses: actions/upload-artifact@v4
         with:
