@@ -1,5 +1,5 @@
 use crate::framebuffer::framebuffer_pixel;
-use crate::game::{ALIEN_COLS, ALIEN_H, ALIEN_ROWS, ALIEN_W, PLAYER_Y, SCREEN_H, SCREEN_W};
+use crate::game::{ALIEN_COLS, ALIEN_ROWS, PLAYER_Y, SCREEN_H, SCREEN_W};
 use crate::trace::{FrameState, MatchTrace, VramCheckpoint};
 
 const INVADER_A: [&str; 6] = [
@@ -102,10 +102,16 @@ fn validate_frame(
 
 fn require_pixel(checkpoint: &VramCheckpoint, x: i16, y: i16, label: &str) -> Result<(), String> {
     if x < 0 || y < 0 || x >= SCREEN_W || y >= SCREEN_H {
-        return Err(format!("{label} pixel ({x},{y}) is outside the native 128x96 raster at frame {}", checkpoint.frame));
+        return Err(format!(
+            "{label} pixel ({x},{y}) is outside the native 128x96 raster at frame {}",
+            checkpoint.frame
+        ));
     }
-    if !framebuffer_pixel(&checkpoint.bytes, x as usize, y as usize) {
-        return Err(format!("missing {label} pixel ({x},{y}) in native VRAM frame {} checksum {:08X}", checkpoint.frame, checkpoint.checksum));
+    if framebuffer_pixel(&checkpoint.bytes, x as usize, y as usize) != Some(true) {
+        return Err(format!(
+            "missing {label} pixel ({x},{y}) in native VRAM frame {} checksum {:08X}",
+            checkpoint.frame, checkpoint.checksum
+        ));
     }
     Ok(())
 }
@@ -125,6 +131,7 @@ fn representative_checkpoints(values: &[VramCheckpoint], limit: usize) -> Vec<&V
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::{ALIEN_H, ALIEN_W};
     use crate::Machine;
 
     #[test]
