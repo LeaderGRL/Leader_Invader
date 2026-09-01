@@ -47,8 +47,8 @@ pub fn apply(mut svg: String, trace: &MatchTrace, config: RenderConfig) -> Strin
 <rect x="0" y="0" width="1200" height="675" fill="#020406" opacity=".985"/>
 <rect x="{FINAL_OUTER_X}" y="{FINAL_OUTER_Y}" width="{FINAL_OUTER_W}" height="{FINAL_OUTER_H}" rx="34" fill="#071019" stroke="#657d89" stroke-width="5"/>
 <rect x="194" y="49" width="812" height="572" rx="27" fill="#030807" stroke="#243c35" stroke-width="2"/>
-<rect x="{FINAL_RASTER_X}" y="{FINAL_RASTER_Y}" width="760" height="570" rx="13" fill="#010302" stroke="#41614f" stroke-width="2"/>
-<path d="{path}" transform="translate({FINAL_RASTER_X:.3} {FINAL_RASTER_Y:.3}) scale({FINAL_RASTER_SCALE:.7})" fill="#b9ff78" shape-rendering="crispEdges" data-final-native-raster="128x96"/>
+<rect x="{FINAL_RASTER_X}" y="{FINAL_RASTER_Y}" width="760" height="570" rx="13" fill="#010302" stroke="#41614f" stroke-width="2" data-final-native-raster="128x96"/>
+<path d="{path}" transform="translate({FINAL_RASTER_X:.3} {FINAL_RASTER_Y:.3}) scale({FINAL_RASTER_SCALE:.7})" fill="#b9ff78" shape-rendering="crispEdges" data-final-native-pixels="true"/>
 <rect x="{FINAL_RASTER_X}" y="{FINAL_RASTER_Y}" width="760" height="4" fill="#d7ffbc" opacity=".055"><animate attributeName="y" values="{FINAL_RASTER_Y};641;{FINAL_RASTER_Y}" dur="2.3s" repeatCount="indefinite"/></rect>
 <path d="M232 86 C390 63 808 63 968 86" fill="none" stroke="#e8ffe0" stroke-width="2" opacity=".055"/>
 <text x="{FINAL_RASTER_X}" y="65" fill="#8fb09b" font-size="10" font-weight="900">FINAL NATIVE VRAM · FRAME {:05} · CHECKSUM {:08X}</text>
@@ -108,6 +108,7 @@ mod tests {
         assert!(output.contains(&format!("data-vram-frame=\"{}\"", checkpoint.frame)));
         assert!(output.contains("d=\"M0 0h1v1h-1z\" transform=\"translate(220.000 75.000) scale(5.9375000)\""));
         assert!(output.contains("data-final-native-raster=\"128x96\""));
+        assert!(output.contains("data-final-native-pixels=\"true\""));
     }
 
     #[test]
