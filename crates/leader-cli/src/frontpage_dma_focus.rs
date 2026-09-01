@@ -8,7 +8,8 @@ const DESIRED_DMA_TIME: f32 = 21.8;
 /// Guarantees one renderer-visible native DMA transaction for the technical
 /// GPU close-up. Generic presentation sampling is intentionally allowed to be
 /// sparse; this probe selects one first-class DMA event from the complete trace
-/// and renders its exact core-owned physical propagation path.
+/// and renders its exact core-owned physical propagation path inside the same
+/// native bus layer used by all other electrical activity.
 #[must_use]
 pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: RenderConfig) -> String {
     if !svg.contains("data-frontpage-version=\"physical-die-v2\"") || trace.total_frames == 0 {
@@ -49,9 +50,12 @@ pub fn apply(mut svg: String, topology: &Topology, trace: &MatchTrace, config: R
     }
     probe.push_str("</g>\n");
 
-    const MACHINE_END: &str = "</g>\n<g id=\"v2-crt\">";
-    if let Some(index) = svg.find(MACHINE_END) {
-        svg.insert_str(index, &probe);
+    const BUS_GROUP: &str = "<g id=\"v2-native-bus-propagation\">\n";
+    if let Some(start) = svg.find(BUS_GROUP) {
+        let content_start = start + BUS_GROUP.len();
+        if let Some(relative_end) = svg[content_start..].find("</g>\n") {
+            svg.insert_str(content_start + relative_end, &probe);
+        }
     }
     svg
 }
@@ -108,7 +112,7 @@ mod tests {
     fn dedicated_probe_always_exposes_a_real_dma_latch_stage() {
         let topology = build_topology();
         let trace = Machine::run_match("dedicated-dma-focus", 5000);
-        let source = String::from("<svg data-frontpage-version=\"physical-die-v2\"><g id=\"v2-machine\"></g>\n<g id=\"v2-crt\"></g></svg>");
+        let source = String::from("<svg data-frontpage-version=\"physical-die-v2\"><g id=\"v2-native-bus-propagation\">\n</g>\n</svg>");
         let output = apply(source, &topology, &trace, crate::frontpage::render_config());
         assert!(output.contains("id=\"v2-dedicated-dma-focus\""));
         assert!(output.contains("data-source=\"native-dma\""));
